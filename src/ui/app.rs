@@ -57,7 +57,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Root, Sizable as _, TitleBar, WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState, TabSize},
@@ -1246,10 +1246,15 @@ impl BlackholesApp {
     fn check_app_update(&mut self, cx: &mut Context<Self>) {
         self.sync_update_guard();
         if !self.update_state.enabled {
-            self.set_status(self.tr(
+            let message = if self.update_state.error.is_empty() {
+                self.tr(
                 "Updates are available in the packaged release app. See GitHub Releases for signed downloads.",
                 "Las actualizaciones funcionan en la app empaquetada. Consulta GitHub Releases para las descargas firmadas.",
-            ), true, cx);
+                ).to_string()
+            } else {
+                format!("{}: {}", self.tr("Updater unavailable", "Actualizador no disponible"), self.update_state.error)
+            };
+            self.set_status(message, true, cx);
             return;
         }
         if let Err(error) = self.database.save_session(&self.session)
@@ -16392,7 +16397,14 @@ impl Render for BlackholesApp {
                                 } else {
                                     self.tr("Check for updates", "Buscar actualizaciones")
                                 })
-                                .when(!self.update_state.available.is_empty() || self.update_state.restart, |button| button.primary())
+                                .when(!self.update_state.available.is_empty() || self.update_state.restart, |button| button.custom(
+                                    ButtonCustomVariant::new(cx)
+                                        .color(rgb(0x2563eb).into())
+                                        .foreground(rgb(0xffffff).into())
+                                        .border(rgb(0x2563eb).into())
+                                        .hover(rgb(0x1d4ed8).into())
+                                        .active(rgb(0x1e40af).into())
+                                ))
                                 .tooltip(if self.update_state.available.is_empty() {
                                     self.tr("Check GitHub Releases for a new version", "Buscar una nueva versión en GitHub Releases").to_string()
                                 } else { format!("Blackholes {}", self.update_state.available) })

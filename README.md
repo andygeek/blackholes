@@ -4,7 +4,7 @@ A macOS desktop workspace for coding agents, Git repositories, isolated tasks, a
 
 > Documentation status: Work in progress.
 
-Version: **0.1.1**. Blackholes' original source code is licensed under
+Version: **0.1.2**. Blackholes' original source code is licensed under
 [MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
 
 ## Installing the desktop app

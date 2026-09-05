@@ -53,9 +53,20 @@ pub fn state() -> UpdateState {
         // the next snapshot call. Copy and deserialize before returning.
         let ptr = unsafe { bh_updater_snapshot() };
         if !ptr.is_null() {
-            return serde_json::from_slice(unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes())
-                .unwrap_or_default();
+            return decode_state(unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes());
         }
+        return UpdateState {
+            error: "The updater did not return its status. Restart Blackholes and try again.".into(),
+            ..UpdateState::default()
+        };
     }
+    #[cfg(not(target_os = "macos"))]
     UpdateState::default()
+}
+
+fn decode_state(bytes: &[u8]) -> UpdateState {
+    serde_json::from_slice(bytes).unwrap_or_else(|error| UpdateState {
+        error: format!("Could not read the updater status: {error}"),
+        ..UpdateState::default()
+    })
 }

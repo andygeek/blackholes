@@ -14,7 +14,10 @@ Scheduled discoveries use a quiet button instead of an unsolicited update window
 Clicking the button opens Sparkle's installation dialog; downloading and restart
 remain user-approved. This is not an unattended update mechanism.
 
-Packaged releases check every four hours. There is no GitHub token embedded in
+Packaged releases check every four hours while running, subject to Sparkle's
+automatic-check preferences and scheduling. The title-bar button starts a manual
+check. The UI reads Sparkle's local state every two seconds (not a network poll)
+and highlights an available update in blue. There is no GitHub token embedded in
 the app and system-profile reporting is disabled. GitHub receives ordinary
 download requests, including the client's IP address. Updates do not work from
 a bare development executable or from a private GitHub repository without public

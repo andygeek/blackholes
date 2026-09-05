@@ -116,10 +116,12 @@ void bh_updater_check(void) {
 const char *bh_updater_snapshot(void) {
     NSCAssert(NSThread.isMainThread, @"Updater requires main thread");
     NSDictionary *state = @{
-        @"enabled": @(bridge.controller != nil),
+        // Objective-C comparisons are ints; @(... != nil) serializes as 0/1,
+        // not JSON booleans. Rust deliberately expects true/false here.
+        @"enabled": [NSNumber numberWithBool:bridge.controller != nil],
         @"available": bridge.version ?: @"",
-        @"busy": @(bridge.downloading),
-        @"restart": @(bridge.pendingInstall != nil),
+        @"busy": [NSNumber numberWithBool:bridge.downloading],
+        @"restart": [NSNumber numberWithBool:bridge.pendingInstall != nil],
         @"error": bridge.errorMessage ?: @""
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
