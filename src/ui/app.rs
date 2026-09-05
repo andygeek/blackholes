@@ -56,7 +56,7 @@ use gpui::{
     WeakEntity, Window, div, img, prelude::*, px, relative, rgb, rgba, uniform_list,
 };
 use gpui_component::{
-    Icon, Root, Sizable as _, TitleBar, WindowExt as _,
+    ActiveTheme as _, Icon, Root, Sizable as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
@@ -10230,7 +10230,7 @@ impl BlackholesApp {
             .collect::<HashMap<_, _>>();
         let weak = cx.weak_entity();
         let paths = self.paths.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, _cx| {
             let draft = options.lock();
             let branch_source = draft.branch_source;
             let existing_action = draft.existing_branch_action;
@@ -10289,7 +10289,7 @@ impl BlackholesApp {
             }
             content = content
                 .child(sources)
-                .child(form_field(base_label, Input::new(&base)));
+                .child(form_field(_cx, base_label, Input::new(&base)));
 
             if branch_source == TaskBranchSource::Current {
                 let options_reuse = options.clone();
@@ -11181,17 +11181,18 @@ impl BlackholesApp {
             drop(draft);
             let mut content = v_flex().gap_4();
             content = content
-                .child(form_field(title_label, Input::new(&title)))
-                .child(form_field(branch_label, Input::new(&branch)))
+                .child(form_field(_cx, title_label, Input::new(&title)))
+                .child(form_field(_cx, branch_label, Input::new(&branch)))
                 .child(form_field(
+                    _cx,
                     description_label,
                     Input::new(&description).h(px(92.)),
                 ))
-                .child(form_divider());
+                .child(form_divider(_cx));
 
-            let mut branch_section = v_flex().gap_2().child(section_label(branch_source_label));
+            let mut branch_section = v_flex().gap_2().child(section_label(_cx, branch_source_label));
 
-            let mut branch_sources = segmented_group();
+            let mut branch_sources = segmented_group(_cx);
             for (id, label, source) in [
                 (
                     "task-branch-current",
@@ -11212,6 +11213,7 @@ impl BlackholesApp {
                 let options_source = options.clone();
                 let weak_source = weak.clone();
                 branch_sources = branch_sources.child(segmented_item(
+                    _cx,
                     id,
                     label,
                     branch_source == source,
@@ -11226,7 +11228,7 @@ impl BlackholesApp {
             }
             branch_section = branch_section
                 .child(branch_sources)
-                .child(form_field(base_label, Input::new(&base)));
+                .child(form_field(_cx, base_label, Input::new(&base)));
 
             if branch_source == TaskBranchSource::Current {
                 let options_reuse = options.clone();
@@ -11234,8 +11236,9 @@ impl BlackholesApp {
                 let options_recreate = options.clone();
                 let weak_recreate = weak.clone();
                 branch_section = branch_section.child(
-                    segmented_group()
+                    segmented_group(_cx)
                         .child(segmented_item(
+                            _cx,
                             "reuse-existing-branch",
                             reuse_label,
                             existing_action == ExistingBranchAction::Reuse,
@@ -11246,6 +11249,7 @@ impl BlackholesApp {
                             },
                         ))
                         .child(segmented_item(
+                            _cx,
                             "recreate-existing-branch",
                             recreate_label,
                             existing_action == ExistingBranchAction::Recreate,
@@ -11260,6 +11264,7 @@ impl BlackholesApp {
                 let options_missing = options.clone();
                 let weak_missing = weak.clone();
                 branch_section = branch_section.child(option_row(
+                    _cx,
                     "create-missing-branch".into(),
                     create_missing_label,
                     create_missing,
@@ -11275,6 +11280,7 @@ impl BlackholesApp {
                     let options_replace = options.clone();
                     let weak_replace = weak.clone();
                     branch_section = branch_section.child(option_row(
+                        _cx,
                         "replace-divergent-branches".into(),
                         replace_divergent_label,
                         replace_divergent,
@@ -11296,10 +11302,8 @@ impl BlackholesApp {
                 let base_check = base.clone();
                 let options_check = options.clone();
                 let weak_check = weak.clone();
-                branch_section = branch_section.child(h_flex().child(compact_button(
-                    "check-task-branch",
-                    check_branch_label,
-                    move |_, _, cx| {
+                branch_section = branch_section.child(h_flex().child(
+                    Button::new("check-task-branch").small().label(check_branch_label).on_click(move |_, _, cx| {
                         let branch_name = branch_check.read(cx).value().to_string();
                         let base_name = non_empty_value(&base_check, cx);
                         let repository_ids = options_check
@@ -11343,8 +11347,8 @@ impl BlackholesApp {
                             }
                         })
                         .detach();
-                    },
-                )));
+                    }),
+                ));
             }
 
             if let Some(availability) = availability {
@@ -11352,9 +11356,9 @@ impl BlackholesApp {
                     .gap_1()
                     .p(px(10.))
                     .rounded(px(8.))
-                    .bg(rgb(0x0e1015))
+                    .bg(_cx.theme().muted)
                     .border_1()
-                    .border_color(rgb(0x232935));
+                    .border_color(_cx.theme().border);
                 for result in availability {
                     let state = match branch_source {
                         TaskBranchSource::Current if result.local_revision.is_some() => {
@@ -11378,17 +11382,17 @@ impl BlackholesApp {
                         _ => String::new(),
                     };
                     results =
-                        results.child(div().text_size(px(11.)).text_color(rgb(0xaeb7c7)).child(
+                        results.child(div().text_size(px(11.)).text_color(_cx.theme().foreground).child(
                             format!("{}: {state}{checked_out}{base}", result.repository_name),
                         ));
                 }
                 branch_section = branch_section.child(results);
             }
 
-            content = content.child(branch_section).child(form_divider());
+            content = content.child(branch_section).child(form_divider(_cx));
 
             let mut repositories_section =
-                v_flex().gap_2().child(section_label(repositories_label));
+                v_flex().gap_2().child(section_label(_cx, repositories_label));
 
             for repository in &workspace.repositories {
                 let repository_id = repository.id;
@@ -11399,6 +11403,7 @@ impl BlackholesApp {
                 let options_for_click = options.clone();
                 let weak_for_click = weak.clone();
                 let mut repository_card = v_flex().gap(px(6.)).child(option_row(
+                    _cx,
                     format!("task-repository-{repository_id}"),
                     repository.name.clone(),
                     selected,
@@ -11431,8 +11436,9 @@ impl BlackholesApp {
                             .pl(px(12.))
                             .gap(px(6.))
                             .border_l_1()
-                            .border_color(rgb(0x262c38))
+                            .border_color(_cx.theme().border)
                             .child(option_row(
+                                _cx,
                                 format!("copy-local-changes-{repository_id}"),
                                 copy_changes_label,
                                 repository_options.copy_local_changes,
@@ -11447,6 +11453,7 @@ impl BlackholesApp {
                                 },
                             ))
                             .child(option_row(
+                                _cx,
                                 format!("copy-env-files-{repository_id}"),
                                 copy_env_label,
                                 repository_options.copy_environment_files,
@@ -11461,6 +11468,7 @@ impl BlackholesApp {
                                 },
                             ))
                             .child(form_field(
+                                _cx,
                                 setup_label,
                                 Input::new(
                                     setup_commands
@@ -18270,11 +18278,11 @@ fn field_label(label: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
-fn section_label(label: impl Into<SharedString>) -> AnyElement {
+fn section_label(cx: &App, label: impl Into<SharedString>) -> AnyElement {
     div()
         .text_size(px(11.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(rgb(0x9aa4b6))
+        .text_color(cx.theme().muted_foreground)
         .child(label.into())
         .into_any_element()
 }
@@ -18294,41 +18302,43 @@ fn branch_exists(result: &BranchAvailability, source: TaskBranchSource) -> bool 
     }
 }
 
-fn form_field(label: impl Into<SharedString>, control: impl IntoElement) -> AnyElement {
+fn form_field(cx: &App, label: impl Into<SharedString>, control: impl IntoElement) -> AnyElement {
     v_flex()
         .w_full()
         .gap(px(6.))
-        .child(field_label(label))
+        .child(div().text_size(px(11.)).text_color(cx.theme().muted_foreground).child(label.into()))
         .child(control)
         .into_any_element()
 }
 
-fn form_divider() -> AnyElement {
+fn form_divider(cx: &App) -> AnyElement {
     div()
         .w_full()
         .h(px(1.))
-        .bg(rgb(0x222834))
+        .bg(cx.theme().border)
         .into_any_element()
 }
 
 /// Rounded container that turns a set of `segmented_item`s into a tab-like control.
-fn segmented_group() -> gpui::Div {
+fn segmented_group(cx: &App) -> gpui::Div {
     h_flex()
         .w_full()
         .gap(px(2.))
         .p(px(3.))
         .rounded(px(9.))
-        .bg(rgb(0x0f1116))
+        .bg(cx.theme().muted)
         .border_1()
-        .border_color(rgb(0x232935))
+        .border_color(cx.theme().border)
 }
 
 fn segmented_item(
+    cx: &App,
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     selected: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let colors = cx.theme().colors;
     div()
         .id(id.into())
         .flex_1()
@@ -18341,20 +18351,20 @@ fn segmented_item(
         .rounded(px(6.))
         .border_1()
         .border_color(if selected {
-            rgb(0x3d5480)
+            colors.input
         } else {
-            rgb(0x0f1116)
+            colors.muted
         })
         .bg(if selected {
-            rgb(0x24304a)
+            colors.background
         } else {
-            rgb(0x0f1116)
+            colors.muted
         })
         .text_size(px(12.))
         .text_color(if selected {
-            rgb(0xdfe8fb)
+            colors.foreground
         } else {
-            rgb(0x98a1b2)
+            colors.muted_foreground
         })
         .font_weight(if selected {
             gpui::FontWeight::MEDIUM
@@ -18363,11 +18373,11 @@ fn segmented_item(
         })
         .text_ellipsis()
         .cursor_pointer()
-        .hover(|style| {
+        .hover(move |style| {
             if selected {
                 style
             } else {
-                style.bg(rgb(0x181d26)).text_color(rgb(0xc4ccda))
+                style.bg(colors.secondary_hover).text_color(colors.foreground)
             }
         })
         .on_click(on_click)
@@ -18375,7 +18385,7 @@ fn segmented_item(
         .into_any_element()
 }
 
-fn check_indicator(checked: bool) -> AnyElement {
+fn check_indicator(cx: &App, checked: bool) -> AnyElement {
     div()
         .size(px(15.))
         .flex_none()
@@ -18385,28 +18395,30 @@ fn check_indicator(checked: bool) -> AnyElement {
         .rounded(px(4.))
         .border_1()
         .border_color(if checked {
-            rgb(0x5c7cfa)
+            cx.theme().primary
         } else {
-            rgb(0x39414f)
+            cx.theme().input
         })
         .bg(if checked {
-            rgb(0x4c6ef5)
+            cx.theme().primary
         } else {
-            rgb(0x14171d)
+            cx.theme().background
         })
         .text_size(px(9.))
-        .text_color(rgb(0xffffff))
+        .text_color(cx.theme().primary_foreground)
         .child(if checked { "✓" } else { "" })
         .into_any_element()
 }
 
 fn option_row(
+    cx: &App,
     id: String,
     label: impl Into<SharedString>,
     checked: bool,
     emphasized: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let colors = cx.theme().colors;
     h_flex()
         .id(SharedString::from(id))
         .w_full()
@@ -18417,20 +18429,20 @@ fn option_row(
         .rounded(px(7.))
         .border_1()
         .border_color(if checked {
-            rgb(0x33405c)
+            colors.input
         } else {
-            rgb(0x21262f)
+            colors.border
         })
         .bg(if checked {
-            rgb(0x171e2b)
+            colors.accent
         } else {
-            rgb(0x101218)
+            colors.background
         })
         .text_size(if emphasized { px(13.) } else { px(12.) })
         .text_color(if checked {
-            rgb(0xdbe4f5)
+            colors.accent_foreground
         } else {
-            rgb(0xa8b1c0)
+            colors.foreground
         })
         .font_weight(if emphasized && checked {
             gpui::FontWeight::MEDIUM
@@ -18438,9 +18450,9 @@ fn option_row(
             gpui::FontWeight::NORMAL
         })
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x1a1f29)).border_color(rgb(0x3a4356)))
+        .hover(move |style| style.bg(colors.secondary_hover).border_color(colors.input))
         .on_click(on_click)
-        .child(check_indicator(checked))
+        .child(check_indicator(cx, checked))
         .child(div().flex_1().min_w_0().text_ellipsis().child(label.into()))
         .into_any_element()
 }
