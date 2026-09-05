@@ -58,11 +58,17 @@ const PROJECT_POLICY_START: &str = "<!-- BLACKHOLES PROJECT POLICY START -->";
 const PROJECT_POLICY_END: &str = "<!-- BLACKHOLES PROJECT POLICY END -->";
 const PROJECT_POLICY: &str = r#"# Blackholes project instructions
 
+## Project context and linked repositories
+
+- This project's instructions and selected skills apply to all repositories registered to this project, including repositories outside this directory. Read each repository's own instructions as well; do not assume parent-directory instruction discovery covers linked repositories.
+- Repositories are available directly in this directory as folders or symbolic links. Use them from any terminal or coding agent without requiring Blackholes or its MCP. Resolve a symbolic link to see the original path. Direct edits through links affect the original working folders, including existing uncommitted work; links are not isolated copies.
+- Keep project-wide skills, notes and instructions in this project container. Do not install or copy them into linked repositories automatically. Removing a project reference must not delete linked files.
+
 ## Required Blackholes orchestration
 
 When the Blackholes MCP is available:
 
-- At the beginning of every turn, call `get_current_context` before any other tool. If it is unavailable, report that the required Blackholes MCP is missing and do not fall back to filesystem discovery or UI automation.
+- When using the Blackholes integration, begin with `get_current_context`. Without that integration, work directly with this project's folders and symbolic links; do not require Blackholes to access repositories.
 - Interpret "create a task" as creating a local Blackholes task. Use the Blackholes MCP for project, task, repository, branch, and worktree orchestration.
 - Global and project Black Bots may inspect, review, edit, build, and test directly in the intended project repositories. Resolve the project and repositories through the MCP and respect the user's request, project instructions, selected permissions, and existing changes. A task or worktree is not a prerequisite.
 - Tasks and isolated worktrees are optional: use them when requested by the user, when working in an existing selected task, or when user-authored project instructions require them. A request to create a task and start/implement it already authorizes a global or project agent to create it and immediately call `handoff_to_agent` with its `taskId`, before implementing in the new worktrees; no extra delegation confirmation is needed. Creating a task alone does not authorize starting it. For project implementation without a task, the global agent normally hands off with `projectId`; the receiving project agent works directly. The agent of the selected task implements in its attached worktrees and must not delegate to itself or create the task again. Explicit requests to work directly or not delegate take precedence. If execution intent or destination is unclear, ask briefly. Preserve all user constraints in the handoff prompt. After a successful handoff, the sender stops implementing and reports the transfer; on failure, report it rather than silently taking over.
@@ -177,6 +183,7 @@ pub struct ProjectInstructionsService;
 impl ProjectInstructionsService {
     pub fn ensure(workspace: &Workspace) -> Result<PathBuf> {
         let root = project_root(workspace)?;
+        crate::services::projects::ProjectService::ensure_repository_links(workspace)?;
         ensure_project_agent_context(&root)?;
         Ok(root.join(PROJECT_INSTRUCTIONS_FILE_NAME))
     }
@@ -347,6 +354,14 @@ fn merge_project_policy(existing: &str) -> Result<String> {
             // customize this block, so replacing it wholesale would lose their rules.
             let mut policy = existing[start..end].to_string();
             let legacy_rules = [
+                (
+                    "- Resolve repository paths through the Blackholes MCP. Linked repositories are the original working folders: direct project edits affect those originals, including their existing uncommitted work. Linking does not create an isolated copy.",
+                    "- Repositories are available directly",
+                ),
+                (
+                    "- At the beginning of every turn, call `get_current_context` before any other tool. If it is unavailable, report that the required Blackholes MCP is missing and do not fall back to filesystem discovery or UI automation.",
+                    "- When using the Blackholes integration,",
+                ),
                 (
                     "- Tasks and isolated worktrees are optional: use them when requested by the user, when working in an existing selected task, or when user-authored project instructions require them. Otherwise work directly in the project. Inside a task, change only its attached worktrees, not the original checkouts. Delegation is optional: use `handoff_to_agent` with `projectId` for direct project work or `taskId` for isolated work. After a successful handoff, the sender stops implementing and reports the transfer.",
                     "- Tasks and isolated worktrees are optional:",

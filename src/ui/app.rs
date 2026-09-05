@@ -36,7 +36,7 @@ use crate::{
             refresh_agent_models, refresh_agent_plan_usage, start_agent_authentication, stream_agent_turn,
         },
         projects::{
-            ProjectService, RepositoryGitSummary, discover_repositories, repository_git_summary,
+            ProjectService, ProjectRepositoryMode, ProjectRepositorySource, RepositoryGitSummary, discover_repositories, repository_git_summary,
         },
         skills::{AgentSkill, AgentSkillService, BLACKHOLES_SKILLS_PLUGIN_NAME},
         tasks::{
@@ -526,20 +526,6 @@ enum NoteSaveTarget {
     Task(ProjectTask),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ProjectDraftMode {
-    #[default]
-    Empty,
-    Existing,
-    Github,
-}
-
-#[derive(Default)]
-struct ProjectDraftOptions {
-    mode: ProjectDraftMode,
-    existing_path: Option<PathBuf>,
-}
-
 struct ProjectAppearanceEditor {
     name: Entity<InputState>,
     icon: String,
@@ -838,6 +824,7 @@ pub struct BlackholesApp {
     orchestrator_webview: Option<Entity<gpui_component::webview::WebView>>,
     project_modal_request: Option<Uuid>,
     project_modal_submitting: bool,
+    project_modal_sources: Vec<PathBuf>,
     task_modal_request: Option<(Uuid, Uuid)>,
     task_modal_submitting: bool,
     orchestrator_chats: OrchestratorChatStore,
@@ -1126,6 +1113,7 @@ impl BlackholesApp {
             orchestrator_webview,
             project_modal_request: None,
             project_modal_submitting: false,
+            project_modal_sources: Vec::new(),
             task_modal_request: None,
             task_modal_submitting: false,
             orchestrator_chats,
@@ -1566,7 +1554,14 @@ impl BlackholesApp {
             OrchestratorChatCommand::SetAgentsFullAccess { enabled } => {
                 self.set_agents_full_access(enabled, cx)
             }
-            OrchestratorChatCommand::DismissAppModal => self.dismiss_app_modal(cx),
+            OrchestratorChatCommand::DismissAppModal => {
+                self.dismiss_app_modal(cx);
+                if self.show_terminal && self.project_modal_request.is_none() && self.task_modal_request.is_none() {
+                    if let Some(handle) = self.selected_terminal_id().and_then(|id| self.terminals.get(&id)) {
+                        handle.view.read(cx).focus_handle().focus(window);
+                    }
+                }
+            }
             OrchestratorChatCommand::CreateTaskModal { request_id, workspace_id, request, check_only } => {
                 self.handle_create_task_modal(request_id, workspace_id, request, check_only, cx);
             }
@@ -1575,15 +1570,47 @@ impl BlackholesApp {
                     return;
                 }
                 let path = rfd::FileDialog::new()
-                    .set_title(self.tr("Choose project folder", "Elegir carpeta del proyecto"))
+                    .set_title(self.tr("Choose a repository or a folder containing repositories", "Elegir un repositorio o una carpeta con repositorios"))
                     .pick_folder();
-                self.dispatch_orchestrator_event(serde_json::json!({
-                    "type": "app_modal_feedback", "request_id": request_id,
-                    "feedback": { "path": path.map(|path| path.display().to_string()) },
-                }), cx);
+                if let Some(path) = path {
+                    self.project_modal_submitting = true;
+                    let scan = cx.background_executor().spawn(async move {
+                        let path = fs::canonicalize(path)?;
+                        discover_repositories(&path)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let result = scan.await;
+                        let _ = this.update(cx, |app, cx| {
+                            app.project_modal_submitting = false;
+                            if app.project_modal_request != Some(request_id) { return; }
+                            let feedback = match result {
+                                Ok(repositories) if !repositories.is_empty() => {
+                                    for repo in &repositories {
+                                        if !app.project_modal_sources.contains(&repo.path) {
+                                            app.project_modal_sources.push(repo.path.clone());
+                                        }
+                                    }
+                                    serde_json::json!({ "repositories": repositories.iter().map(|repo| serde_json::json!({
+                                        "name": repo.name, "path": repo.path,
+                                    })).collect::<Vec<_>>() })
+                                }
+                                Ok(_) => serde_json::json!({ "error": app.tr("No Git repositories found in this folder or its immediate subfolders.", "No se encontraron repositorios Git en esta carpeta ni en sus subcarpetas inmediatas.") }),
+                                Err(error) => serde_json::json!({ "error": format!("{error:#}") }),
+                            };
+                            app.dispatch_orchestrator_event(serde_json::json!({
+                                "type": "app_modal_feedback", "request_id": request_id, "feedback": feedback,
+                            }), cx);
+                            cx.notify();
+                        });
+                    }).detach();
+                } else {
+                    self.dispatch_orchestrator_event(serde_json::json!({
+                        "type": "app_modal_feedback", "request_id": request_id, "feedback": {},
+                    }), cx);
+                }
             }
-            OrchestratorChatCommand::SubmitCreateProject { request_id, mode, name, url, path } => {
-                self.submit_create_project_modal(request_id, mode, name, url, path, cx);
+            OrchestratorChatCommand::SubmitCreateProject { request_id, name, sources, mode } => {
+                self.submit_create_project_modal(request_id, name, sources, mode, cx);
             }
             OrchestratorChatCommand::ConfirmRemoveProject { workspace_id } => {
                 self.remove_project_reference(workspace_id, cx);
@@ -2021,7 +2048,6 @@ impl BlackholesApp {
             "id": terminal.id,
             "label": terminal.label,
             "agent": terminal.agent,
-            "busy": terminal.state == SessionState::Working,
             "selected": active_terminal_id == Some(terminal.id),
         })
     }
@@ -6799,13 +6825,12 @@ impl BlackholesApp {
             };
             if terminal.claude_session.as_ref() == Some(&session)
                 && terminal.agent == AgentKind::Claude
-                && terminal.state == SessionState::Working
             {
                 return;
             }
             terminal.claude_session = Some(session);
             self.set_terminal_agent(payload.terminal_id, AgentKind::Claude);
-            self.update_terminal_state(payload.terminal_id, SessionState::Working);
+            self.persist_session();
             cx.notify();
             return;
         }
@@ -6826,7 +6851,7 @@ impl BlackholesApp {
                 profile: payload.profile,
             });
             self.set_terminal_agent(payload.terminal_id, AgentKind::Codex);
-            self.update_terminal_state(payload.terminal_id, SessionState::Working);
+            self.persist_session();
             cx.notify();
             return;
         }
@@ -9845,6 +9870,7 @@ impl BlackholesApp {
         }
         self.task_modal_request = None;
         self.project_modal_request = None;
+        self.project_modal_sources.clear();
         self.dispatch_orchestrator_event(
             serde_json::json!({ "type": "app_modal", "modal": null }),
             cx,
@@ -9853,6 +9879,7 @@ impl BlackholesApp {
             serde_json::json!({ "type": "modal_visibility", "visible": false }),
             cx,
         );
+        cx.notify();
     }
 
     fn open_manage_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -10823,7 +10850,7 @@ impl BlackholesApp {
     fn clone_project_repository(&mut self, workspace_id: Uuid, source: String, github: bool, cx: &mut Context<Self>) {
         if self.busy.is_some() { return; }
         let Some(mut workspace) = self.workspaces.iter().find(|workspace| workspace.id == workspace_id).cloned() else { return; };
-        self.busy = Some(self.tr("Cloning repository…", "Clonando repositorio…").into());
+        self.busy = Some(self.tr("Adding repository…", "Agregando repositorio…").into());
         let background = cx.background_executor().spawn(async move {
             if github { ProjectService::add_github_repository(&mut workspace, &source)?; }
             else { ProjectService::add_existing_repository(&mut workspace, Path::new(&source))?; }
@@ -10850,17 +10877,17 @@ impl BlackholesApp {
                                         app.tr("Repository cloned into the project", "Repositorio clonado en el proyecto")
                                     } else {
                                         app.tr(
-                                            "Committed files cloned. Uncommitted changes stay in the original folder and are not copied.",
-                                            "Archivos con commit clonados. Los cambios sin commit quedan en la carpeta original y no se copian.",
+                                            "Repository linked. Work in this project edits the original folder.",
+                                            "Repositorio vinculado. El trabajo en este proyecto modifica la carpeta original.",
                                         )
                                     };
                                     app.set_status(message, false, cx);
                                 }
-                                Err(error) => app.set_status(format!("Clone saved on disk, but registration failed: {error:#}"), true, cx),
+                                Err(error) => app.set_status(format!("Could not register repository: {error:#}"), true, cx),
                             }
                         }
                     }
-                    Err(error) => app.set_status(format!("Could not clone repository: {error:#}"), true, cx),
+                    Err(error) => app.set_status(format!("Could not add repository: {error:#}"), true, cx),
                 }
                 app.hydrate_navigation(cx);
                 app.hydrate_active_workspace_surface(cx);
@@ -10870,17 +10897,19 @@ impl BlackholesApp {
         cx.notify();
     }
 
-    fn open_create_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_create_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.project_modal_submitting || self.task_modal_submitting {
             return;
         }
-        if !self.show_terminal && self.orchestrator_webview.is_some() {
+        if self.orchestrator_webview.is_some() {
             let request_id = Uuid::new_v4();
             self.project_modal_request = Some(request_id);
+            self.project_modal_sources.clear();
             self.dispatch_orchestrator_event(serde_json::json!({
                 "type": "app_modal",
                 "modal": {
                     "kind": "create_project",
+                    "over_terminal": self.show_terminal,
                     "request_id": request_id,
                     "title": self.tr("Create project", "Crear proyecto"),
                     "name": "", "description": "",
@@ -10898,194 +10927,29 @@ impl BlackholesApp {
             if let Some(webview) = &self.orchestrator_webview {
                 let _ = webview.read(cx).raw().focus();
             }
+            cx.notify();
             return;
         }
-        let name_placeholder = self.tr("Project name", "Nombre del proyecto");
-        let url_placeholder = "https://github.com/owner/repository";
-        let dialog_title = self.tr("Create project", "Crear proyecto");
-        let submit_label = self.tr("Create", "Crear");
-        let empty_label = self.tr("Empty", "Vacío");
-        let existing_label = self.tr("Clone local repositories", "Clonar repositorios locales");
-        let local_clone_hint = self.tr(
-            "Only committed files are cloned. Pending changes stay untouched in the original folder.",
-            "Solo se clonan los archivos con commit. Los cambios pendientes se conservan en la carpeta original.",
-        );
-        let github_label = self.tr("GitHub", "GitHub");
-        let choose_label = self.tr("Choose folder…", "Elegir carpeta…");
-        let destination_label = self.tr("Destination", "Destino");
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder(name_placeholder));
-        let url = cx.new(|cx| InputState::new(window, cx).placeholder(url_placeholder));
-        let options = Rc::new(Mutex::new(ProjectDraftOptions::default()));
-        let projects_root = self.projects_root();
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let draft_mode = options.lock().mode;
-            let mut content = v_flex().gap_3();
-            let mut modes = h_flex().gap_2();
-            for (id, label, mode) in [
-                ("project-empty", empty_label, ProjectDraftMode::Empty),
-                (
-                    "project-existing",
-                    existing_label,
-                    ProjectDraftMode::Existing,
-                ),
-                ("project-github", github_label, ProjectDraftMode::Github),
-            ] {
-                let options_click = options.clone();
-                let weak_click = weak.clone();
-                modes = modes.child(choice_button(
-                    id,
-                    label,
-                    draft_mode == mode,
-                    move |_, _, cx| {
-                        options_click.lock().mode = mode;
-                        let _ = weak_click.update(cx, |_, cx| cx.notify());
-                    },
-                ));
-            }
-            content = content.child(modes);
-
-            match draft_mode {
-                ProjectDraftMode::Empty => {
-                    content = content.child(Input::new(&name));
-                }
-                ProjectDraftMode::Existing => {
-                    let selected_path = options.lock().existing_path.clone();
-                    let options_choose = options.clone();
-                    let weak_choose = weak.clone();
-                    content = content
-                        .child(compact_button(
-                            "choose-existing-project",
-                            choose_label,
-                            move |_, _, cx| {
-                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                    options_choose.lock().existing_path = Some(path);
-                                    let _ = weak_choose.update(cx, |_, cx| cx.notify());
-                                }
-                            },
-                        ))
-                        .child(
-                            div().text_size(px(12.)).text_color(rgb(0x9ba3b4)).child(
-                                selected_path
-                                    .map(|path| path.display().to_string())
-                                    .unwrap_or_else(|| "No folder selected".into()),
-                            ),
-                        )
-                        .child(Input::new(&name))
-                        .child(div().text_size(px(12.)).child(local_clone_hint));
-                }
-                ProjectDraftMode::Github => {
-                    content = content.child(Input::new(&url)).child(Input::new(&name));
-                }
-            }
-            content = content.child(
-                v_flex()
-                    .gap_1()
-                    .text_size(px(11.))
-                    .text_color(rgb(0x8e97aa))
-                    .child(destination_label)
-                    .child(projects_root.display().to_string()),
-            );
-
-            let name_for_submit = name.clone();
-            let url_for_submit = url.clone();
-            let options_for_submit = options.clone();
-            let root_for_submit = projects_root.clone();
-            let weak_for_submit = weak.clone();
-            dialog
-                .title(dialog_title)
-                .w(px(620.))
-                .child(content)
-                .button_props(DialogButtonProps::default().ok_text(submit_label))
-                .confirm()
-                .on_ok(move |_, _, cx| {
-                    let draft = options_for_submit.lock();
-                    let mode = draft.mode;
-                    let existing_path = draft.existing_path.clone();
-                    drop(draft);
-                    let requested_name = name_for_submit.read(cx).value().to_string();
-                    match mode {
-                        ProjectDraftMode::Empty => weak_for_submit
-                            .update(cx, |app, cx| app.create_empty_project(&requested_name, cx))
-                            .unwrap_or(false),
-                        ProjectDraftMode::Existing => {
-                            let Some(path) = existing_path else {
-                                return false;
-                            };
-                            let name = requested_name.clone();
-                            let root = root_for_submit.clone();
-                            let background = cx.background_executor().spawn(async move {
-                                ProjectService::import_existing(
-                                    &root,
-                                    &path,
-                                    (!name.trim().is_empty()).then_some(name.as_str()),
-                                )
-                            });
-                            let weak = weak_for_submit.clone();
-                            cx.spawn(async move |cx| {
-                                let result = background.await;
-                                let _ = weak.update(cx, |app, cx| {
-                                    app.finish_background_workspace(result, cx)
-                                });
-                            })
-                            .detach();
-                            let _ = weak_for_submit.update(cx, |app, cx| {
-                                app.busy = Some("Importing project…".into());
-                                cx.notify();
-                            });
-                            true
-                        }
-                        ProjectDraftMode::Github => {
-                            let github_url = url_for_submit.read(cx).value().to_string();
-                            if github_url.trim().is_empty() {
-                                return false;
-                            }
-                            let root = root_for_submit.clone();
-                            let name = requested_name.clone();
-                            let background = cx.background_executor().spawn(async move {
-                                ProjectService::clone_github_named(
-                                    &root,
-                                    &github_url,
-                                    (!name.trim().is_empty()).then_some(name.as_str()),
-                                )
-                            });
-                            let weak = weak_for_submit.clone();
-                            cx.spawn(async move |cx| {
-                                let result = background.await;
-                                let _ = weak.update(cx, |app, cx| {
-                                    app.finish_background_workspace(result, cx)
-                                });
-                            })
-                            .detach();
-                            let _ = weak_for_submit.update(cx, |app, cx| {
-                                app.busy = Some("Cloning project…".into());
-                                cx.notify();
-                            });
-                            true
-                        }
-                    }
-                })
-        });
+        self.set_status(self.tr("The project form is unavailable. Restart Blackholes and try again.", "El formulario no está disponible. Reinicia Blackholes e inténtalo de nuevo."), true, cx);
     }
 
     fn submit_create_project_modal(
         &mut self,
         request_id: Uuid,
-        mode: String,
         name: String,
-        url: String,
-        path: String,
+        sources: Vec<ProjectRepositorySource>,
+        mode: ProjectRepositoryMode,
         cx: &mut Context<Self>,
     ) {
         if self.project_modal_request != Some(request_id) || self.project_modal_submitting {
             return;
         }
-        let validation = match mode.as_str() {
-            "empty" if name.trim().is_empty() => Some(self.tr("Enter a project name.", "Escribe un nombre para el proyecto.")),
-            "existing" if path.is_empty() => Some(self.tr("Choose a folder.", "Elige una carpeta.")),
-            "github" if url.trim().is_empty() => Some(self.tr("Enter a repository URL.", "Escribe la URL del repositorio.")),
-            "empty" | "existing" | "github" => None,
-            _ => Some(self.tr("Invalid project source.", "Origen del proyecto inválido.")),
+        let validation = if name.trim().is_empty() {
+            Some(self.tr("Enter a project name.", "Escribe un nombre para el proyecto."))
+        } else if sources.iter().any(|source| matches!(source, ProjectRepositorySource::Local(path) if !self.project_modal_sources.contains(path))) {
+            Some(self.tr("Choose local repositories using the folder picker.", "Selecciona los repositorios locales con el selector de carpetas."))
+        } else {
+            None
         };
         if let Some(error) = validation {
             self.dispatch_orchestrator_event(serde_json::json!({
@@ -11097,13 +10961,7 @@ impl BlackholesApp {
         self.project_modal_submitting = true;
         let root = self.projects_root();
         let background = cx.background_executor().spawn(async move {
-            let requested_name = (!name.trim().is_empty()).then_some(name.trim());
-            match mode.as_str() {
-                "empty" => ProjectService::create_git_repository(&root, name.trim()),
-                "existing" => ProjectService::import_existing(&root, &PathBuf::from(path), requested_name),
-                "github" => ProjectService::clone_github_named(&root, url.trim(), requested_name),
-                _ => unreachable!("validated project source"),
-            }
+            ProjectService::create_with_repositories(&root, name.trim(), sources, mode)
         });
         let weak = cx.weak_entity();
         cx.spawn(async move |_, cx| {
@@ -11141,13 +10999,13 @@ impl BlackholesApp {
 
         // Keep the underlying WebViews visible: a native GPUI dialog must hide
         // them to avoid AppKit layering conflicts, which produces a blank backdrop.
-        if !self.show_terminal && self.orchestrator_webview.is_some() {
+        if self.orchestrator_webview.is_some() {
             let request_id = Uuid::new_v4();
             self.task_modal_request = Some((request_id, workspace.id));
             self.dispatch_orchestrator_event(serde_json::json!({
                 "type": "app_modal",
                 "modal": {
-                    "kind": "create_task", "request_id": request_id,
+                    "kind": "create_task", "request_id": request_id, "over_terminal": self.show_terminal,
                     "workspace_id": workspace.id,
                     "repositories": workspace.repositories.iter().map(|repository| serde_json::json!({
                         "id": repository.id, "name": repository.name,
@@ -11167,6 +11025,7 @@ impl BlackholesApp {
             if let Some(webview) = &self.orchestrator_webview {
                 let _ = webview.read(cx).raw().focus();
             }
+            cx.notify();
             return;
         }
 
@@ -12467,11 +12326,8 @@ impl BlackholesApp {
             agent,
             label: agent.label().into(),
             cwd,
-            state: if agent == AgentKind::Shell {
-                SessionState::Idle
-            } else {
-                SessionState::Working
-            },
+            // A running CLI is not necessarily processing a prompt.
+            state: SessionState::Idle,
             codex_session: None,
             claude_session: None,
             created_at: now,
@@ -12617,11 +12473,7 @@ impl BlackholesApp {
         else {
             return;
         };
-        descriptor.state = if descriptor.agent == AgentKind::Shell {
-            SessionState::Idle
-        } else {
-            SessionState::Working
-        };
+        descriptor.state = SessionState::Idle;
         self.show_project_note = false;
         self.show_task_note = false;
         self.show_terminal = true;
@@ -12748,7 +12600,12 @@ impl BlackholesApp {
         }
 
         match signal.kind {
-            AgentTerminalSignalKind::Started | AgentTerminalSignalKind::Working => {
+            AgentTerminalSignalKind::Started => {
+                self.update_terminal_state(terminal_id, SessionState::Idle);
+                cx.notify();
+                None
+            }
+            AgentTerminalSignalKind::Working => {
                 self.update_terminal_state(terminal_id, SessionState::Working);
                 cx.notify();
                 None
@@ -12892,11 +12749,7 @@ impl BlackholesApp {
                 && descriptor.agent != agent
             {
                 descriptor.agent = agent;
-                descriptor.state = if agent == AgentKind::Shell {
-                    SessionState::Idle
-                } else {
-                    SessionState::Working
-                };
+                descriptor.state = SessionState::Idle;
                 agent_changed = Some((agent, descriptor.state));
             }
         }
@@ -12988,12 +12841,8 @@ impl BlackholesApp {
         if let Some(handle) = self.terminals.get(&terminal_id) {
             handle.view.read(cx).focus_handle().focus(window);
             if descriptor.state == SessionState::Attention {
-                let resumed_state = if descriptor.agent == AgentKind::Shell {
-                    SessionState::Idle
-                } else {
-                    SessionState::Working
-                };
-                self.update_terminal_state(terminal_id, resumed_state);
+                // Focusing acknowledges attention; it does not submit work.
+                self.update_terminal_state(terminal_id, SessionState::Idle);
                 cx.notify();
                 return;
             }
@@ -15885,8 +15734,6 @@ impl BlackholesApp {
             .iter()
             .find(|terminal| terminal.id == terminal_id);
         let active = terminal_id == active_terminal_id;
-        let terminal_working =
-            descriptor.is_some_and(|terminal| terminal.state == SessionState::Working);
         let closed_terminal_label = self.tr("Closed terminal", "Terminal cerrada");
         let (panel_border, panel_header, panel_muted) = match self.session.theme {
             AppTheme::Dark => (rgb(0x252a33), rgb(0x15181e), rgb(0x9ba3b4)),
@@ -15919,14 +15766,14 @@ impl BlackholesApp {
                         .flex_1()
                         .min_w_0()
                         .gap_1()
+                        .when_some(descriptor, |this, terminal| this.child(agent_icon_themed(terminal.agent, self.session.theme)))
                         .child(
                             div().text_ellipsis().child(
                                 descriptor
                                     .map(|terminal| terminal.label.clone())
                                     .unwrap_or_else(|| closed_terminal_label.into()),
                             ),
-                        )
-                        .when(terminal_working, |this| this.child(agent_working_dots())),
+                        ),
                 )
                 .child(
                     div()
@@ -16407,10 +16254,14 @@ impl Render for BlackholesApp {
         // The central React surface owns every visual workspace except the
         // high-throughput native terminal. Quick-open lives inside that same
         // surface so macOS can preserve the real content beneath its backdrop.
+        let terminal_modal = self.show_terminal
+            && (self.project_modal_request.is_some() || self.task_modal_request.is_some());
         let orchestrator_visible =
-            (!self.show_terminal || self.quick_open.is_some()) && !window.has_active_dialog(cx);
+            (!self.show_terminal || terminal_modal || self.quick_open.is_some()) && !window.has_active_dialog(cx);
         if let Some(webview) = &self.orchestrator_webview {
+            let focus_modal = terminal_modal && !webview.read(cx).visible();
             orchestrator_chat::set_visible(webview, orchestrator_visible, cx);
+            if focus_modal { let _ = webview.read(cx).raw().focus(); }
         }
         let navigation_visible = !self.show_settings && !window.has_active_dialog(cx);
         if let Some(webview) = &self.navigation_webview {
@@ -16429,12 +16280,19 @@ impl Render for BlackholesApp {
         };
 
         let mut main = v_flex()
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
             .bg(background)
             .text_color(foreground)
             .child(body);
+
+        if terminal_modal {
+            if let Some(webview) = &self.orchestrator_webview {
+                main = main.child(div().absolute().inset_0().child(webview.clone()));
+            }
+        }
 
         if let Some(busy) = &self.busy {
             main = main.child(
@@ -17808,7 +17666,7 @@ fn terminal_tree_row(
     terminal_id: Uuid,
     label: String,
     agent: AgentKind,
-    state: SessionState,
+    _state: SessionState,
     selected: bool,
     on_select: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
     on_close: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
@@ -17848,20 +17706,7 @@ fn terminal_tree_row(
                         .relative()
                         .size(px(16.))
                         .flex_none()
-                        .child(agent_icon(agent))
-                        .when(state == SessionState::Working, |this| {
-                            this.child(
-                                div()
-                                    .absolute()
-                                    .right(px(-1.))
-                                    .bottom(px(-1.))
-                                    .size(px(6.))
-                                    .rounded_full()
-                                    .border_1()
-                                    .border_color(rgb(0x111318))
-                                    .bg(rgb(0x66ca91)),
-                            )
-                        }),
+                        .child(agent_icon(agent)),
                 )
                 .child(
                     h_flex()
@@ -17870,10 +17715,7 @@ fn terminal_tree_row(
                         .gap_1()
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .child(div().min_w_0().truncate().child(label))
-                        .when(state == SessionState::Working, |this| {
-                            this.child(agent_working_dots())
-                        }),
+                        .child(div().min_w_0().truncate().child(label)),
                 ),
         )
         .child(
@@ -17947,10 +17789,14 @@ fn agent_launch_menu_button(
 }
 
 fn agent_icon(agent: AgentKind) -> AnyElement {
+    agent_icon_themed(agent, AppTheme::Dark)
+}
+
+fn agent_icon_themed(agent: AgentKind, theme: AppTheme) -> AnyElement {
     let (icon, color) = match agent {
         AgentKind::Shell => (AppIcon::SquareTerminal, rgb(0xb6bdca)),
         AgentKind::Claude => (AppIcon::ClaudeCode, rgb(0xd97757)),
-        AgentKind::Codex => (AppIcon::Codex, rgb(0xe7ecea)),
+        AgentKind::Codex => (AppIcon::Codex, if theme == AppTheme::Light { rgb(0x202622) } else { rgb(0xe7ecea) }),
         AgentKind::Gemini => (AppIcon::Code2, rgb(0x5b8def)),
     };
 

@@ -27,6 +27,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AgentAvatar } from "../shared/AgentAvatar";
+import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
 import { SidebarResizeHandle } from "../shared/SidebarResizeHandle";
 import { SidebarScrollArea } from "./SidebarScrollArea";
 import { postNative, type NativeCommand } from "../shared/native";
@@ -80,7 +81,6 @@ interface TerminalItem {
   id: string;
   label: string;
   agent: string;
-  busy: boolean;
   selected: boolean;
 }
 
@@ -329,7 +329,6 @@ function Changes({ item }: { item: RepositoryItem }) {
 }
 
 function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; copy: Copy; indentation: number }) {
-  const Icon = iconFor(terminal.agent);
   return (
     <button
       type="button"
@@ -338,13 +337,11 @@ function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; 
       onClick={() => postNative({ type: "focus_terminal", terminal_id: terminal.id })}
     >
       <span className="agent-kind-icon-wrap">
-        <span className="agent-kind-icon"><Icon size={13} /></span>
-        {terminal.busy && <span className="active-badge" />}
+        <TerminalProviderIcon provider={terminal.agent} />
       </span>
       <span className="tree-label">
         <span className="agent-name-line">
           <span className="tree-label">{terminal.label}</span>
-          {terminal.busy && <WorkingDots label={copy.working} />}
         </span>
       </span>
       <button

@@ -109,10 +109,10 @@ pub enum OrchestratorChatCommand {
     },
     SubmitCreateProject {
         request_id: uuid::Uuid,
-        mode: String,
         name: String,
-        url: String,
-        path: String,
+        sources: Vec<crate::services::projects::ProjectRepositorySource>,
+        #[serde(default)]
+        mode: crate::services::projects::ProjectRepositoryMode,
     },
     ConfirmRemoveProject {
         workspace_id: uuid::Uuid,
@@ -248,6 +248,7 @@ pub fn create(
     let html = chat_html();
     let raw = WebViewBuilder::new()
         .with_html(html)
+        .with_transparent(true)
         .with_accept_first_mouse(true)
         .with_devtools(cfg!(debug_assertions))
         .with_ipc_handler(move |request| {

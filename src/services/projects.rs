@@ -12,6 +12,21 @@ use walkdir::WalkDir;
 
 pub struct ProjectService;
 
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRepositoryMode {
+    #[default]
+    Link,
+    Copy,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ProjectRepositorySource {
+    Local(PathBuf),
+    Github(String),
+}
+
 /// Probe Apple's selected developer directory without invoking the Git shim
 /// (which can otherwise open an unexpected installation dialog).
 pub fn git_tools_available() -> bool {
@@ -34,6 +49,52 @@ pub struct RepositoryGitSummary {
 }
 
 impl ProjectService {
+    /// Prepare only the explicitly selected repositories in a new container.
+    /// Validate every source first; rollback is limited to this new container.
+    pub fn create_with_repositories(
+        projects_root: &Path,
+        name: &str,
+        sources: Vec<ProjectRepositorySource>,
+        mode: ProjectRepositoryMode,
+    ) -> Result<Workspace> {
+        if !sources.is_empty() { require_git_tools()?; }
+        let mut seen = HashSet::new();
+        let mut validated = Vec::new();
+        for source in sources {
+            let (key, source) = match source {
+                ProjectRepositorySource::Local(path) => {
+                    let path = fs::canonicalize(path)?;
+                    if !is_git_repository(&path) { bail!("A selected folder is no longer a Git repository"); }
+                    (format!("local:{}", path.display()), ProjectRepositorySource::Local(path))
+                }
+                ProjectRepositorySource::Github(url) => {
+                    let (url, _) = normalize_github_url(&url)?;
+                    (format!("github:{url}"), ProjectRepositorySource::Github(url))
+                }
+            };
+            if !seen.insert(key) { bail!("The same repository was selected more than once"); }
+            validated.push(source);
+        }
+        let mut workspace = Self::create_empty(projects_root, name)?;
+        let root = workspace.root_path.clone().context("Project root missing")?;
+        for source in validated {
+            let result = match source {
+                ProjectRepositorySource::Local(path) => match mode {
+                    ProjectRepositoryMode::Link => Self::add_existing_repository(&mut workspace, &path),
+                    ProjectRepositoryMode::Copy => Self::copy_existing_repository(&mut workspace, &path),
+                },
+                ProjectRepositorySource::Github(url) => Self::add_github_repository(&mut workspace, &url),
+            };
+            if let Err(error) = result {
+                if let Err(cleanup) = fs::remove_dir_all(&root) {
+                    return Err(error.context(format!("Incomplete project retained at {}: {cleanup}", root.display())));
+                }
+                return Err(error);
+            }
+        }
+        Ok(workspace)
+    }
+
     pub fn add_github_repository(workspace: &mut Workspace, url: &str) -> Result<()> {
         require_git_tools()?;
         let (url, name) = normalize_github_url(url)?;
@@ -98,8 +159,8 @@ impl ProjectService {
         Ok(workspace)
     }
 
-    /// Clone local repositories into a new project container; never register a
-    /// user's source folder in place or write managed instructions into it.
+    /// Link local repositories to a new container. Managed instructions belong
+    /// to the container, never to the linked source directories.
     pub fn import_existing(projects_root: &Path, path: &Path, requested_name: Option<&str>) -> Result<Workspace> {
         require_git_tools()?;
         let source = fs::canonicalize(path)?;
@@ -177,19 +238,13 @@ impl ProjectService {
 
     pub fn add_existing_repository(workspace: &mut Workspace, path: &Path) -> Result<()> {
         require_git_tools()?;
-        let mut path = fs::canonicalize(path)?;
+        let path = fs::canonicalize(path)?;
         if !is_git_repository(&path) {
             bail!("Choose a Git repository");
         }
         let root = fs::canonicalize(workspace.root_path.as_ref().context("Project root missing")?)?;
         if is_git_repository(&root) && path != root {
             bail!("This legacy project uses a repository as its root. Import it as a new managed project before adding repositories; its original files will not be moved.");
-        }
-        if !path.starts_with(&root) {
-            let name = path.file_name().and_then(OsStr::to_str).context("Repository name missing")?;
-            let destination = root.join(unique_directory_name(&root, name));
-            clone_local_repository(&path, &destination)?;
-            path = fs::canonicalize(destination)?;
         }
         if workspace
             .repositories
@@ -203,7 +258,21 @@ impl ProjectService {
         }) {
             bail!("Repositories inside a project cannot contain one another");
         }
-        workspace.repositories.push(repository_from_path(&path)?);
+        let mut repository = repository_from_path(&path)?;
+        // Different source folders may have the same basename. Task worktrees
+        // use these names as child directories, so aliases must be unique.
+        let base = repository.name.clone();
+        let mut suffix = 2;
+        while workspace.repositories.iter().any(|item| item.name == repository.name)
+            || ["CLAUDE.md", "AGENTS.md", ".git", ".blackholes-project-note.md", ".blackholes-task-CLAUDE.md"].iter().any(|reserved| repository.name.eq_ignore_ascii_case(reserved))
+            || (!path.starts_with(&root)
+                && fs::symlink_metadata(root.join(&repository.name)).is_ok()
+                && !repository_link_matches(&root.join(&repository.name), &path)) {
+            repository.name = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        ensure_repository_link(&root, &repository)?;
+        workspace.repositories.push(repository);
         workspace.layout =
             if workspace.repositories.len() == 1 && workspace.root_path.as_ref() == Some(&path) {
                 WorkspaceLayout::SingleRepository
@@ -211,6 +280,32 @@ impl ProjectService {
                 WorkspaceLayout::MultiRepository
             };
         workspace.updated_at = Utc::now();
+        Ok(())
+    }
+
+    /// Add missing links for older database-only projects; never replace files.
+    pub fn ensure_repository_links(workspace: &Workspace) -> Result<()> {
+        let root = fs::canonicalize(workspace.root_path.as_ref().context("Project root missing")?)?;
+        for repository in &workspace.repositories {
+            ensure_repository_link(&root, repository)?;
+        }
+        Ok(())
+    }
+
+    pub fn copy_existing_repository(workspace: &mut Workspace, source: &Path) -> Result<()> {
+        require_git_tools()?;
+        let source = fs::canonicalize(source)?;
+        let root = fs::canonicalize(workspace.root_path.as_ref().context("Project root missing")?)?;
+        if root.starts_with(&source) {
+            bail!("Choose a projects folder outside the repository being copied");
+        }
+        let name = source.file_name().and_then(OsStr::to_str).context("Repository name missing")?;
+        let destination = root.join(unique_directory_name(&root, name));
+        copy_local_repository(&source, &destination)?;
+        if let Err(error) = Self::add_existing_repository(workspace, &destination) {
+            let _ = fs::remove_dir_all(&destination);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -234,6 +329,12 @@ impl ProjectService {
         duplicate.name = directory_name;
         duplicate.icon = workspace.icon.clone();
         duplicate.color = workspace.color;
+        // Duplicating the project container must not lose externally linked repos.
+        for repository in &workspace.repositories {
+            if !repository.path.starts_with(&source) {
+                Self::add_existing_repository(&mut duplicate, &repository.path)?;
+            }
+        }
         Ok(duplicate)
     }
 
@@ -266,18 +367,38 @@ fn require_git_tools() -> Result<()> {
     Ok(())
 }
 
-fn clone_local_repository(source: &Path, destination: &Path) -> Result<()> {
+fn repository_link_matches(link: &Path, source: &Path) -> bool {
+    fs::symlink_metadata(link).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        && (fs::read_link(link).is_ok_and(|target| target == source)
+            || fs::canonicalize(link).is_ok_and(|target| target == source))
+}
+
+fn ensure_repository_link(root: &Path, repository: &Repository) -> Result<()> {
+    if repository.path.starts_with(root) { return Ok(()); }
+    if root.starts_with(&repository.path) { bail!("A project cannot link a repository containing its own project folder"); }
+    let mut components = Path::new(&repository.name).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_))) || components.next().is_some() {
+        bail!("Invalid repository link name");
+    }
+    let link = root.join(&repository.name);
+    if repository_link_matches(&link, &repository.path) { return Ok(()); }
+    // Atomic collision protection, including dangling links. Never remove an
+    // existing entry or traverse its target while creating a link.
+    std::os::unix::fs::symlink(&repository.path, &link)
+        .with_context(|| format!("Could not create repository link {}. Existing files were not replaced.", link.display()))
+}
+
+fn copy_local_repository(source: &Path, destination: &Path) -> Result<()> {
     // Reserve the destination atomically; never clean up a pre-existing folder.
     fs::create_dir(destination)?;
     // --no-local avoids object hardlinks/alternates tied to the source's lifecycle.
-    // Clone committed history even when the source worktree/index is dirty.
-    // Pending edits, untracked files and ignored files stay untouched in the source;
-    // never stash, commit, reset or clean a user's checkout as part of importing it.
-    let status = Command::new("git").args(["clone", "--no-local", "--"])
+    // No checkout: the source's actual files (including deletions) are copied
+    // below. Never stash, commit, reset or clean the source checkout.
+    let result = (|| -> Result<()> {
+    let status = Command::new("git").args(["clone", "--no-local", "--no-checkout", "--"])
         .arg(source).arg(destination).stdin(Stdio::null()).status()
         .context("Unable to start Git clone")?;
     if !status.success() {
-        let _ = fs::remove_dir_all(destination);
         bail!("Could not clone the local repository; the original is unchanged");
     }
     let origin = Command::new("git").current_dir(source)
@@ -290,8 +411,110 @@ fn clone_local_repository(source: &Path, destination: &Path) -> Result<()> {
         vec!["remote", "set-url", "origin", url.as_str()]
     } else { vec!["remote", "remove", "origin"] };
     if !Command::new("git").current_dir(destination).args(args).stdin(Stdio::null()).status()?.success() {
-        let _ = fs::remove_dir_all(destination);
         bail!("Could not configure the cloned repository's remote");
+    }
+    copy_working_files(source, destination)?;
+    copy_staged_objects(source, destination)?;
+    // Preserve the staged/unstaged distinction, including split indexes, but
+    // never copy .git pointers, hooks, locks or alternates from the original.
+    for relative in ["index", "info/exclude"] {
+        let path = git_metadata_path(source, relative)?;
+        if path.is_file() {
+            let target = destination.join(".git").join(relative);
+            fs::create_dir_all(target.parent().context("Git metadata parent missing")?)?;
+            fs::copy(path, target)?;
+        }
+    }
+    let shared_directory = git_metadata_path(source, "index")?.parent().context("Index parent missing")?.to_path_buf();
+    for entry in fs::read_dir(shared_directory)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("sharedindex.") && entry.file_type()?.is_file() {
+            fs::copy(entry.path(), destination.join(".git").join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+    })();
+    if result.is_err() {
+        // Destination was reserved by this call; source is never cleaned up.
+        let _ = fs::remove_dir_all(destination);
+    }
+    result
+}
+
+fn git_metadata_path(repository: &Path, name: &str) -> Result<PathBuf> {
+    let output = Command::new("git").current_dir(repository)
+        .args(["rev-parse", "--git-path", name]).stdin(Stdio::null()).output()?;
+    if !output.status.success() { bail!("Could not locate repository metadata"); }
+    Ok(repository.join(String::from_utf8(output.stdout)?.trim()))
+}
+
+fn copy_staged_objects(source: &Path, destination: &Path) -> Result<()> {
+    // Clone transfers committed objects, not new blobs referenced only by the
+    // source index. Import those blobs before installing that index.
+    let output = Command::new("git").current_dir(source)
+        .args(["ls-files", "--stage", "-z"]).stdin(Stdio::null()).output()?;
+    if !output.status.success() { bail!("Could not read the source Git index"); }
+    let mut seen = HashSet::new();
+    for record in output.stdout.split(|byte| *byte == 0).filter(|record| !record.is_empty()) {
+        let header = record.split(|byte| *byte == b'\t').next().context("Invalid Git index entry")?;
+        let header = std::str::from_utf8(header)?;
+        let mut fields = header.split_whitespace();
+        let mode = fields.next().context("Git index mode missing")?;
+        let oid = fields.next().context("Git index object missing")?;
+        if mode == "160000" || oid.bytes().all(|byte| byte == b'0') || !seen.insert(oid.to_string()) { continue; }
+    }
+    // One bulk check avoids launching Git once per tracked file in large repos.
+    let object_list = destination.join(".git").join(format!("blackholes-copy-{}", Uuid::new_v4()));
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&object_list)?;
+        for oid in &seen { writeln!(file, "{oid}")?; }
+    }
+    let checked = Command::new("git").current_dir(destination).arg("cat-file")
+        .arg("--batch-check=%(objectname) %(objecttype)")
+        .stdin(fs::File::open(&object_list)?).output();
+    fs::remove_file(&object_list)?;
+    let checked = checked?;
+    if !checked.status.success() { bail!("Could not check copied Git objects"); }
+    for line in std::str::from_utf8(&checked.stdout)?.lines() {
+        let Some(oid) = line.strip_suffix(" missing") else { continue; };
+        let mut reader = Command::new("git").current_dir(source).args(["cat-file", "blob", oid])
+            .stdin(Stdio::null()).stdout(Stdio::piped()).spawn()?;
+        let imported = Command::new("git").current_dir(destination).args(["hash-object", "-w", "--stdin"])
+            .stdin(reader.stdout.take().context("Git object pipe missing")?).output();
+        let read_status = reader.wait()?;
+        let imported = imported?;
+        if !read_status.success() || !imported.status.success() || String::from_utf8_lossy(&imported.stdout).trim() != oid {
+            bail!("Could not preserve a staged Git object; source files are unchanged");
+        }
+    }
+    Ok(())
+}
+
+fn copy_working_files(source: &Path, destination: &Path) -> Result<()> {
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        if entry.file_name() == ".git" { continue; }
+        let path = entry.path();
+        let target = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            // Preserve links without traversing them or copying outside sources.
+            std::os::unix::fs::symlink(fs::read_link(&path)?, &target)?;
+        } else if metadata.is_dir() {
+            if path.join(".git").exists() {
+                // Includes initialized submodules and linked Git worktrees.
+                copy_local_repository(&path, &target)?;
+            } else {
+                fs::create_dir(&target)?;
+                copy_working_files(&path, &target)?;
+            }
+            fs::set_permissions(&target, metadata.permissions())?;
+        } else if metadata.is_file() {
+            fs::copy(&path, &target).with_context(|| format!("Could not copy {}", path.display()))?;
+        } else {
+            bail!("Cannot copy special file {}. Stop the process using it and retry, or link this repository instead.", path.display());
+        }
     }
     Ok(())
 }
@@ -534,12 +757,12 @@ fn safe_directory_name(value: &str) -> String {
 
 fn unique_directory_name(parent: &Path, value: &str) -> String {
     let base = safe_directory_name(value);
-    if !parent.join(&base).exists() {
+    if fs::symlink_metadata(parent.join(&base)).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) {
         return base;
     }
     for suffix in 2..10_000 {
         let candidate = format!("{base}-{suffix}");
-        if !parent.join(&candidate).exists() {
+        if fs::symlink_metadata(parent.join(&candidate)).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) {
             return candidate;
         }
     }

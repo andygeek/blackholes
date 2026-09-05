@@ -45,6 +45,10 @@ body {
   height: 100%;
 }
 
+html.native-terminal-overlay,
+html.native-terminal-overlay body,
+html.native-terminal-overlay #root { background: transparent; }
+
 button,
 textarea,
 input {
@@ -227,7 +231,49 @@ button {
 }
 
 .app-modal--form { width: min(100%, 560px); }
-.app-modal--task { width: min(100%, 680px); }
+.app-modal--task { width: min(100%, 540px); }
+.app-modal--task #app-modal-description { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.create-task-form .task-modal-fields { gap: 14px; }
+.task-description-toggle { justify-self: start; }
+.create-task-form .task-description-toggle + label textarea { margin-top: 0; }
+.task-repository-list { display: grid; gap: 8px; max-height: 260px; overflow-y: auto; }
+.create-task-form .task-modal-repository { padding: 10px 12px; }
+.task-modal-checkbox > span { min-width: 0; overflow-wrap: anywhere; }
+.task-repository-options { margin: 8px 0 0 22px; }
+.task-repository-options summary, .task-branch-options summary { cursor: pointer; padding: 4px 0; font-size: 12px; }
+.task-repository-options summary > span, .task-branch-options summary > span { display: inline-block; vertical-align: bottom; max-width: 65%; margin-left: 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 11px; }
+.create-task-form .task-modal-preparation { margin: 10px 0 0; padding: 0; border: 0; }
+.create-task-form .task-selection-hint { margin: 0; }
+.task-branch-options { border-top: 1px solid var(--border); padding-top: 12px; }
+.task-branch-fields { display: grid; gap: 14px; margin-top: 12px; }
+.task-modal-fields .task-select-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.task-select-row select { max-width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: inherit; font: inherit; font-size: 12px; }
+.app-modal .task-branch-warning { padding: 10px; margin: 0; border-radius: 7px; background: #b7801720; color: inherit; font-size: 12px; line-height: 1.5; }
+.app-modal--task footer { position: sticky; bottom: -22px; padding: 14px 0 0; background: #202226; z-index: 1; }
+:root[data-theme="light"] .app-modal--task footer { background: #fff; }
+.app-modal--project { width: min(100%, 500px); }
+.app-modal--project #app-modal-description { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.create-project-form .project-modal-fields { gap: 14px; }
+.project-repository-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 13px; font-weight: 500; }
+.project-repository-heading > span { display: flex; align-items: baseline; gap: 7px; }
+.project-repository-heading small { margin: 0; }
+.project-source-actions { display: flex; gap: 8px; }
+.project-source-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: 1; padding: 9px 12px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.project-source-actions button:hover { background: var(--surface-raised); }
+.project-text-button { border: 0; padding: 3px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.create-project-form .project-empty-hint { margin: 0; }
+.create-project-form .project-modal-repositories { max-height: 200px; overflow-y: auto; }
+.create-project-form .project-modal-repo { padding: 8px 10px; }
+.create-project-form .project-modal-repo small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.project-location-option { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding-top: 12px; border-top: 1px solid var(--border); }
+.project-location-option select { max-width: 220px; border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; background: var(--surface-raised); color: inherit; font: inherit; font-size: 12px; }
+.project-location-option small { grid-column: 1 / -1; margin: 0; }
+.project-details { border-top: 1px solid var(--border); padding-top: 12px; color: var(--muted); font-size: 12px; }
+.project-details summary { cursor: pointer; padding: 4px 0; }
+.project-details code { display: block; margin-top: 5px; font-size: 11px; overflow-wrap: anywhere; }
+.app-modal .project-details p { font-size: 12px; line-height: 1.5; margin: 10px 0 0; color: var(--muted); }
+.project-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 480px) { .project-location-option { grid-template-columns: 1fr; } .project-location-option select { max-width: 100%; width: 100%; } }
 .task-modal-fields textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 8px; padding: 10px 12px; border: 1px solid #484b54; border-radius: 7px; background: #181a1e; color: inherit; font: inherit; font-size: 14px; resize: vertical; }
 .task-modal-fields textarea:focus-visible { outline: 2px solid #8197d5; outline-offset: 2px; }
 .task-modal-section { display: grid; gap: 12px; border-top: 1px solid #393c44; padding-top: 16px; }
@@ -244,6 +290,7 @@ button {
 :root[data-theme="light"] .task-modal-availability { background: #f1f2f4; }
 .project-modal-fields { border: 0; padding: 0; margin: 20px 0 0; display: grid; gap: 18px; min-width: 0; }
 .project-modal-fields legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.project-import-help { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .project-modal-modes { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; border-radius: 9px; background: #2b2d32; }
 .project-modal-modes button { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; background: transparent; color: #babdc5; font: inherit; font-size: 13px; cursor: pointer; }
 .project-modal-modes button[aria-pressed="true"] { background: #41444b; color: #fff; border-color: #565a65; box-shadow: 0 1px 3px #0002; }
@@ -254,6 +301,19 @@ button {
 .project-modal-folder button { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 9px 12px; border: 1px solid #484b54; border-radius: 7px; background: #303238; color: inherit; font: inherit; cursor: pointer; }
 .project-modal-fields small { display: block; margin-top: 6px; font-size: 12px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; color: #9da4b0; }
 .project-modal-destination { border-top: 1px solid #393c44; padding-top: 16px; font-size: 12px; }
+.project-modal-github { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; }
+.project-modal-github input { margin: 0; min-width: 0; flex: 1; }
+.project-modal-github button { display: flex; align-items: center; gap: 5px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: var(--text); cursor: pointer; }
+.project-modal-repositories { display: grid; gap: 8px; }
+.project-modal-selection { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.project-modal-selection button, .project-modal-repo > button { border: 0; border-radius: 5px; padding: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.project-modal-selection button:hover, .project-modal-repo > button:hover { color: var(--text); background: var(--surface-raised); }
+.project-modal-repo { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.project-modal-fields .project-modal-repo-check { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; cursor: pointer; }
+.project-modal-repo-check > span { min-width: 0; flex: 1; }
+.project-modal-repo-check svg { flex: none; }
+.project-modal-fields .project-modal-repo-check input { flex: none; width: 14px; height: 14px; margin: 0; padding: 0; }
+.project-modal-repo-check strong { display: block; overflow-wrap: anywhere; }
 .app-modal .app-modal__primary { background: #eceef2; color: #1a1c21; }
 .app-modal .app-modal__primary:hover { background: #fff; }
 .app-modal button:disabled { opacity: .5; cursor: default; }

@@ -4,7 +4,7 @@ A macOS desktop workspace for coding agents, Git repositories, isolated tasks, a
 
 > Documentation status: Work in progress.
 
-Version: **0.1.3**. Blackholes' original source code is licensed under
+Version: **0.1.4**. Blackholes' original source code is licensed under
 [MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
 
 ## Installing the desktop app
@@ -21,14 +21,43 @@ does not silently modify the system. Project-specific dependencies such as Docke
 language toolchains, or build SDKs remain requirements of the user's repositories.
 
 New projects live under `~/Blackholes_projects` by default. Each project is a
-container for multiple cloned repositories, project skills, `CLAUDE.md`, `AGENTS.md`,
-and notes. GitHub imports clone into a child repository folder. Local imports clone
-committed files into independent repositories even when the source has uncommitted
-changes. Staged and unstaged edits, untracked files, and ignored files such as
-`.env` and build outputs remain in the original folder and are not imported.
-The original checkout is never modified or registered in place. Add more local or GitHub repositories from
+container for repositories, project skills, `CLAUDE.md`, `AGENTS.md`, and notes.
+Project creation offers two modes for local repositories:
+
+- **Link existing (default):** create symbolic links directly in the project
+  root, without a `repos/` wrapper or moving/copying the originals. These links
+  work in Finder, terminals and coding agents without Blackholes or its MCP.
+  Existing environments and pending changes remain available.
+  Subsequent edits affect the original repositories; this is not isolation.
+- **Copy into project:** copy Git history and the actual working files, including
+  staged/unstaged changes, untracked files, ignored `.env` files, and installed
+  dependencies. Preserve the index and local Git excludes without copying Git
+  hooks or linking Git storage to the original. Symbolic links remain links and
+  may refer outside the copy. Stop processes that write into the source before
+  copying; special files such as sockets are rejected rather than silently lost.
+  This is a filesystem copy, not a portable replacement for external databases,
+  containers, system dependencies, or machine-specific absolute paths.
+
+GitHub imports always clone into a child repository folder. Selected project
+skills and instructions apply to linked repositories as well as managed copies;
+the project context stays in the container, not in the linked originals.
+Add more local (linked) or GitHub repositories from
 the project's `+` menu. Existing project paths and custom project-root settings are
 preserved; changing the default is not a migration of previous workspaces.
+
+Create a project by naming it and selecting the repositories to include. Add a
+local repository or a folder containing repositories, review the detected list,
+and repeat to add sources from other locations. GitHub URLs can be added one at
+a time to the same list. Only selected repositories are added; an empty
+selection creates an empty project container. The same project form is used
+over native terminals and other workspace views without closing terminal sessions.
+The compact form reveals GitHub input on demand and keeps location details
+collapsed. Existing database-only links are materialized when project context is
+prepared on startup. Existing files and conflicting links are never overwritten.
+
+Terminal rows use the detected provider's icon. They do not show persistent
+loading dots or green presence badges; launching or focusing a CLI alone is not
+treated as submitting an agent turn.
 
 ## Build and run
 

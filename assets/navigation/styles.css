@@ -437,6 +437,13 @@ button:focus-visible {
   margin-top: 2px;
 }
 
+.terminal-provider { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
+.terminal-provider svg { display: block; width: 16px; height: 16px; }
+.terminal-provider--codex { color: #ececea; }
+.terminal-provider--claude { color: #d97757; }
+.terminal-provider--gemini { color: #5b8def; }
+:root[data-theme="light"] .terminal-provider--codex { color: #202622; }
+
 .tree-row,
 .tree-leaf,
 .tree-agent {

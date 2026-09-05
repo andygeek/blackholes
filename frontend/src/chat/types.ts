@@ -71,7 +71,8 @@ export interface AppModalState {
   task_id?: string;
   request_id?: string;
   projects_root?: string;
-  feedback?: { path?: string | null; error?: string; branches?: TaskBranchAvailability[] };
+  over_terminal?: boolean;
+  feedback?: { path?: string | null; error?: string; branches?: TaskBranchAvailability[]; repositories?: { name: string; path: string }[] };
   repositories?: { id: string; name: string }[];
   workspace_id?: string;
   scope?: string;
