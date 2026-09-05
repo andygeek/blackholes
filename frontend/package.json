@@ -1,0 +1,29 @@
+{
+  "name": "blackholes-webviews",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "tsc --noEmit && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@blocknote/core": "0.54.0",
+    "@blocknote/mantine": "0.54.0",
+    "@blocknote/react": "0.54.0",
+    "@mantine/core": "9.5.2",
+    "@mantine/hooks": "9.5.2",
+    "lucide-react": "1.40.0",
+    "monaco-editor": "0.56.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
+  }
+}

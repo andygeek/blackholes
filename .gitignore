@@ -1,0 +1,56 @@
+# Rust build artifacts
+/target/
+
+# Claude Agent SDK sidecar dependencies
+/agent-sidecar/node_modules/
+
+# React WebView dependencies (production bundles stay versioned in assets/generated)
+/frontend/node_modules/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local assistant configuration and private application data
+/.claude/
+/.codex/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+app-session.json
+orchestrator-chat.json
+agent-profiles/
+task-workspaces/
+
+# Signing, notarization, and release credentials (never commit private keys)
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.cer
+*.certSigningRequest
+*.keychain
+*.keychain-db
+*.mobileprovision
+*.provisionprofile
+.npmrc
+.netrc
+
+# Local audit reports, backups, and distributable artifacts
+/dist/
+/release-artifacts/
+*.dmg
+*.pkg
+*.bundle
+gitleaks-report*.json
+
+# Logs
+*.log
+
+# macOS
+.DS_Store

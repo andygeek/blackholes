@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+version=2.9.6
+checksum=52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192
+cache="$repo_root/target/sparkle-$version"
+if [[ ! -f "$cache/.verified-$checksum" || ! -d "$cache/Sparkle.framework" ]]; then
+  mkdir -p "$repo_root/target"
+  staging=$(mktemp -d "$repo_root/target/sparkle-download.XXXXXX")
+  curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    "https://github.com/sparkle-project/Sparkle/releases/download/$version/Sparkle-$version.tar.xz" \
+    --output "$staging/sparkle.tar.xz"
+  actual=$(shasum -a 256 "$staging/sparkle.tar.xz" | awk '{print $1}')
+  [[ "$actual" == "$checksum" ]] || { echo "Sparkle checksum mismatch" >&2; exit 1; }
+  mkdir -p "$cache"
+  tar -xJf "$staging/sparkle.tar.xz" -C "$cache"
+  [[ -d "$cache/Sparkle.framework" ]] || { echo "Sparkle framework missing" >&2; exit 1; }
+  touch "$cache/.verified-$checksum"
+fi
+printf '%s\n' "$cache"

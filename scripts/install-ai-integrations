@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
+skill_source="$repo_root/integrations/skills/blackholes/SKILL.md"
+binary_path="${BLACKHOLES_BINARY:-$repo_root/target/release/blackholes-rust}"
+managed_marker="managed-by: blackholes-ai-integrations"
+mode="install"
+select_codex=false
+select_claude=false
+selection_explicit=false
+codex_extra_profiles=()
+claude_extra_profiles=()
+
+usage() {
+  cat <<'EOF'
+Install the local Blackholes MCP and routing skill for Codex and Claude Code.
+
+Usage:
+  ./scripts/install-ai-integrations [install|status|uninstall] [options]
+
+Options:
+  --all            Configure every detected client (default).
+  --codex          Configure Codex only.
+  --claude         Configure Claude Code only.
+  --codex-home PATH
+                   Configure an additional Codex profile (repeatable).
+  --claude-home PATH
+                   Configure an additional Claude Code profile (repeatable).
+  --binary PATH    Use a specific compiled blackholes-rust executable.
+  -h, --help       Show this help.
+
+BLACKHOLES_BINARY can also provide the executable path.
+EOF
+}
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+note() {
+  printf '%s\n' "$*"
+}
+
+while (($# > 0)); do
+  case "$1" in
+    install|status|uninstall)
+      mode="$1"
+      ;;
+    --all)
+      selection_explicit=true
+      select_codex=true
+      select_claude=true
+      ;;
+    --codex)
+      selection_explicit=true
+      select_codex=true
+      ;;
+    --claude)
+      selection_explicit=true
+      select_claude=true
+      ;;
+    --codex-home)
+      (($# >= 2)) || fail "--codex-home requires a path"
+      selection_explicit=true
+      select_codex=true
+      codex_extra_profiles+=("$2")
+      shift
+      ;;
+    --claude-home)
+      (($# >= 2)) || fail "--claude-home requires a path"
+      selection_explicit=true
+      select_claude=true
+      claude_extra_profiles+=("$2")
+      shift
+      ;;
+    --binary)
+      (($# >= 2)) || fail "--binary requires a path"
+      binary_path="$2"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+  shift
+done
+
+[[ -f "$skill_source" ]] || fail "missing shared skill: $skill_source"
+
+if [[ "$binary_path" != /* ]]; then
+  binary_dir="$(CDPATH= cd -- "$(dirname -- "$binary_path")" && pwd)"
+  binary_path="$binary_dir/$(basename -- "$binary_path")"
+fi
+
+if [[ "$selection_explicit" == false ]]; then
+  command -v codex >/dev/null 2>&1 && select_codex=true
+  command -v claude >/dev/null 2>&1 && select_claude=true
+fi
+
+if [[ "$select_codex" == false && "$select_claude" == false ]]; then
+  fail "neither Codex nor Claude Code was found; install a client or select one explicitly"
+fi
+
+if [[ "$mode" == install ]]; then
+  [[ -f "$binary_path" && -x "$binary_path" ]] || {
+    fail "release binary not found at $binary_path; run 'cargo build --release --bin blackholes-rust' first"
+  }
+fi
+
+check_skill_destination() {
+  local profile_dir="$1"
+  local client_name="$2"
+  local skill_file="$profile_dir/skills/blackholes/SKILL.md"
+
+  if [[ -e "$skill_file" ]] && ! grep -Fq "$managed_marker" "$skill_file"; then
+    fail "$client_name already has an unmanaged Blackholes skill at $skill_file"
+  fi
+}
+
+install_skill() {
+  local profile_dir="$1"
+  local client_name="$2"
+  local skill_dir="$profile_dir/skills/blackholes"
+  local skill_file="$skill_dir/SKILL.md"
+  local temporary
+
+  check_skill_destination "$profile_dir" "$client_name"
+
+  mkdir -p "$skill_dir"
+  temporary="$(mktemp "$skill_dir/.SKILL.md.XXXXXX")"
+  cp "$skill_source" "$temporary"
+  chmod 0644 "$temporary"
+  mv -f "$temporary" "$skill_file"
+  note "Installed $client_name skill in $skill_file"
+}
+
+remove_skill() {
+  local profile_dir="$1"
+  local client_name="$2"
+  local skill_dir="$profile_dir/skills/blackholes"
+  local skill_file="$skill_dir/SKILL.md"
+
+  if [[ ! -e "$skill_file" ]]; then
+    note "$client_name skill is not installed in $profile_dir"
+    return
+  fi
+  if ! grep -Fq "$managed_marker" "$skill_file"; then
+    note "Skipped unmanaged $client_name skill at $skill_file"
+    return
+  fi
+
+  rm -f -- "$skill_file"
+  rmdir "$skill_dir" 2>/dev/null || true
+  note "Removed $client_name skill from $profile_dir"
+}
+
+skill_status() {
+  local profile_dir="$1"
+  local client_name="$2"
+  local skill_file="$profile_dir/skills/blackholes/SKILL.md"
+
+  if [[ -f "$skill_file" ]] && grep -Fq "$managed_marker" "$skill_file"; then
+    note "$client_name skill: installed ($skill_file)"
+  elif [[ -e "$skill_file" ]]; then
+    note "$client_name skill: unmanaged ($skill_file)"
+  else
+    note "$client_name skill: not installed ($profile_dir)"
+  fi
+}
+
+install_codex_profile() {
+  local profile_dir="$1"
+
+  check_skill_destination "$profile_dir" "Codex"
+  env CODEX_HOME="$profile_dir" codex mcp remove blackholes >/dev/null 2>&1 || true
+  env CODEX_HOME="$profile_dir" codex mcp add blackholes -- "$binary_path" mcp
+  install_skill "$profile_dir" "Codex"
+}
+
+uninstall_codex_profile() {
+  local profile_dir="$1"
+
+  if env CODEX_HOME="$profile_dir" codex mcp remove blackholes >/dev/null 2>&1; then
+    note "Removed Codex MCP registration from $profile_dir"
+  else
+    note "Codex MCP is not registered in $profile_dir"
+  fi
+  remove_skill "$profile_dir" "Codex"
+}
+
+status_codex_profile() {
+  local profile_dir="$1"
+
+  if env CODEX_HOME="$profile_dir" codex mcp get blackholes >/dev/null 2>&1; then
+    note "Codex MCP: registered ($profile_dir)"
+  else
+    note "Codex MCP: not registered ($profile_dir)"
+  fi
+  skill_status "$profile_dir" "Codex"
+}
+
+install_claude_profile() {
+  local profile_dir="$1"
+
+  check_skill_destination "$profile_dir" "Claude Code"
+  env CLAUDE_CONFIG_DIR="$profile_dir" claude mcp remove --scope user blackholes >/dev/null 2>&1 || true
+  env CLAUDE_CONFIG_DIR="$profile_dir" claude mcp add --transport stdio --scope user blackholes -- "$binary_path" mcp
+  install_skill "$profile_dir" "Claude Code"
+}
+
+uninstall_claude_profile() {
+  local profile_dir="$1"
+
+  if env CLAUDE_CONFIG_DIR="$profile_dir" claude mcp remove --scope user blackholes >/dev/null 2>&1; then
+    note "Removed Claude Code MCP registration from $profile_dir"
+  else
+    note "Claude Code MCP is not registered in $profile_dir"
+  fi
+  remove_skill "$profile_dir" "Claude Code"
+}
+
+status_claude_profile() {
+  local profile_dir="$1"
+
+  if env CLAUDE_CONFIG_DIR="$profile_dir" claude mcp get blackholes >/dev/null 2>&1; then
+    note "Claude Code MCP: registered ($profile_dir)"
+  else
+    note "Claude Code MCP: not registered ($profile_dir)"
+  fi
+  skill_status "$profile_dir" "Claude Code"
+}
+
+run_codex_profile() {
+  local profile_dir="$1"
+
+  case "$mode" in
+    install) install_codex_profile "$profile_dir" ;;
+    status) status_codex_profile "$profile_dir" ;;
+    uninstall) uninstall_codex_profile "$profile_dir" ;;
+  esac
+}
+
+run_claude_profile() {
+  local profile_dir="$1"
+
+  case "$mode" in
+    install) install_claude_profile "$profile_dir" ;;
+    status) status_claude_profile "$profile_dir" ;;
+    uninstall) uninstall_claude_profile "$profile_dir" ;;
+  esac
+}
+
+user_root="${HOME:?HOME is not set}"
+codex_profiles=()
+claude_profiles=()
+
+append_codex_profile() {
+  local candidate="$1"
+  local existing
+
+  [[ -n "$candidate" ]] || return
+  # Bash 3.2 treats an empty array as unset when nounset is enabled.
+  for existing in ${codex_profiles[@]+"${codex_profiles[@]}"}; do
+    [[ "$candidate" == "$existing" ]] && return
+  done
+  codex_profiles+=("$candidate")
+}
+
+append_claude_profile() {
+  local candidate="$1"
+  local existing
+
+  [[ -n "$candidate" ]] || return
+  for existing in ${claude_profiles[@]+"${claude_profiles[@]}"}; do
+    [[ "$candidate" == "$existing" ]] && return
+  done
+  claude_profiles+=("$candidate")
+}
+
+discover_codex_profiles() {
+  local candidate
+
+  append_codex_profile "${CODEX_HOME:-$user_root/.codex}"
+  append_codex_profile "$user_root/.codex"
+
+  shopt -s nullglob
+  for candidate in "$user_root"/.codex-*; do
+    [[ -d "$candidate" && -f "$candidate/config.toml" ]] && append_codex_profile "$candidate"
+  done
+  shopt -u nullglob
+
+  for candidate in ${codex_extra_profiles[@]+"${codex_extra_profiles[@]}"}; do
+    append_codex_profile "$candidate"
+  done
+}
+
+discover_claude_profiles() {
+  local candidate
+
+  append_claude_profile "${CLAUDE_CONFIG_DIR:-$user_root/.claude}"
+  append_claude_profile "$user_root/.claude"
+
+  shopt -s nullglob
+  for candidate in "$user_root"/.claude-*; do
+    if [[ -d "$candidate" && ( -f "$candidate/.claude.json" || -f "$candidate/settings.json" ) ]]; then
+      append_claude_profile "$candidate"
+    fi
+  done
+  shopt -u nullglob
+
+  for candidate in ${claude_extra_profiles[@]+"${claude_extra_profiles[@]}"}; do
+    append_claude_profile "$candidate"
+  done
+}
+
+if [[ "$select_codex" == true ]]; then
+  command -v codex >/dev/null 2>&1 || fail "Codex was selected but the 'codex' command was not found"
+  discover_codex_profiles
+  for profile_dir in ${codex_profiles[@]+"${codex_profiles[@]}"}; do
+    run_codex_profile "$profile_dir"
+  done
+fi
+
+if [[ "$select_claude" == true ]]; then
+  command -v claude >/dev/null 2>&1 || fail "Claude Code was selected but the 'claude' command was not found"
+  discover_claude_profiles
+  for profile_dir in ${claude_profiles[@]+"${claude_profiles[@]}"}; do
+    run_claude_profile "$profile_dir"
+  done
+fi
+
+case "$mode" in
+  install)
+    note "Blackholes AI integrations are installed. Start a new Codex or Claude Code session before using them."
+    ;;
+  status)
+    note "Status check complete."
+    ;;
+  uninstall)
+    note "Blackholes AI integrations were removed from the selected clients."
+    ;;
+esac

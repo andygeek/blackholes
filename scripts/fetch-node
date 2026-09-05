@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pinned upstream standalone runtime. No Homebrew-linked libraries or user files.
+set -euo pipefail
+repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+version=22.23.2
+case "${1:-$(uname -m)}" in
+  arm64) arch=arm64; checksum=61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6 ;;
+  x64|x86_64) arch=x64; checksum=58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026 ;;
+  *) echo 'Unsupported Node release architecture' >&2; exit 1 ;;
+esac
+cache="$repo_root/target/node-v$version-darwin-$arch"
+mkdir -p "$repo_root/target"
+if [[ ! -f "$cache/.verified-$checksum" || ! -x "$cache/bin/node" ]]; then
+  staging=$(mktemp -d "$repo_root/target/node-download.XXXXXX")
+  curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    "https://nodejs.org/download/release/v$version/node-v$version-darwin-$arch.tar.gz" \
+    --output "$staging/node.tar.gz"
+  actual=$(shasum -a 256 "$staging/node.tar.gz" | awk '{print $1}')
+  [[ "$actual" == "$checksum" ]] || { echo 'Node checksum mismatch' >&2; exit 1; }
+  tar -xzf "$staging/node.tar.gz" -C "$staging"
+  [[ -x "$staging/node-v$version-darwin-$arch/bin/node" ]] || exit 1
+  # Do not overwrite a damaged cache or remove potentially useful files.
+  [[ ! -e "$cache" ]] || { echo "Move the incomplete cache aside: $cache" >&2; exit 1; }
+  mv "$staging/node-v$version-darwin-$arch" "$cache"
+  touch "$cache/.verified-$checksum"
+fi
+printf '%s\n' "$cache"

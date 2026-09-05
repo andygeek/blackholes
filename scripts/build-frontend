@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
+frontend_root="$repo_root/frontend"
+
+if [[ ! -x "$frontend_root/node_modules/.bin/vite" ]]; then
+  npm ci --prefix "$frontend_root"
+fi
+
+npm run build --prefix "$frontend_root"

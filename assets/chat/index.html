@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; worker-src blob:"
+    />
+    <title>Blackholes Orchestrator</title>
+    <style>
+{{AGENT_AVATAR_STYLES}}
+{{CHAT_STYLES}}
+{{WORKSPACE_STYLES}}
+{{CHAT_BUNDLE_STYLES}}
+{{EDITOR_BUNDLE_STYLES}}
+    </style>
+  </head>
+  <body>
+    <div id="root" data-app-logo="{{APP_LOGO_DATA_URL}}"></div>
+    <script type="application/octet-stream" id="editor-runtime-source">{{EDITOR_BUNDLE_BASE64}}</script>
+    <script>
+{{CHAT_REACT_BUNDLE}}
+    </script>
+  </body>
+</html>

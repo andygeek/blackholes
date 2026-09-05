@@ -1,0 +1,210 @@
+.agent-avatar-svg {
+  display: block;
+  width: var(--avatar-size, 32px);
+  height: var(--avatar-size, 32px);
+  flex: none;
+  overflow: visible;
+  filter: drop-shadow(0 3px 7px rgba(0, 0, 0, 0.24));
+}
+
+.agent-avatar__body {
+  transform-box: view-box;
+  transform-origin: 50px 82px;
+}
+.agent-avatar__eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: translate(var(--gaze-x, 0px), var(--gaze-y, 0px));
+  transition: transform 420ms cubic-bezier(.22, .8, .3, 1);
+}
+.agent-avatar__eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  fill: #10141c;
+  transition: opacity 220ms ease;
+}
+.agent-avatar__closed-eyes { opacity: 0; transition: opacity 220ms ease; }
+.agent-avatar__sleep-bubble {
+  opacity: 0;
+  transform-box: view-box;
+  transform-origin: 52px 58px;
+}
+.agent-avatar__shadow {
+  fill: #000;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.agent-avatar-svg[data-gesture="blink"] .agent-avatar__eye {
+  animation: avatar-blink 650ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="look-up"] .agent-avatar__eye {
+  animation: avatar-look-up 2600ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="side-eye"] .agent-avatar__eye {
+  animation: avatar-side-eye 2600ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="wake"] .agent-avatar__eye {
+  animation: avatar-wake-eyes 1200ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="wake"] .agent-avatar__body {
+  animation: avatar-wake-stretch 1200ms ease-in-out both;
+}
+.agent-avatar-svg[data-rest="drowsy"] .agent-avatar__eye {
+  animation: avatar-drowsy-eyes 4500ms ease-in-out infinite;
+}
+.agent-avatar-svg[data-rest="drowsy"] .agent-avatar__body {
+  animation: avatar-drowsy-nod 4500ms ease-in-out infinite;
+}
+.agent-avatar-svg[data-rest="sleeping"] .agent-avatar__eye { opacity: 0; }
+.agent-avatar-svg[data-rest="sleeping"] .agent-avatar__closed-eyes { opacity: 1; }
+.agent-avatar-svg[data-rest="sleeping"] .agent-avatar__body {
+  animation: avatar-sleep-breathe 4400ms ease-in-out infinite;
+}
+.agent-avatar-svg[data-rest="sleeping"] .agent-avatar__sleep-bubble {
+  animation: avatar-sleep-bubble 4400ms ease-in-out infinite;
+}
+
+@keyframes avatar-look-up {
+  0%, 100% { transform: scale(1); }
+  20%, 75% { transform: scale(.96, 1.12); }
+}
+@keyframes avatar-side-eye {
+  0%, 100% { transform: scaleY(1); }
+  20%, 75% { transform: scaleY(.72); }
+}
+@keyframes avatar-drowsy-eyes {
+  0%, 100% { transform: scaleY(.6); }
+  45% { transform: scaleY(.25); }
+  63%, 72% { transform: scaleY(.08); }
+  85% { transform: scaleY(.55); }
+}
+@keyframes avatar-drowsy-nod {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  60%, 74% { transform: translateY(2px) rotate(4deg); }
+}
+@keyframes avatar-sleep-breathe {
+  0%, 100% { transform: translateY(1px) scale(1, .99) rotate(2deg); }
+  50% { transform: translateY(-1px) scale(1.015, 1.025) rotate(2deg); }
+}
+@keyframes avatar-sleep-bubble {
+  0%, 100% { opacity: .65; transform: scale(.35); }
+  50% { opacity: .95; transform: scale(1); }
+}
+@keyframes avatar-wake-eyes {
+  0% { transform: scaleY(.1); }
+  25%, 45% { transform: scaleY(1.15); }
+  60% { transform: scaleY(.1); }
+  80%, 100% { transform: scaleY(1); }
+}
+@keyframes avatar-wake-stretch {
+  0%, 100% { transform: translateY(0) scale(1); }
+  30% { transform: translateY(-3px) scale(.97, 1.06); }
+  60% { transform: translateY(1px) scale(1.03, .97); }
+}
+.agent-avatar-svg[data-gesture="double-blink"] .agent-avatar__eye {
+  animation: avatar-double-blink 950ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="wink"] .agent-avatar__eye--left {
+  animation: avatar-wink-left 1000ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="wink"] .agent-avatar__eye--right {
+  animation: avatar-wink-right 1000ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="curious"] .agent-avatar__eye--left {
+  animation: avatar-curious-left 2300ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="curious"] .agent-avatar__eye--right {
+  animation: avatar-curious-right 2300ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="curious"] .agent-avatar__body {
+  animation: avatar-tilt 2300ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="hop"] .agent-avatar__body {
+  animation: avatar-hop 1250ms both;
+}
+.agent-avatar-svg[data-gesture="bounce"] .agent-avatar__body {
+  animation: avatar-bounce 1250ms both;
+}
+.agent-avatar-svg[data-gesture="hop"] .agent-avatar__shadow,
+.agent-avatar-svg[data-gesture="bounce"] .agent-avatar__shadow {
+  animation: avatar-shadow 1250ms ease-in-out both;
+}
+.agent-avatar-svg[data-gesture="hop"] .agent-avatar__eye,
+.agent-avatar-svg[data-gesture="bounce"] .agent-avatar__eye {
+  animation: avatar-happy-eyes 1250ms ease-in-out both;
+}
+
+@keyframes avatar-blink {
+  0%, 30%, 68%, 100% { transform: scaleY(1); }
+  46%, 51% { transform: scaleY(.08); }
+}
+@keyframes avatar-double-blink {
+  0%, 16%, 40%, 57%, 84%, 100% { transform: scaleY(1); }
+  26%, 31%, 68%, 73% { transform: scaleY(.08); }
+}
+@keyframes avatar-wink-left {
+  0%, 20%, 85%, 100% { transform: scaleY(1); }
+  37%, 64% { transform: scaleY(var(--wink-left, .12)); }
+}
+@keyframes avatar-wink-right {
+  0%, 20%, 85%, 100% { transform: scaleY(1); }
+  37%, 64% { transform: scaleY(var(--wink-right, 1)); }
+}
+@keyframes avatar-curious-left {
+  0%, 100% { transform: scaleY(1) rotate(0); }
+  24%, 70% { transform: scaleY(.78) rotate(-9deg); }
+}
+@keyframes avatar-curious-right {
+  0%, 100% { transform: scaleY(1) rotate(0); }
+  24%, 70% { transform: scaleY(1.1) rotate(6deg); }
+}
+@keyframes avatar-tilt {
+  0%, 100% { transform: rotate(0); }
+  26%, 70% { transform: rotate(var(--hop-tilt, 7deg)); }
+}
+@keyframes avatar-hop {
+  0%, 100% { transform: translateY(0) scale(1) rotate(0); }
+  12% { transform: translateY(2px) scale(1.1, .88); animation-timing-function: cubic-bezier(.16, .75, .35, 1); }
+  36% { transform: translateY(-16px) scale(.97, 1.05) rotate(var(--hop-tilt, 7deg)); animation-timing-function: cubic-bezier(.5, 0, .85, .35); }
+  58% { transform: translateY(1px) scale(1.13, .85) rotate(0); animation-timing-function: ease-out; }
+  72% { transform: translateY(-6px) scale(.98, 1.03); animation-timing-function: ease-in; }
+  85% { transform: translateY(1px) scale(1.05, .95); }
+  94% { transform: translateY(-1px) scale(1); }
+}
+@keyframes avatar-bounce {
+  0%, 100% { transform: translateY(0) rotate(0) scale(1); }
+  14% { transform: scale(1.09, .9) rotate(-4deg); animation-timing-function: ease-out; }
+  34% { transform: translateY(-11px) rotate(var(--hop-tilt, 7deg)) scale(.97, 1.04); animation-timing-function: ease-in; }
+  52% { transform: translateY(1px) rotate(-5deg) scale(1.1, .87); animation-timing-function: ease-out; }
+  68% { transform: translateY(-5px) rotate(4deg) scale(.98, 1.02); animation-timing-function: ease-in; }
+  81% { transform: translateY(0) rotate(-2deg) scale(1.04, .96); }
+  92% { transform: translateY(-2px) rotate(1deg) scale(1); }
+}
+@keyframes avatar-shadow {
+  0%, 100% { opacity: 0; transform: scaleX(1); }
+  12%, 58%, 85% { opacity: .14; transform: scaleX(1.05); }
+  36% { opacity: .06; transform: scaleX(.65); }
+  72% { opacity: .1; transform: scaleX(.85); }
+}
+@keyframes avatar-happy-eyes {
+  0%, 22%, 45%, 100% { transform: scaleY(1); }
+  57%, 65% { transform: scaleY(.22); }
+  82% { transform: scaleY(.8); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-avatar-svg .agent-avatar__body,
+  .agent-avatar-svg .agent-avatar__eyes,
+  .agent-avatar-svg .agent-avatar__eye,
+  .agent-avatar-svg .agent-avatar__shadow,
+  .agent-avatar-svg .agent-avatar__closed-eyes,
+  .agent-avatar-svg .agent-avatar__sleep-bubble {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+  .agent-avatar-svg .agent-avatar__shadow,
+  .agent-avatar-svg .agent-avatar__sleep-bubble { opacity: 0; }
+}

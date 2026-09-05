@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
+sidecar_root="$repo_root/agent-sidecar"
+
+if [[ "$(uname -s)" == Darwin ]]; then
+  export BLACKHOLES_SPARKLE_DIR
+  BLACKHOLES_SPARKLE_DIR=$(bash "$script_dir/fetch-sparkle")
+fi
+
+"$script_dir/build-frontend"
+
+if [[ ! -d "$sidecar_root/node_modules/@anthropic-ai/claude-agent-sdk" ]]; then
+  npm ci --prefix "$sidecar_root"
+fi
+
+cargo build --release --bins --manifest-path "$repo_root/Cargo.toml"
