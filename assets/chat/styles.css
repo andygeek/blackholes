@@ -227,6 +227,21 @@ button {
 }
 
 .app-modal--form { width: min(100%, 560px); }
+.app-modal--task { width: min(100%, 680px); }
+.task-modal-fields textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 8px; padding: 10px 12px; border: 1px solid #484b54; border-radius: 7px; background: #181a1e; color: inherit; font: inherit; font-size: 14px; resize: vertical; }
+.task-modal-fields textarea:focus-visible { outline: 2px solid #8197d5; outline-offset: 2px; }
+.task-modal-section { display: grid; gap: 12px; border-top: 1px solid #393c44; padding-top: 16px; }
+.task-modal-section > strong { font-size: 13px; font-weight: 600; }
+.task-modal-fields label.task-modal-checkbox { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.task-modal-fields .task-modal-checkbox input { display: inline-block; flex: none; width: 14px; height: 14px; margin: 0; padding: 0; }
+.task-modal-repository { padding: 12px; border: 1px solid #393c44; border-radius: 8px; }
+.task-modal-preparation { display: grid; gap: 12px; margin: 14px 0 0 6px; padding-left: 14px; border-left: 1px solid #393c44; }
+.task-modal-check { justify-self: start; padding: 7px 12px; border: 1px solid #484b54; border-radius: 7px; background: #303238; color: inherit; font: inherit; cursor: pointer; }
+.task-modal-availability { padding: 10px; border-radius: 7px; background: #ffffff08; }
+:root[data-theme="light"] .task-modal-fields textarea { background: #fff; border-color: #dce0e6; color: #202733; }
+:root[data-theme="light"] :is(.task-modal-section, .task-modal-repository, .task-modal-preparation) { border-color: #e5e7eb; }
+:root[data-theme="light"] .task-modal-check { background: #f1f2f4; border-color: #dce0e6; }
+:root[data-theme="light"] .task-modal-availability { background: #f1f2f4; }
 .project-modal-fields { border: 0; padding: 0; margin: 20px 0 0; display: grid; gap: 18px; min-width: 0; }
 .project-modal-fields legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .project-modal-modes { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; border-radius: 9px; background: #2b2d32; }

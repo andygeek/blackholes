@@ -97,6 +97,13 @@ pub enum OrchestratorChatCommand {
         enabled: bool,
     },
     DismissAppModal,
+    CreateTaskModal {
+        request_id: uuid::Uuid,
+        workspace_id: uuid::Uuid,
+        request: crate::services::tasks::CreateTaskRequest,
+        #[serde(default)]
+        check_only: bool,
+    },
     ChooseProjectModalFolder {
         request_id: uuid::Uuid,
     },

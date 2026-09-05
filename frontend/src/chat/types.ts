@@ -67,11 +67,12 @@ export interface ChatModelOption {
 }
 
 export interface AppModalState {
-  kind: "remove_project" | "remove_agent" | "remove_task" | "create_project";
+  kind: "remove_project" | "remove_agent" | "remove_task" | "create_project" | "create_task";
   task_id?: string;
   request_id?: string;
   projects_root?: string;
-  feedback?: { path?: string | null; error?: string };
+  feedback?: { path?: string | null; error?: string; branches?: TaskBranchAvailability[] };
+  repositories?: { id: string; name: string }[];
   workspace_id?: string;
   scope?: string;
   title: string;
@@ -81,6 +82,15 @@ export interface AppModalState {
   confirm_label: string;
   cancel_label: string;
   offset_x?: number;
+}
+
+export interface TaskBranchAvailability {
+  repositoryId: string;
+  repositoryName: string;
+  localRevision?: string | null;
+  remoteRevision?: string | null;
+  localCheckedOut: boolean;
+  base?: { label: string; revision: string } | null;
 }
 
 export interface HydrateEvent {

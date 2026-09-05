@@ -838,6 +838,8 @@ pub struct BlackholesApp {
     orchestrator_webview: Option<Entity<gpui_component::webview::WebView>>,
     project_modal_request: Option<Uuid>,
     project_modal_submitting: bool,
+    task_modal_request: Option<(Uuid, Uuid)>,
+    task_modal_submitting: bool,
     orchestrator_chats: OrchestratorChatStore,
     active_orchestrator_scope: OrchestratorChatScope,
     orchestrator_turns: HashMap<OrchestratorChatScope, OrchestratorTurn>,
@@ -1124,6 +1126,8 @@ impl BlackholesApp {
             orchestrator_webview,
             project_modal_request: None,
             project_modal_submitting: false,
+            task_modal_request: None,
+            task_modal_submitting: false,
             orchestrator_chats,
             active_orchestrator_scope: OrchestratorChatScope::Global,
             orchestrator_turns: HashMap::new(),
@@ -1234,6 +1238,8 @@ impl BlackholesApp {
 
     fn sync_update_guard(&self) {
         let blocked = self.busy.is_some()
+            || self.task_modal_request.is_some()
+            || self.project_modal_request.is_some()
             || !self.orchestrator_turns.is_empty()
             || self.pending_orchestrator_turns.values().any(|queue| !queue.is_empty())
             || !self.terminals.is_empty()
@@ -1561,6 +1567,9 @@ impl BlackholesApp {
                 self.set_agents_full_access(enabled, cx)
             }
             OrchestratorChatCommand::DismissAppModal => self.dismiss_app_modal(cx),
+            OrchestratorChatCommand::CreateTaskModal { request_id, workspace_id, request, check_only } => {
+                self.handle_create_task_modal(request_id, workspace_id, request, check_only, cx);
+            }
             OrchestratorChatCommand::ChooseProjectModalFolder { request_id } => {
                 if self.project_modal_request != Some(request_id) || self.project_modal_submitting {
                     return;
@@ -2282,8 +2291,8 @@ impl BlackholesApp {
                     "assignAgent": "Assign Black Bot",
                     "refreshProject": "Find new repositories",
                     "addToProject": "Add to project",
-                    "cloneLocalRepository": "Clone local repository…",
-                    "cloneGithubRepository": "Clone GitHub repository…",
+                    "cloneLocalRepository": "Add local repository…",
+                    "cloneGithubRepository": "Add GitHub repository…",
                     "editProject": "Edit project",
                     "projectSettings": "Project settings",
                     "removeProject": "Remove project",
@@ -2313,8 +2322,8 @@ impl BlackholesApp {
                     "assignAgent": "Asignar Black Bot",
                     "refreshProject": "Buscar repositorios nuevos",
                     "addToProject": "Agregar al proyecto",
-                    "cloneLocalRepository": "Clonar repositorio local…",
-                    "cloneGithubRepository": "Clonar repositorio de GitHub…",
+                    "cloneLocalRepository": "Agregar repositorio local…",
+                    "cloneGithubRepository": "Agregar repositorio de GitHub…",
                     "editProject": "Editar proyecto",
                     "projectSettings": "Configuración del proyecto",
                     "removeProject": "Eliminar proyecto",
@@ -9831,6 +9840,10 @@ impl BlackholesApp {
     }
 
     fn dismiss_app_modal(&mut self, cx: &mut Context<Self>) {
+        if self.task_modal_submitting || self.project_modal_submitting {
+            return;
+        }
+        self.task_modal_request = None;
         self.project_modal_request = None;
         self.dispatch_orchestrator_event(
             serde_json::json!({ "type": "app_modal", "modal": null }),
@@ -10787,13 +10800,13 @@ impl BlackholesApp {
     fn open_add_project_repository(&mut self, workspace_id: Uuid, github: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy.is_some() { return; }
         if !github {
-            if let Some(path) = rfd::FileDialog::new().set_title(self.tr("Clone a local Git repository", "Clonar un repositorio Git local")).pick_folder() {
+            if let Some(path) = rfd::FileDialog::new().set_title(self.tr("Add a local Git repository", "Agregar un repositorio Git local")).pick_folder() {
                 self.clone_project_repository(workspace_id, path.to_string_lossy().into_owned(), false, cx);
             }
             return;
         }
         let url = cx.new(|cx| InputState::new(window, cx).placeholder("https://github.com/owner/repository"));
-        let title = self.tr("Clone repository into project", "Clonar repositorio dentro del proyecto");
+        let title = self.tr("Add GitHub repository", "Agregar repositorio de GitHub");
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
             let input = url.clone();
@@ -10831,7 +10844,18 @@ impl BlackholesApp {
                             workspace.layout = WorkspaceLayout::MultiRepository;
                             workspace.updated_at = Utc::now();
                             match app.database.upsert_workspace(&workspace, index) {
-                                Ok(()) => { app.workspaces[index] = workspace; app.set_status("Repository cloned into the project", false, cx); }
+                                Ok(()) => {
+                                    app.workspaces[index] = workspace;
+                                    let message = if github {
+                                        app.tr("Repository cloned into the project", "Repositorio clonado en el proyecto")
+                                    } else {
+                                        app.tr(
+                                            "Committed files cloned. Uncommitted changes stay in the original folder and are not copied.",
+                                            "Archivos con commit clonados. Los cambios sin commit quedan en la carpeta original y no se copian.",
+                                        )
+                                    };
+                                    app.set_status(message, false, cx);
+                                }
                                 Err(error) => app.set_status(format!("Clone saved on disk, but registration failed: {error:#}"), true, cx),
                             }
                         }
@@ -10847,7 +10871,7 @@ impl BlackholesApp {
     }
 
     fn open_create_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.project_modal_submitting {
+        if self.project_modal_submitting || self.task_modal_submitting {
             return;
         }
         if !self.show_terminal && self.orchestrator_webview.is_some() {
@@ -10882,6 +10906,10 @@ impl BlackholesApp {
         let submit_label = self.tr("Create", "Crear");
         let empty_label = self.tr("Empty", "Vacío");
         let existing_label = self.tr("Clone local repositories", "Clonar repositorios locales");
+        let local_clone_hint = self.tr(
+            "Only committed files are cloned. Pending changes stay untouched in the original folder.",
+            "Solo se clonan los archivos con commit. Los cambios pendientes se conservan en la carpeta original.",
+        );
         let github_label = self.tr("GitHub", "GitHub");
         let choose_label = self.tr("Choose folder…", "Elegir carpeta…");
         let destination_label = self.tr("Destination", "Destino");
@@ -10943,7 +10971,8 @@ impl BlackholesApp {
                                     .unwrap_or_else(|| "No folder selected".into()),
                             ),
                         )
-                        .child(Input::new(&name));
+                        .child(Input::new(&name))
+                        .child(div().text_size(px(12.)).child(local_clone_hint));
                 }
                 ProjectDraftMode::Github => {
                     content = content.child(Input::new(&url)).child(Input::new(&name));
@@ -11099,11 +11128,45 @@ impl BlackholesApp {
     }
 
     fn open_create_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy.is_some() || self.task_modal_submitting || self.project_modal_submitting {
+            return;
+        }
         let Some(workspace) = self.selected_workspace().cloned() else {
             return;
         };
         if workspace.repositories.is_empty() {
             self.set_status("Add a Git repository before creating a task", true, cx);
+            return;
+        }
+
+        // Keep the underlying WebViews visible: a native GPUI dialog must hide
+        // them to avoid AppKit layering conflicts, which produces a blank backdrop.
+        if !self.show_terminal && self.orchestrator_webview.is_some() {
+            let request_id = Uuid::new_v4();
+            self.task_modal_request = Some((request_id, workspace.id));
+            self.dispatch_orchestrator_event(serde_json::json!({
+                "type": "app_modal",
+                "modal": {
+                    "kind": "create_task", "request_id": request_id,
+                    "workspace_id": workspace.id,
+                    "repositories": workspace.repositories.iter().map(|repository| serde_json::json!({
+                        "id": repository.id, "name": repository.name,
+                    })).collect::<Vec<_>>(),
+                    "title": self.tr("Create isolated task workspace", "Crear espacio aislado para la tarea"),
+                    "name": "", "description": "",
+                    "confirm_label": self.tr("Create task", "Crear tarea"),
+                    "cancel_label": self.tr("Cancel", "Cancelar"),
+                    "offset_x": if self.show_settings { 0.0 } else {
+                        -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0)
+                    },
+                }
+            }), cx);
+            self.dispatch_navigation_event(serde_json::json!({
+                "type": "modal_visibility", "visible": true,
+            }), cx);
+            if let Some(webview) = &self.orchestrator_webview {
+                let _ = webview.read(cx).raw().focus();
+            }
             return;
         }
 
@@ -11580,6 +11643,74 @@ impl BlackholesApp {
                     true
                 })
         });
+    }
+
+    fn handle_create_task_modal(
+        &mut self,
+        request_id: Uuid,
+        workspace_id: Uuid,
+        request: CreateTaskRequest,
+        check_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.task_modal_request != Some((request_id, workspace_id)) || self.task_modal_submitting {
+            return;
+        }
+        let Some(workspace) = self.workspaces.iter().find(|workspace| workspace.id == workspace_id).cloned() else {
+            self.dismiss_app_modal(cx);
+            return;
+        };
+        let invalid_repositories = request.repository_ids.is_empty()
+            || request.repository_ids.iter().any(|id| !workspace.repositories.iter().any(|repo| repo.id == *id));
+        let error = if invalid_repositories {
+            Some(self.tr("Select at least one repository from this project.", "Selecciona al menos un repositorio de este proyecto."))
+        } else if check_only && request.branch_name.as_deref().unwrap_or_default().trim().is_empty() {
+            Some(self.tr("Enter a branch name to check.", "Escribe una rama para comprobarla."))
+        } else if !check_only && request.title.trim().is_empty() {
+            Some(self.tr("Enter a task title.", "Escribe un título para la tarea."))
+        } else { None };
+        if let Some(error) = error {
+            self.dispatch_orchestrator_event(serde_json::json!({
+                "type": "app_modal_feedback", "request_id": request_id, "feedback": { "error": error },
+            }), cx);
+            return;
+        }
+        self.task_modal_submitting = true;
+        let paths = self.paths.clone();
+        let background = cx.background_executor().spawn(async move {
+            if check_only {
+                TaskService::branch_availability(
+                    &workspace, &request.repository_ids,
+                    request.branch_name.as_deref().unwrap_or_default(),
+                    request.branch_source, request.base_ref.as_deref(),
+                ).map(|branches| (None, Some(branches)))
+            } else {
+                TaskService::new(&paths).create(&workspace, request).map(|task| (Some(task), None))
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = background.await;
+            let _ = this.update(cx, |app, cx| {
+                app.task_modal_submitting = false;
+                if app.task_modal_request != Some((request_id, workspace_id)) { return; }
+                match result {
+                    Ok((Some(task), _)) => {
+                        app.dismiss_app_modal(cx);
+                        app.finish_background_task(Ok(task), cx);
+                    }
+                    Ok((_, branches)) => app.dispatch_orchestrator_event(serde_json::json!({
+                        "type": "app_modal_feedback", "request_id": request_id,
+                        "feedback": { "branches": branches.unwrap_or_default() },
+                    }), cx),
+                    Err(error) => app.dispatch_orchestrator_event(serde_json::json!({
+                        "type": "app_modal_feedback", "request_id": request_id,
+                        "feedback": { "error": format!("{error:#}") },
+                    }), cx),
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
     }
 
     fn terminal_cwd(&self) -> Result<PathBuf> {

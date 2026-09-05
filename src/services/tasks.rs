@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
@@ -17,14 +17,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct RepositoryPreparation {
     pub copy_local_changes: bool,
     pub copy_environment_files: bool,
     pub setup_command: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskBranchSource {
     #[default]
     Current,
@@ -32,7 +33,8 @@ pub enum TaskBranchSource {
     Remote,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExistingBranchAction {
     #[default]
     Reuse,
@@ -67,7 +69,7 @@ pub struct BranchAvailability {
     pub base: Option<ResolvedBase>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct CreateTaskRequest {
     pub title: String,
     pub description: Option<String>,

@@ -9,7 +9,7 @@ use blackholes_rust::{
     ui::{BlackholesApp, apply_native_theme},
 };
 use gpui::{
-    AppContext as _, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
+    App, AppContext as _, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
     WindowBounds, WindowOptions, point, px, size,
 };
 use std::borrow::Cow;
@@ -40,6 +40,13 @@ fn main() -> Result<()> {
     let database = Database::open(&paths)?;
     let initial_theme = database.load_session().theme;
     let application = Application::new().with_assets(AppAssets);
+    let reopen_paths = paths.clone();
+    let reopen_database = database.clone();
+    application.on_reopen(move |cx| {
+        if let Err(error) = show_main_window(&reopen_paths, &reopen_database, cx) {
+            tracing::error!(?error, "failed to reopen the main window");
+        }
+    });
     application.run(move |cx| {
         configure_macos_application();
         blackholes_rust::services::updater::initialize();
@@ -58,30 +65,52 @@ fn main() -> Result<()> {
         let paths = paths.clone();
         let database = database.clone();
         cx.spawn(async move |cx| {
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                        point(px(100.), px(80.)),
-                        size(px(1440.), px(900.)),
-                    ))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Blackholes".into()),
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(14.), px(14.))),
-                    }),
-                    window_background: WindowBackgroundAppearance::Blurred,
-                    ..Default::default()
-                },
-                move |window, cx| {
-                    let app = cx.new(|cx| BlackholesApp::new(paths, database, window, cx));
-                    BlackholesApp::register_global_actions(&app, cx);
-                    cx.new(|cx| BlackholesApp::wrap_root(app, window, cx))
-                },
-            )?;
+            cx.update(|cx| show_main_window(&paths, &database, cx))??;
             Ok::<_, anyhow::Error>(())
         })
         .detach();
     });
+    Ok(())
+}
+
+fn show_main_window(paths: &AppPaths, database: &Database, cx: &mut App) -> Result<()> {
+    // Reuse the live window, including its WebViews, agents and terminal sessions.
+    // Checking synchronously also prevents repeated Dock events from creating duplicates.
+    if let Some(window) = cx.windows().first().copied() {
+        window.update(cx, |_, window, _| window.activate_window())?;
+    } else {
+        let paths = paths.clone();
+        let database = database.clone();
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(100.), px(80.)),
+                    size(px(1440.), px(900.)),
+                ))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Blackholes".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(14.), px(14.))),
+                }),
+                window_background: WindowBackgroundAppearance::Blurred,
+                ..Default::default()
+            },
+            move |window, cx| {
+                // Closing the only macOS window must not drop in-memory work.
+                // Hide after the close callback returns to avoid reentrant AppKit events.
+                // Application termination (including Sparkle relaunch) remains separate.
+                #[cfg(target_os = "macos")]
+                window.on_window_should_close(cx, |_, cx| {
+                    cx.defer(|cx| cx.hide());
+                    false
+                });
+                let app = cx.new(|cx| BlackholesApp::new(paths, database, window, cx));
+                BlackholesApp::register_global_actions(&app, cx);
+                cx.new(|cx| BlackholesApp::wrap_root(app, window, cx))
+            },
+        )?;
+    }
+    cx.defer(|cx| cx.activate(true));
     Ok(())
 }
 

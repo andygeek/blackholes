@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FolderOpen, GitBranch, Plus } from "lucide-react";
 import { postNative } from "../shared/native";
 import type { AppModalState } from "./types";
+import { CreateTaskForm } from "./CreateTaskForm";
 
 /** One themed, focus-contained surface for confirmations and project forms. */
 export function AppModal({ modal, language, onDismiss }: {
@@ -16,6 +17,8 @@ export function AppModal({ modal, language, onDismiss }: {
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
   const isProject = modal.kind === "create_project";
+  const isTask = modal.kind === "create_task";
+  const isForm = isProject || isTask;
   const tr = (en: string, es: string) => language === "en" ? en : es;
 
   useEffect(() => {
@@ -60,15 +63,15 @@ export function AppModal({ modal, language, onDismiss }: {
   return <div className="app-modal-backdrop" onMouseDown={event => {
     if (event.target === event.currentTarget) dismiss();
   }}>
-    <section ref={section} className={`app-modal${isProject ? " app-modal--form" : ""}`}
-      role={isProject ? "dialog" : "alertdialog"} aria-modal="true" aria-busy={pending} tabIndex={-1}
+    <section ref={section} className={`app-modal${isForm ? " app-modal--form" : ""}${isTask ? " app-modal--task" : ""}`}
+      role={isForm ? "dialog" : "alertdialog"} aria-modal="true" aria-busy={pending} tabIndex={-1}
       aria-labelledby="app-modal-title" aria-describedby="app-modal-description"
       style={{ transform: `translateX(${offset}px)` }}
       onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); }
         if (event.key === "Tab") {
           const items = [...(section.current?.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), input:not(:disabled), [tabindex="0"]') || [])];
+            'button:enabled, input:enabled, textarea:enabled, select:enabled, [tabindex="0"]') || [])];
           const first = items[0], last = items[items.length - 1];
           if (!first) { event.preventDefault(); }
           else if (document.activeElement === section.current) { event.preventDefault(); (event.shiftKey ? last : first)?.focus(); }
@@ -77,13 +80,13 @@ export function AppModal({ modal, language, onDismiss }: {
         }
       }}>
       <h2 id="app-modal-title">{modal.title}</h2>
-      {isProject ? <form onSubmit={event => {
+      {isTask ? <CreateTaskForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isProject ? <form onSubmit={event => {
         event.preventDefault();
         if (!valid || pending) return;
         setError(""); setPending(true);
         postNative({ type: "submit_create_project", request_id: modal.request_id, mode, name, url, path });
       }}>
-        <p id="app-modal-description">{tr("Each project has its own folder, repositories, skills, and instructions. Local imports clone committed files; your originals stay untouched.", "Cada proyecto tiene su carpeta, repositorios, skills e instrucciones. Las importaciones locales clonan archivos con commit; los originales no se modifican.")}</p>
+        <p id="app-modal-description">{tr("Each project has its own folder, repositories, skills, and instructions. Local imports clone committed files, even when the source has uncommitted changes. Pending changes stay in the original folder and are not copied.", "Cada proyecto tiene su carpeta, repositorios, skills e instrucciones. Puedes clonar repositorios locales aunque tengan cambios sin commit. Solo se clonan los commits; los cambios pendientes quedan en la carpeta original y no se copian.")}</p>
         <fieldset disabled={pending} className="project-modal-fields">
           <legend className="sr-only">{tr("Project source", "Origen del proyecto")}</legend>
           <div className="project-modal-modes">
@@ -101,7 +104,7 @@ export function AppModal({ modal, language, onDismiss }: {
               onChange={event => setUrl(event.target.value)} spellCheck={false} />
           </label>}
           {mode === "existing" && <div className="project-modal-folder">
-            <span>{tr("Project folder", "Carpeta del proyecto")}</span>
+            <span>{tr("Source folder", "Carpeta de origen")}</span>
             <button type="button" onClick={() => {
               setPending(true);
               postNative({ type: "choose_project_modal_folder", request_id: modal.request_id });
@@ -113,9 +116,9 @@ export function AppModal({ modal, language, onDismiss }: {
               placeholder={tr("My project", "Mi proyecto")} onChange={event => setName(event.target.value)} />
           </label>
           <div className="project-modal-destination">
-            <span>{mode === "existing" ? tr("Location", "Ubicación") : tr("Destination", "Destino")}</span>
-            <small>{mode === "existing" ? (path || "—") : modal.projects_root}</small>
-            {mode === "existing" && <small>{tr("Your folder stays in its current location.", "Tu carpeta se mantiene en su ubicación actual.")}</small>}
+            <span>{tr("Projects folder", "Carpeta de proyectos")}</span>
+            <small>{modal.projects_root}</small>
+            {mode === "existing" && <small>{tr("A new project folder is created here. Your original folder and pending changes stay untouched.", "Aquí se crea una nueva carpeta para el proyecto. Tu carpeta original y sus cambios pendientes no se modifican.")}</small>}
           </div>
         </fieldset>
         {error && <p className="app-modal__error" role="alert">{error}</p>}

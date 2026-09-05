@@ -4,7 +4,7 @@ A macOS desktop workspace for coding agents, Git repositories, isolated tasks, a
 
 > Documentation status: Work in progress.
 
-Version: **0.1.2**. Blackholes' original source code is licensed under
+Version: **0.1.3**. Blackholes' original source code is licensed under
 [MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
 
 ## Installing the desktop app
@@ -23,9 +23,10 @@ language toolchains, or build SDKs remain requirements of the user's repositorie
 New projects live under `~/Blackholes_projects` by default. Each project is a
 container for multiple cloned repositories, project skills, `CLAUDE.md`, `AGENTS.md`,
 and notes. GitHub imports clone into a child repository folder. Local imports clone
-committed files into independent repositories and refuse dirty sources; ignored
-files such as `.env` and build outputs are not imported. The original checkout is
-never modified or registered in place. Add more local or GitHub repositories from
+committed files into independent repositories even when the source has uncommitted
+changes. Staged and unstaged edits, untracked files, and ignored files such as
+`.env` and build outputs remain in the original folder and are not imported.
+The original checkout is never modified or registered in place. Add more local or GitHub repositories from
 the project's `+` menu. Existing project paths and custom project-root settings are
 preserved; changing the default is not a migration of previous workspaces.
 
@@ -46,6 +47,10 @@ self-update. Signed `.app` releases show a title-bar update button and use GitHu
 Release assets; see [Releasing and updates](docs/RELEASING.md) for packaging,
 signing, notarization, and publishing prerequisites. Public downloads are not
 available until the maintainer publishes them.
+
+On macOS, the red window button hides Blackholes without discarding its live
+agents, terminals, or unsaved window state. Click the Dock icon to show the same
+window again. Quitting the application is separate from hiding its window.
 
 ## What you can do
 

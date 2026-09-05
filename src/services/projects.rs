@@ -107,8 +107,6 @@ impl ProjectService {
         if repositories.is_empty() {
             bail!("No Git repositories found. Choose a repository or a folder containing repositories, or create an empty project.");
         }
-        // Validate all sources before creating any destinations.
-        for repository in &repositories { ensure_clean_source(&repository.path)?; }
         let name = requested_name.filter(|name| !name.trim().is_empty())
             .or_else(|| source.file_name().and_then(OsStr::to_str)).unwrap_or("project");
         let mut workspace = Self::create_empty(projects_root, name)?;
@@ -188,7 +186,6 @@ impl ProjectService {
             bail!("This legacy project uses a repository as its root. Import it as a new managed project before adding repositories; its original files will not be moved.");
         }
         if !path.starts_with(&root) {
-            ensure_clean_source(&path)?;
             let name = path.file_name().and_then(OsStr::to_str).context("Repository name missing")?;
             let destination = root.join(unique_directory_name(&root, name));
             clone_local_repository(&path, &destination)?;
@@ -269,21 +266,13 @@ fn require_git_tools() -> Result<()> {
     Ok(())
 }
 
-fn ensure_clean_source(path: &Path) -> Result<()> {
-    let output = Command::new("git").current_dir(path)
-        .args(["status", "--porcelain", "--untracked-files=normal"])
-        .stdin(Stdio::null()).output().context("Git is required. Install Apple's Command Line Tools to manage repositories.")?;
-    if !output.status.success() { bail!("Unable to read repository status"); }
-    if !output.stdout.is_empty() {
-        bail!("{} has uncommitted changes. Commit or stash them before cloning into Blackholes. The original files have not been changed.", path.display());
-    }
-    Ok(())
-}
-
 fn clone_local_repository(source: &Path, destination: &Path) -> Result<()> {
     // Reserve the destination atomically; never clean up a pre-existing folder.
     fs::create_dir(destination)?;
     // --no-local avoids object hardlinks/alternates tied to the source's lifecycle.
+    // Clone committed history even when the source worktree/index is dirty.
+    // Pending edits, untracked files and ignored files stay untouched in the source;
+    // never stash, commit, reset or clean a user's checkout as part of importing it.
     let status = Command::new("git").args(["clone", "--no-local", "--"])
         .arg(source).arg(destination).stdin(Stdio::null()).status()
         .context("Unable to start Git clone")?;

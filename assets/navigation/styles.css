@@ -433,6 +433,10 @@ button:focus-visible {
   margin-top: 2px;
 }
 
+.project-block > :is(.tree-row, .tree-leaf, .tree-agent) + :is(.tree-row, .tree-leaf, .tree-agent) {
+  margin-top: 2px;
+}
+
 .tree-row,
 .tree-leaf,
 .tree-agent {
