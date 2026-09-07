@@ -32,8 +32,10 @@ pub enum NavigationCommand {
     NewProject,
     AddProjectRepository {
         workspace_id: Uuid,
-        #[serde(default)]
-        github: bool,
+    },
+    RemoveRepository {
+        workspace_id: Uuid,
+        repository_id: Uuid,
     },
     SelectProject {
         workspace_id: Uuid,

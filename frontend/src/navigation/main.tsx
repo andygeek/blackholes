@@ -53,8 +53,8 @@ interface Copy {
   assignAgent: string;
   refreshProject: string;
   addToProject: string;
-  cloneLocalRepository: string;
-  cloneGithubRepository: string;
+  addRepository: string;
+  removeRepository: string;
   editProject: string;
   projectSettings: string;
   removeProject: string;
@@ -82,6 +82,8 @@ interface TerminalItem {
   label: string;
   agent: string;
   selected: boolean;
+  context: string;
+  provider_label: string;
 }
 
 interface RepositoryItem {
@@ -133,6 +135,7 @@ interface NavigationState {
   settings_selected: boolean;
   sidebar_width: number;
   global_agents: AgentItem[];
+  terminal_agents: TerminalItem[];
   projects: ProjectItem[];
 }
 
@@ -168,8 +171,8 @@ const fallbackCopy: Copy = {
   assignAgent: "Asignar Black Bot",
   refreshProject: "Buscar repositorios nuevos",
   addToProject: "Agregar al proyecto",
-  cloneLocalRepository: "Agregar repositorio local…",
-  cloneGithubRepository: "Agregar repositorio de GitHub…",
+  addRepository: "Agregar repositorio…",
+  removeRepository: "Eliminar repositorio",
   editProject: "Editar proyecto",
   projectSettings: "Configuración del proyecto",
   removeProject: "Eliminar proyecto",
@@ -229,14 +232,14 @@ function AgentName({ agent, copy, showContext = false }: { agent: AgentItem; cop
   );
 }
 
-function GlobalAgentRow({ agent, copy }: { agent: AgentItem; copy: Copy }) {
+function GlobalAgentRow({ agent, copy, onOpen }: { agent: AgentItem; copy: Copy; onOpen(agent: AgentItem): void }) {
   return (
     <div
       className={`agent-card${agent.selected ? " is-selected" : ""}${agent.arriving ? " is-arriving" : ""}`}
     >
       <button type="button" className="agent-open" aria-current={agent.selected ? "true" : undefined}
         aria-label={[agent.name, agent.context?.label].filter(Boolean).join(" · ")}
-        onClick={() => postNative({ type: "open_agent", scope: agent.scope })}>
+        onClick={() => onOpen(agent)}>
         <Avatar agent={agent} size={32} />
         <span className="agent-copy">
           <AgentName agent={agent} copy={copy} showContext />
@@ -260,11 +263,41 @@ function GlobalAgentRow({ agent, copy }: { agent: AgentItem; copy: Copy }) {
   );
 }
 
+function TerminalAgentRow({ terminal, copy, onOpen }: { terminal: TerminalItem; copy: Copy; onOpen(terminal: TerminalItem): void }) {
+  const preview = terminal.label === terminal.provider_label
+    ? terminal.provider_label
+    : `${terminal.provider_label} · ${terminal.label}`;
+  return (
+    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}`}>
+      <button type="button" className="agent-open"
+        aria-current={terminal.selected ? "true" : undefined}
+        aria-label={`${terminal.context} · ${preview}`}
+        title={`${terminal.context}\n${preview}`}
+        onClick={() => onOpen(terminal)}>
+        <span className="terminal-agent-avatar">
+          <TerminalProviderIcon provider={terminal.agent} />
+        </span>
+        <span className="agent-copy">
+          <span className="agent-name-line"><span className="agent-name">{terminal.context}</span></span>
+          <span className="agent-preview">{preview}</span>
+        </span>
+      </button>
+      <button type="button" className="remove-button"
+        aria-label={`${copy.closeTerminal}: ${terminal.context} · ${preview}`}
+        title={copy.closeTerminal}
+        onClick={() => postNative({ type: "close_terminal", terminal_id: terminal.id })}>
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
 function TreeAgent({ agent, copy, indentation }: { agent: AgentItem; copy: Copy; indentation: number }) {
   return (
     <button
       type="button"
       className={`tree-agent tree-indent-${indentation}${agent.selected ? " is-selected" : ""}`}
+      id={`nav-agent-${agent.scope}`}
       aria-label={agent.name}
       onClick={() => postNative({ type: "open_agent", scope: agent.scope })}
     >
@@ -333,6 +366,7 @@ function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; 
     <button
       type="button"
       className={`tree-leaf tree-indent-${indentation}${terminal.selected ? " is-selected" : ""}`}
+      id={`nav-terminal-${terminal.id}`}
       aria-label={terminal.label}
       onClick={() => postNative({ type: "focus_terminal", terminal_id: terminal.id })}
     >
@@ -430,6 +464,10 @@ function RepositoryRow({ repository, workspaceId, taskId, copy, indentation, ope
             icon={Plus}
             onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), launchItems())}
           />
+          {!taskId && <RowAction label={copy.options} icon={MoreHorizontal}
+            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), [
+              { label: copy.removeRepository, icon: Trash2, danger: true, command: { type: "remove_repository", workspace_id: workspaceId, repository_id: repository.id } },
+            ])} />}
         </span>
       </button>
       {repository.terminals.map((terminal) => (
@@ -546,8 +584,7 @@ function ProjectBlock({ project, copy, openMenu }: {
             icon={Plus}
             onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), [
               { label: copy.addAgent, icon: Bot, command: { type: "create_scoped_agent", workspace_id: project.id, task_id: null } },
-              { label: copy.cloneLocalRepository, icon: Plus, command: { type: "add_project_repository", workspace_id: project.id, github: false } },
-              { label: copy.cloneGithubRepository, icon: Plus, command: { type: "add_project_repository", workspace_id: project.id, github: true } },
+              { label: copy.addRepository, icon: Plus, command: { type: "add_project_repository", workspace_id: project.id } },
               { label: copy.newTerminal, icon: SquareTerminal, command: { type: "new_terminal", workspace_id: project.id, task_id: null, repository_id: null, agent: "shell" } },
               { label: copy.newTask, icon: ListTodo, command: { type: "new_task", workspace_id: project.id } },
             ])}
@@ -639,7 +676,15 @@ function NavigationApp() {
     if (!row) return; // A hydrate may still be expanding the parent sections.
     if (revealTimer.current) clearTimeout(revealTimer.current);
     revealedRow.current?.classList.remove("is-revealed");
-    row.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+    // Move only the Projects viewport, never the Agents list or the whole WebView.
+    const viewport = row.closest<HTMLElement>(".sidebar-scroll");
+    if (!viewport) return;
+    const bounds = row.getBoundingClientRect();
+    const viewportBounds = viewport.getBoundingClientRect();
+    viewport.scrollTo({
+      top: viewport.scrollTop + bounds.top - viewportBounds.top - (viewport.clientHeight - bounds.height) / 2,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+    });
     row.classList.add("is-revealed");
     revealedRow.current = row;
     revealTimer.current = setTimeout(() => row.classList.remove("is-revealed"), 1800);
@@ -690,6 +735,15 @@ function NavigationApp() {
   }, []);
 
   const openMenu = (anchor: DOMRect, items: MenuItem[]) => setMenu({ anchor, items });
+  const openAgent = (agent: AgentItem) => {
+    // Global bots have no project location. Scoped bots already live in the tree.
+    setRevealTarget(agent.context ? { id: `nav-agent-${agent.scope}` } : null);
+    postNative({ type: "open_agent", scope: agent.scope });
+  };
+  const openTerminalAgent = (terminal: TerminalItem) => {
+    setRevealTarget({ id: `nav-terminal-${terminal.id}` });
+    postNative({ type: "focus_terminal", terminal_id: terminal.id });
+  };
 
   return (
     <aside className="sidebar" aria-label="Blackholes">
@@ -699,7 +753,7 @@ function NavigationApp() {
           BLACKHOLES
         </button>
       </header>
-      <SidebarScrollArea label={state?.language === "en" ? "Scroll projects and agents" : "Desplazar proyectos y agentes"}>
+      <div className="sidebar-sections">
         <section className="agents-shell" aria-label={state?.language === "en" ? "Agents" : "Agentes"}>
           <header className="section-header">
             <span>{state?.language === "en" ? "Agents" : "Agentes"}</span>
@@ -709,11 +763,16 @@ function NavigationApp() {
               </button>
             </span>
           </header>
+          <SidebarScrollArea label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
           <div className="global-agents">
             {(state?.global_agents || []).map((agent) => (
-              <GlobalAgentRow key={agent.scope} agent={agent} copy={copy} />
+              <GlobalAgentRow key={agent.scope} agent={agent} copy={copy} onOpen={openAgent} />
+            ))}
+            {(state?.terminal_agents || []).map((terminal) => (
+              <TerminalAgentRow key={terminal.id} terminal={terminal} copy={copy} onOpen={openTerminalAgent} />
             ))}
           </div>
+          </SidebarScrollArea>
         </section>
         <section className="projects-shell">
           <header className="section-header">
@@ -727,6 +786,7 @@ function NavigationApp() {
               </button>
             </span>
           </header>
+          <SidebarScrollArea label={state?.language === "en" ? "Scroll projects" : "Desplazar proyectos"}>
           <nav className="projects" aria-label={copy.projects}>
             {(state?.projects || []).map((project) => (
               <ProjectBlock
@@ -737,8 +797,9 @@ function NavigationApp() {
               />
             ))}
           </nav>
+          </SidebarScrollArea>
         </section>
-      </SidebarScrollArea>
+      </div>
       <footer className="sidebar-footer">
         <button
           type="button"

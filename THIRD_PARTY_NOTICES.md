@@ -24,7 +24,22 @@ The exact package version is recorded in `frontend/package-lock.json`.
 The bundled Geist Mono font retains the
 [SIL Open Font License](assets/fonts/OFL-Geist.txt).
 
-## React and Lucide
+## Provider brand assets
+
+The OpenCode symbols in `assets/icons/opencode.svg` and `opencode-dark.svg`
+come from the [official brand assets](https://opencode.ai/brand), distributed in
+[anomalyco/opencode](https://github.com/anomalyco/opencode/tree/dev/packages/console/app/src/asset/brand)
+under the [MIT License](licenses/OPENCODE.txt). Redundant SVG masks and clip paths
+were removed; the original geometry and light/dark colors are retained.
+
+`assets/icons/antigravity.png` is the unmodified full-color icon from
+[Google Antigravity's official press assets](https://antigravity.google/press),
+downloaded from https://antigravity.google/assets/image/brand/antigravity-icon__full-color.png.
+These brand marks identify the corresponding third-party tools; their trademarks
+belong to their respective owners and are not covered by Blackholes' MPL license.
+Their inclusion does not imply affiliation or endorsement.
+
+## React and Lucide icons
 
 The embedded WebKit navigation and chat bundles include React and React DOM,
 licensed under the MIT License, and Lucide icons through `lucide-react`,

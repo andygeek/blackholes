@@ -5,12 +5,25 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub struct ProjectService;
+
+/// An exact, server-side removal target. Confirmation never accepts a path
+/// from the WebView, and revalidation rejects replaced folders or symlinks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryRemoval {
+    pub path: PathBuf,
+    pub linked: bool,
+    device: u64,
+    inode: u64,
+    root_device: u64,
+    root_inode: u64,
+}
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +62,73 @@ pub struct RepositoryGitSummary {
 }
 
 impl ProjectService {
+    pub fn repository_removal(workspace: &Workspace, repository_id: Uuid) -> Result<RepositoryRemoval> {
+        let repository = workspace.repositories.iter().find(|repo| repo.id == repository_id)
+            .context("Repository no longer belongs to this project")?;
+        let root = fs::canonicalize(workspace.root_path.as_ref().context("Project root missing")?)?;
+        let root_metadata = fs::metadata(&root)?;
+        let linked = !repository.path.starts_with(&root);
+        let path = if linked {
+            let mut components = Path::new(&repository.name).components();
+            if !matches!(components.next(), Some(std::path::Component::Normal(_))) || components.next().is_some() {
+                bail!("Invalid repository link name");
+            }
+            root.join(&repository.name)
+        } else {
+            repository.path.clone()
+        };
+        // Never remove a project root, a parent, or an indirectly reached path.
+        if path.parent() != Some(root.as_path()) {
+            bail!("Only a repository folder directly inside this project can be removed. The project root and external folders are protected.");
+        }
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if linked && error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(metadata) = &metadata {
+            if linked {
+                if !repository_link_matches(&path, &repository.path) {
+                    bail!("The shortcut was changed. Its current target will not be removed.");
+                }
+            } else if metadata.file_type().is_symlink() || !metadata.is_dir()
+                || fs::canonicalize(&path)? != path
+                || !fs::symlink_metadata(path.join(".git")).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink()) {
+                bail!("This folder is not an independent repository. Linked worktrees and changed paths cannot be deleted here.");
+            }
+            if !linked && path.join(".git/worktrees").exists()
+                && fs::read_dir(path.join(".git/worktrees"))?.next().is_some() {
+                bail!("This repository has linked Git worktrees. Remove them through their task or Git workflow before deleting the repository.");
+            }
+        }
+        Ok(RepositoryRemoval {
+            path, linked,
+            device: metadata.as_ref().map_or(0, |m| m.dev()),
+            inode: metadata.as_ref().map_or(0, |m| m.ino()),
+            root_device: root_metadata.dev(), root_inode: root_metadata.ino(),
+        })
+    }
+
+    /// Reversible removal. Rename only the confirmed entry, never traverse
+    /// symbolic links, and never fall back to recursive deletion on failure.
+    pub fn trash_repository(workspace: &Workspace, repository_id: Uuid, expected: &RepositoryRemoval) -> Result<Option<PathBuf>> {
+        if &Self::repository_removal(workspace, repository_id)? != expected {
+            bail!("The repository changed after confirmation. Reopen the confirmation and review its path.");
+        }
+        if expected.inode == 0 { return Ok(None); }
+        let home = directories::BaseDirs::new().context("Home directory unavailable")?;
+        let trash = home.home_dir().join(".Trash");
+        fs::create_dir_all(&trash)?;
+        let container = trash.join(format!("Blackholes-removed-{}", Uuid::new_v4()));
+        fs::create_dir(&container)?;
+        let target = container.join(expected.path.file_name().context("Repository name missing")?);
+        if let Err(error) = fs::rename(&expected.path, &target) {
+            let _ = fs::remove_dir(&container);
+            return Err(error).context("Could not move this entry to Trash. Nothing was deleted; repositories on another volume may need to be removed manually.");
+        }
+        Ok(Some(target))
+    }
+
     /// Prepare only the explicitly selected repositories in a new container.
     /// Validate every source first; rollback is limited to this new container.
     pub fn create_with_repositories(

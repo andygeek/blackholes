@@ -125,11 +125,13 @@ button:focus-visible {
 }
 
 .sidebar-scroll-region { position: relative; flex: 1; min-height: 0; }
+.sidebar-sections { display: grid; grid-template-rows: minmax(0, 2fr) minmax(0, 3fr); flex: 1; min-height: 0; }
 .sidebar-scroll {
   min-height: 0;
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   scrollbar-gutter: auto;
   scrollbar-width: none;
 }
@@ -146,7 +148,6 @@ button:focus-visible {
   flex-direction: column;
   gap: 5px;
   padding: 8px 16px 8px 8px;
-  border-bottom: 1px solid var(--border);
 }
 
 .agent-card,
@@ -395,9 +396,12 @@ button:focus-visible {
 .projects-shell, .agents-shell {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
+.agents-shell { border-bottom: 1px solid var(--border); }
 
-.tree-row.is-revealed { background: var(--surface-selected); box-shadow: inset 3px 0 0 #8197d5; }
+.tree-row.is-revealed, .tree-agent.is-revealed, .tree-leaf.is-revealed { background: var(--surface-selected); box-shadow: inset 3px 0 0 #8197d5; }
 .tree-row[id] { scroll-margin-block: 48px; }
 
 .section-header {
@@ -439,9 +443,21 @@ button:focus-visible {
 
 .terminal-provider { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
 .terminal-provider svg { display: block; width: 16px; height: 16px; }
+.terminal-provider img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.terminal-provider .provider-logo-light { display: none; }
+.terminal-provider .provider-logo-dark { display: block; }
+:root[data-theme="light"] .terminal-provider .provider-logo-light { display: block; }
+:root[data-theme="light"] .terminal-provider .provider-logo-dark { display: none; }
 .terminal-provider--codex { color: #ececea; }
 .terminal-provider--claude { color: #d97757; }
 .terminal-provider--gemini { color: #5b8def; }
+.terminal-provider--antigravity { color: #6593f5; }
+.terminal-provider--opencode { color: #ececea; }
+:root[data-theme="light"] .terminal-provider--opencode { color: #202622; }
+.terminal-agent-avatar { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: none; }
+.terminal-agent-avatar .terminal-provider,
+.terminal-agent-avatar .terminal-provider svg { width: 32px; height: 32px; }
+.terminal-agent-card .agent-name { flex-shrink: 1; }
 :root[data-theme="light"] .terminal-provider--codex { color: #202622; }
 
 .tree-row,

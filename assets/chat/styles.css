@@ -344,6 +344,7 @@ button {
 
 .app-modal__context {
   display: block;
+  overflow-wrap: anywhere;
   margin: -2px 0 12px;
   color: #8e97aa;
   font-size: 12px;

@@ -36,7 +36,7 @@ use crate::{
             refresh_agent_models, refresh_agent_plan_usage, start_agent_authentication, stream_agent_turn,
         },
         projects::{
-            ProjectService, ProjectRepositoryMode, ProjectRepositorySource, RepositoryGitSummary, discover_repositories, repository_git_summary,
+            ProjectService, ProjectRepositoryMode, ProjectRepositorySource, RepositoryRemoval, RepositoryGitSummary, discover_repositories, repository_git_summary,
         },
         skills::{AgentSkill, AgentSkillService, BLACKHOLES_SKILLS_PLUGIN_NAME},
         tasks::{
@@ -823,6 +823,8 @@ pub struct BlackholesApp {
     navigation_webview: Option<Entity<gpui_component::webview::WebView>>,
     orchestrator_webview: Option<Entity<gpui_component::webview::WebView>>,
     project_modal_request: Option<Uuid>,
+    repository_modal_workspace: Option<Uuid>,
+    repository_removal: Option<(Uuid, Uuid, Uuid, RepositoryRemoval)>,
     project_modal_submitting: bool,
     project_modal_sources: Vec<PathBuf>,
     task_modal_request: Option<(Uuid, Uuid)>,
@@ -1112,6 +1114,8 @@ impl BlackholesApp {
             navigation_webview,
             orchestrator_webview,
             project_modal_request: None,
+            repository_modal_workspace: None,
+            repository_removal: None,
             project_modal_submitting: false,
             project_modal_sources: Vec::new(),
             task_modal_request: None,
@@ -1566,7 +1570,7 @@ impl BlackholesApp {
                 self.handle_create_task_modal(request_id, workspace_id, request, check_only, cx);
             }
             OrchestratorChatCommand::ChooseProjectModalFolder { request_id } => {
-                if self.project_modal_request != Some(request_id) || self.project_modal_submitting {
+                if self.project_modal_request != Some(request_id) || self.project_modal_submitting || self.repository_removal.is_some() {
                     return;
                 }
                 let path = rfd::FileDialog::new()
@@ -1611,6 +1615,12 @@ impl BlackholesApp {
             }
             OrchestratorChatCommand::SubmitCreateProject { request_id, name, sources, mode } => {
                 self.submit_create_project_modal(request_id, name, sources, mode, cx);
+            }
+            OrchestratorChatCommand::SubmitAddRepositories { request_id, workspace_id, sources, mode } => {
+                self.submit_add_repositories(request_id, workspace_id, sources, mode, cx);
+            }
+            OrchestratorChatCommand::ConfirmRemoveRepository { request_id } => {
+                self.confirm_remove_repository(request_id, cx);
             }
             OrchestratorChatCommand::ConfirmRemoveProject { workspace_id } => {
                 self.remove_project_reference(workspace_id, cx);
@@ -1869,8 +1879,11 @@ impl BlackholesApp {
             }
             NavigationCommand::CollapseAll => self.collapse_all_navigation(cx),
             NavigationCommand::NewProject => self.open_create_project(window, cx),
-            NavigationCommand::AddProjectRepository { workspace_id, github } => {
-                self.open_add_project_repository(workspace_id, github, window, cx)
+            NavigationCommand::AddProjectRepository { workspace_id } => {
+                self.open_add_project_repository(workspace_id, window, cx)
+            }
+            NavigationCommand::RemoveRepository { workspace_id, repository_id } => {
+                self.open_remove_repository(workspace_id, repository_id, cx)
             }
             NavigationCommand::SelectProject { workspace_id } => {
                 self.select_target(workspace_id, None, None, cx)
@@ -2048,6 +2061,17 @@ impl BlackholesApp {
             "id": terminal.id,
             "label": terminal.label,
             "agent": terminal.agent,
+            "provider_label": terminal.agent.label(),
+            "context": self.workspaces.iter()
+                .find(|workspace| workspace.id == terminal.workspace_id)
+                .map(|workspace| {
+                    let project = workspace.label();
+                    terminal.task_id
+                        .and_then(|id| self.tasks.iter().find(|task| task.id == id))
+                        .map(|task| format!("{project}/{}", task.title))
+                        .unwrap_or_else(|| project.to_string())
+                })
+                .unwrap_or_else(|| terminal.cwd.display().to_string()),
             "selected": active_terminal_id == Some(terminal.id),
         })
     }
@@ -2317,8 +2341,8 @@ impl BlackholesApp {
                     "assignAgent": "Assign Black Bot",
                     "refreshProject": "Find new repositories",
                     "addToProject": "Add to project",
-                    "cloneLocalRepository": "Add local repository…",
-                    "cloneGithubRepository": "Add GitHub repository…",
+                    "addRepository": "Add repository…",
+                    "removeRepository": "Remove repository",
                     "editProject": "Edit project",
                     "projectSettings": "Project settings",
                     "removeProject": "Remove project",
@@ -2348,8 +2372,8 @@ impl BlackholesApp {
                     "assignAgent": "Asignar Black Bot",
                     "refreshProject": "Buscar repositorios nuevos",
                     "addToProject": "Agregar al proyecto",
-                    "cloneLocalRepository": "Agregar repositorio local…",
-                    "cloneGithubRepository": "Agregar repositorio de GitHub…",
+                    "addRepository": "Agregar repositorio…",
+                    "removeRepository": "Eliminar repositorio",
                     "editProject": "Editar proyecto",
                     "projectSettings": "Configuración del proyecto",
                     "removeProject": "Eliminar proyecto",
@@ -2367,6 +2391,10 @@ impl BlackholesApp {
                 "settings_selected": self.show_settings,
                 "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
                 "global_agents": global_agents,
+                "terminal_agents": self.session.terminals.iter()
+                    .filter(|terminal| terminal.agent != AgentKind::Shell)
+                    .map(|terminal| self.navigation_terminal(terminal, active_terminal_id))
+                    .collect::<Vec<_>>(),
                 "projects": projects,
             }),
             cx,
@@ -9870,6 +9898,8 @@ impl BlackholesApp {
         }
         self.task_modal_request = None;
         self.project_modal_request = None;
+        self.repository_modal_workspace = None;
+        self.repository_removal = None;
         self.project_modal_sources.clear();
         self.dispatch_orchestrator_event(
             serde_json::json!({ "type": "app_modal", "modal": null }),
@@ -10824,76 +10854,212 @@ impl BlackholesApp {
         });
     }
 
-    fn open_add_project_repository(&mut self, workspace_id: Uuid, github: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy.is_some() { return; }
-        if !github {
-            if let Some(path) = rfd::FileDialog::new().set_title(self.tr("Add a local Git repository", "Agregar un repositorio Git local")).pick_folder() {
-                self.clone_project_repository(workspace_id, path.to_string_lossy().into_owned(), false, cx);
+    fn open_add_project_repository(&mut self, workspace_id: Uuid, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy.is_some() || self.project_modal_submitting || self.task_modal_submitting { return; }
+        let Some(workspace) = self.workspaces.iter().find(|w| w.id == workspace_id) else { return; };
+        if self.orchestrator_webview.is_none() { return; }
+        let request_id = Uuid::new_v4();
+        self.project_modal_request = Some(request_id);
+        self.repository_modal_workspace = Some(workspace_id);
+        self.repository_removal = None;
+        self.project_modal_sources.clear();
+        self.dispatch_orchestrator_event(serde_json::json!({
+            "type": "app_modal", "modal": {
+                "kind": "add_repository", "request_id": request_id, "workspace_id": workspace_id,
+                "over_terminal": self.show_terminal,
+                "title": self.tr("Add repository", "Agregar repositorio"),
+                "name": workspace.label(), "description": "",
+                "projects_root": workspace.root_path.as_ref().map(|p| p.display().to_string()),
+                "confirm_label": self.tr("Add repositories", "Agregar repositorios"),
+                "cancel_label": self.tr("Cancel", "Cancelar"),
+                "offset_x": -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0),
             }
-            return;
-        }
-        let url = cx.new(|cx| InputState::new(window, cx).placeholder("https://github.com/owner/repository"));
-        let title = self.tr("Add GitHub repository", "Agregar repositorio de GitHub");
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let input = url.clone();
-            let weak = weak.clone();
-            dialog.title(title).child(Input::new(&url)).confirm().on_ok(move |_, _, cx| {
-                let value = input.read(cx).value().trim().to_string();
-                if value.is_empty() { return false; }
-                let _ = weak.update(cx, |app, cx| app.clone_project_repository(workspace_id, value, true, cx));
-                true
-            })
-        });
+        }), cx);
+        self.dispatch_navigation_event(serde_json::json!({ "type": "modal_visibility", "visible": true }), cx);
+        if let Some(webview) = &self.orchestrator_webview { let _ = webview.read(cx).raw().focus(); }
+        cx.notify();
     }
 
-    fn clone_project_repository(&mut self, workspace_id: Uuid, source: String, github: bool, cx: &mut Context<Self>) {
-        if self.busy.is_some() { return; }
-        let Some(mut workspace) = self.workspaces.iter().find(|workspace| workspace.id == workspace_id).cloned() else { return; };
-        self.busy = Some(self.tr("Adding repository…", "Agregando repositorio…").into());
+    fn submit_add_repositories(&mut self, request_id: Uuid, workspace_id: Uuid,
+        sources: Vec<ProjectRepositorySource>, mode: ProjectRepositoryMode, cx: &mut Context<Self>) {
+        if self.project_modal_request != Some(request_id) || self.repository_modal_workspace != Some(workspace_id)
+            || self.project_modal_submitting || self.busy.is_some() { return; }
+        if sources.is_empty() || sources.iter().any(|source| matches!(source,
+            ProjectRepositorySource::Local(path) if !self.project_modal_sources.contains(path))) {
+            self.repository_modal_error(request_id, self.tr("Choose repositories using the form.", "Selecciona repositorios usando el formulario.").into(), cx);
+            return;
+        }
+        let Some(mut workspace) = self.workspaces.iter().find(|w| w.id == workspace_id).cloned() else { return; };
+        let original_workspace = workspace.clone();
+        self.project_modal_submitting = true;
+        self.busy = Some(self.tr("Adding repositories…", "Agregando repositorios…").into());
         let background = cx.background_executor().spawn(async move {
-            if github { ProjectService::add_github_repository(&mut workspace, &source)?; }
-            else { ProjectService::add_existing_repository(&mut workspace, Path::new(&source))?; }
-            workspace.repositories.last().cloned().context("Cloned repository missing")
-        });
-        let weak = cx.weak_entity();
-        cx.spawn(async move |_, cx| {
-            let result = background.await;
-            let _ = weak.update(cx, |app, cx| {
-                app.busy = None;
+            let mut completed = Vec::new();
+            let mut error = None;
+            for source in sources {
+                let value = match &source {
+                    ProjectRepositorySource::Local(path) => path.to_string_lossy().into_owned(),
+                    ProjectRepositorySource::Github(url) => url.clone(),
+                };
+                let result = match source {
+                    ProjectRepositorySource::Local(path) => match mode {
+                        ProjectRepositoryMode::Link => ProjectService::add_existing_repository(&mut workspace, &path),
+                        ProjectRepositoryMode::Copy => ProjectService::copy_existing_repository(&mut workspace, &path),
+                    },
+                    ProjectRepositorySource::Github(url) => ProjectService::add_github_repository(&mut workspace, &url),
+                };
                 match result {
-                    Ok(repository) => {
-                        if let Some(index) = app.workspaces.iter().position(|workspace| workspace.id == workspace_id) {
-                            let mut workspace = app.workspaces[index].clone();
-                            if !workspace.repositories.iter().any(|existing| existing.path == repository.path) {
-                                workspace.repositories.push(repository);
-                            }
-                            workspace.layout = WorkspaceLayout::MultiRepository;
-                            workspace.updated_at = Utc::now();
-                            match app.database.upsert_workspace(&workspace, index) {
-                                Ok(()) => {
-                                    app.workspaces[index] = workspace;
-                                    let message = if github {
-                                        app.tr("Repository cloned into the project", "Repositorio clonado en el proyecto")
-                                    } else {
-                                        app.tr(
-                                            "Repository linked. Work in this project edits the original folder.",
-                                            "Repositorio vinculado. El trabajo en este proyecto modifica la carpeta original.",
-                                        )
-                                    };
-                                    app.set_status(message, false, cx);
-                                }
-                                Err(error) => app.set_status(format!("Could not register repository: {error:#}"), true, cx),
-                            }
+                    Ok(()) => completed.push(value),
+                    Err(e) => { error = Some(format!("{e:#}")); break; }
+                }
+            }
+            (workspace, completed, error)
+        });
+        cx.spawn(async move |this, cx| {
+            let (workspace, completed, mut error) = background.await;
+            let _ = this.update(cx, |app, cx| {
+                app.project_modal_submitting = false;
+                app.busy = None;
+                if let Some(index) = app.workspaces.iter().position(|w| w.id == workspace_id) {
+                    if !completed.is_empty() {
+                        // Keep successful imports visible even if a later source failed.
+                        if let Err(e) = app.database.replace_workspace_if_unchanged(&original_workspace, &workspace) {
+                            error = Some(format!("Repositories were added on disk, but registration could not be saved: {e:#}. Their files are preserved in the project folder. Refresh the project before continuing."));
+                        } else {
+                            app.workspaces[index] = workspace;
                         }
                     }
-                    Err(error) => app.set_status(format!("Could not add repository: {error:#}"), true, cx),
+                } else {
+                    error = Some(app.tr("The project was removed while adding repositories. Any copied files remain in its folder.", "El proyecto se quitó mientras se agregaban repositorios. Los archivos copiados permanecen en su carpeta.").into());
+                }
+                if app.project_modal_request == Some(request_id) {
+                    if let Some(error) = error {
+                        app.dispatch_orchestrator_event(serde_json::json!({
+                            "type": "app_modal_feedback", "request_id": request_id,
+                            "feedback": { "error": error, "completed_sources": completed },
+                        }), cx);
+                    } else {
+                        app.dismiss_app_modal(cx);
+                        app.set_status(app.tr("Repositories added", "Repositorios agregados"), false, cx);
+                    }
                 }
                 app.hydrate_navigation(cx);
                 app.hydrate_active_workspace_surface(cx);
                 cx.notify();
             });
         }).detach();
+        cx.notify();
+    }
+
+    fn repository_modal_error(&mut self, request_id: Uuid, message: String, cx: &mut Context<Self>) {
+        self.dispatch_orchestrator_event(serde_json::json!({
+            "type": "app_modal_feedback", "request_id": request_id,
+            "feedback": { "error": message },
+        }), cx);
+    }
+
+    fn repository_removal_guard(&self, workspace_id: Uuid, repository_id: Uuid) -> Result<()> {
+        if self.busy.is_some() || !self.orchestrator_turns.is_empty()
+            || self.pending_orchestrator_turns.values().any(|turns| !turns.is_empty()) {
+            anyhow::bail!("{}", self.tr("Wait for active operations and agents to finish.", "Espera a que terminen las operaciones y los agentes activos."));
+        }
+        let workspace = self.workspaces.iter().find(|w| w.id == workspace_id).context("Project missing")?;
+        if self.database.all_tasks()?.iter().any(|task| task.repositories.iter().any(|r|
+            r.repository_id == repository_id)) {
+            anyhow::bail!("{}", self.tr("Remove this repository from its tasks first. Their worktrees must be preserved.", "Primero quita este repositorio de sus tareas. Es necesario proteger sus worktrees."));
+        }
+        if self.session.terminals.iter().any(|terminal| terminal.workspace_id == workspace_id) {
+            anyhow::bail!("{}", self.tr("Close this project's terminals before removing a repository.", "Cierra las terminales de este proyecto antes de eliminar un repositorio."));
+        }
+        if self.active_file.as_ref().is_some_and(|file| file.dirty || file.save_state != NoteSaveState::Saved) {
+            anyhow::bail!("{}", self.tr("Save pending file edits first.", "Guarda primero los archivos con cambios pendientes."));
+        }
+        let plan = ProjectService::repository_removal(workspace, repository_id)?;
+        if !plan.linked && self.database.workspaces()?.iter().any(|other| other.id != workspace_id
+            && (other.root_path.as_ref().is_some_and(|root| root.starts_with(&plan.path))
+                || other.repositories.iter().any(|r| r.path.starts_with(&plan.path)))) {
+            anyhow::bail!("{}", self.tr("Another project uses this folder. Remove that reference first.", "Otro proyecto utiliza esta carpeta. Quita primero esa referencia."));
+        }
+        Ok(())
+    }
+
+    fn open_remove_repository(&mut self, workspace_id: Uuid, repository_id: Uuid, cx: &mut Context<Self>) {
+        if self.project_modal_submitting || self.task_modal_submitting || self.orchestrator_webview.is_none() { return; }
+        let Some(workspace) = self.workspaces.iter().find(|w| w.id == workspace_id) else { return; };
+        let plan = match ProjectService::repository_removal(workspace, repository_id) {
+            Ok(plan) => plan,
+            Err(error) => { self.set_status(format!("{error:#}"), true, cx); return; }
+        };
+        let name = workspace.repositories.iter().find(|r| r.id == repository_id).unwrap().name.clone();
+        let request_id = Uuid::new_v4();
+        let description = if plan.linked {
+            self.tr("Only the shortcut and this project's reference will be removed. The original repository, its files and pending changes stay untouched.",
+                "Solo se eliminarán el acceso directo y la referencia de este proyecto. El repositorio original, sus archivos y cambios pendientes se conservan.")
+        } else {
+            self.tr("The entire repository folder will be removed from this project, including Git history, .env files, dependencies and all uncommitted changes. It will be moved to Trash; emptying Trash permanently loses all of these data. Stop external processes using this folder first.",
+                "Se quitará la carpeta completa del repositorio, incluidos el historial Git, archivos .env, dependencias y todos los cambios sin commit. Irá a la Papelera; al vaciarla perderás todos estos datos definitivamente. Detén primero los procesos externos que usen esta carpeta.")
+        };
+        self.dispatch_orchestrator_event(serde_json::json!({
+            "type": "app_modal", "modal": {
+                "kind": "remove_repository", "request_id": request_id,
+                "workspace_id": workspace_id, "repository_id": repository_id,
+                "over_terminal": self.show_terminal,
+                "title": if plan.linked { self.tr("Remove repository link?", "¿Eliminar enlace al repositorio?") }
+                    else { self.tr("Remove repository and its files?", "¿Eliminar repositorio y sus archivos?") },
+                "name": name, "context": plan.path.display().to_string(), "description": description,
+                "confirm_label": if plan.linked { self.tr("Remove link", "Eliminar enlace") } else { self.tr("Move to Trash", "Mover a la Papelera") },
+                "cancel_label": self.tr("Cancel", "Cancelar"),
+                "offset_x": -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0),
+            }
+        }), cx);
+        self.repository_removal = Some((request_id, workspace_id, repository_id, plan));
+        self.repository_modal_workspace = None;
+        self.project_modal_request = Some(request_id);
+        self.dispatch_navigation_event(serde_json::json!({ "type": "modal_visibility", "visible": true }), cx);
+        if let Some(webview) = &self.orchestrator_webview { let _ = webview.read(cx).raw().focus(); }
+        cx.notify();
+    }
+
+    fn confirm_remove_repository(&mut self, request_id: Uuid, cx: &mut Context<Self>) {
+        let Some((expected_id, workspace_id, repository_id, plan)) = self.repository_removal.clone() else { return; };
+        if request_id != expected_id || self.project_modal_request != Some(request_id) || self.project_modal_submitting { return; }
+        let result = (|| -> Result<()> {
+            self.repository_removal_guard(workspace_id, repository_id)?;
+            let index = self.workspaces.iter().position(|w| w.id == workspace_id).context("Project missing")?;
+            let mut workspace = self.workspaces[index].clone();
+            let moved = ProjectService::trash_repository(&workspace, repository_id, &plan)?;
+            let repository = workspace.repositories.iter().find(|r| r.id == repository_id).context("Repository missing")?;
+            if !workspace.ignored_repository_paths.contains(&repository.path) {
+                workspace.ignored_repository_paths.push(repository.path.clone());
+            }
+            workspace.repositories.retain(|r| r.id != repository_id);
+            workspace.layout = if workspace.repositories.is_empty() { WorkspaceLayout::Empty } else { WorkspaceLayout::MultiRepository };
+            workspace.updated_at = Utc::now();
+            if let Err(error) = self.database.replace_workspace_if_unchanged(&self.workspaces[index], &workspace) {
+                if let Some(moved) = moved {
+                    if fs::symlink_metadata(&plan.path).is_ok() {
+                        anyhow::bail!("Could not save removal: {error:#}. Files are safe in {}", moved.display());
+                    }
+                    fs::rename(&moved, &plan.path).with_context(|| format!("Could not restore after database failure. Files are safe in {}", moved.display()))?;
+                }
+                return Err(error);
+            }
+            self.workspaces[index] = workspace;
+            if self.session.selected_workspace_id == Some(workspace_id) {
+                self.active_file = None;
+                self.select_target(workspace_id, None, None, cx);
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.dismiss_app_modal(cx);
+                self.hydrate_navigation(cx);
+                self.hydrate_active_workspace_surface(cx);
+                self.set_status(self.tr("Repository removed. Any moved files are recoverable from Trash.", "Repositorio eliminado. Los archivos movidos se pueden recuperar de la Papelera."), false, cx);
+            }
+            Err(error) => self.repository_modal_error(request_id, format!("{error:#}"), cx),
+        }
         cx.notify();
     }
 
@@ -10904,6 +11070,8 @@ impl BlackholesApp {
         if self.orchestrator_webview.is_some() {
             let request_id = Uuid::new_v4();
             self.project_modal_request = Some(request_id);
+            self.repository_modal_workspace = None;
+            self.repository_removal = None;
             self.project_modal_sources.clear();
             self.dispatch_orchestrator_event(serde_json::json!({
                 "type": "app_modal",
@@ -10941,7 +11109,8 @@ impl BlackholesApp {
         mode: ProjectRepositoryMode,
         cx: &mut Context<Self>,
     ) {
-        if self.project_modal_request != Some(request_id) || self.project_modal_submitting {
+        if self.project_modal_request != Some(request_id) || self.project_modal_submitting
+            || self.repository_modal_workspace.is_some() || self.repository_removal.is_some() {
             return;
         }
         let validation = if name.trim().is_empty() {
@@ -12411,6 +12580,7 @@ impl BlackholesApp {
                     if !title.is_empty() {
                         let _ = weak_for_title.update(cx, |app, cx| {
                             app.update_terminal_title(terminal_id, title);
+                            app.detect_foreground_terminal_agent(terminal_id, cx);
                             cx.notify();
                         });
                     }
@@ -12432,12 +12602,14 @@ impl BlackholesApp {
                     }
                 })
                 .with_screen_mode_callback(move |alternate, cx| {
-                    if !alternate {
-                        let _ = weak_for_screen.update(cx, |app, cx| {
+                    let _ = weak_for_screen.update(cx, |app, cx| {
+                        if alternate {
+                            app.detect_foreground_terminal_agent(terminal_id, cx);
+                        } else {
                             app.reset_terminal_agent(terminal_id, cx);
-                            cx.notify();
-                        });
-                    }
+                        }
+                        cx.notify();
+                    });
                 })
                 .with_clipboard_store_callback(|cx, text| {
                     cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
@@ -12562,7 +12734,7 @@ impl BlackholesApp {
             match agent {
                 AgentKind::Codex => descriptor.claude_session = None,
                 AgentKind::Claude => descriptor.codex_session = None,
-                AgentKind::Shell | AgentKind::Gemini => {
+                AgentKind::Shell | AgentKind::Gemini | AgentKind::OpenCode | AgentKind::Antigravity => {
                     descriptor.codex_session = None;
                     descriptor.claude_session = None;
                 }
@@ -12612,6 +12784,38 @@ impl BlackholesApp {
             }
             AgentTerminalSignalKind::Attention => self.handle_agent_attention(terminal_id, cx),
         }
+    }
+
+    fn detect_foreground_terminal_agent(&self, terminal_id: Uuid, cx: &mut Context<Self>) {
+        // No polling and no blocking process lookup on the UI thread. Existing provider
+        // identities survive custom conversation titles until the shell regains the PTY.
+        if !self.session.terminals.iter().any(|terminal| {
+            terminal.id == terminal_id && terminal.agent == AgentKind::Shell
+                && terminal.state != SessionState::Exited
+        }) || self.terminal_shell_owns_foreground(terminal_id) {
+            return;
+        }
+        let Some(process_id) = self.terminals.get(&terminal_id)
+            .and_then(|handle| handle.master.lock().process_group_leader()) else { return; };
+        cx.spawn(async move |weak, cx| {
+            let agent = cx.background_executor()
+                .spawn(async move { TerminalService::foreground_agent(process_id) }).await;
+            if let Some(agent) = agent {
+                let _ = weak.update(cx, |app, cx| {
+                    let unchanged = app.terminals.get(&terminal_id)
+                        .is_some_and(|handle| handle.master.lock().process_group_leader() == Some(process_id))
+                        && app.session.terminals.iter().any(|terminal| {
+                            terminal.id == terminal_id && terminal.agent == AgentKind::Shell
+                                && terminal.state != SessionState::Exited
+                        });
+                    if unchanged {
+                        app.set_terminal_agent(terminal_id, agent);
+                        app.update_terminal_state(terminal_id, SessionState::Idle);
+                        cx.notify();
+                    }
+                });
+            }
+        }).detach();
     }
 
     fn reset_terminal_agent(&mut self, terminal_id: Uuid, cx: &mut Context<Self>) {
@@ -17793,11 +17997,16 @@ fn agent_icon(agent: AgentKind) -> AnyElement {
 }
 
 fn agent_icon_themed(agent: AgentKind, theme: AppTheme) -> AnyElement {
+    if agent == AgentKind::Antigravity {
+        return img("icons/antigravity.png").size(px(16.)).flex_none().into_any_element();
+    }
     let (icon, color) = match agent {
         AgentKind::Shell => (AppIcon::SquareTerminal, rgb(0xb6bdca)),
         AgentKind::Claude => (AppIcon::ClaudeCode, rgb(0xd97757)),
         AgentKind::Codex => (AppIcon::Codex, if theme == AppTheme::Light { rgb(0x202622) } else { rgb(0xe7ecea) }),
         AgentKind::Gemini => (AppIcon::Code2, rgb(0x5b8def)),
+        AgentKind::OpenCode => (AppIcon::OpenCode, if theme == AppTheme::Light { rgb(0x211e1e) } else { rgb(0xf1ecec) }),
+        AgentKind::Antigravity => unreachable!("Antigravity uses its full-color image above"),
     };
 
     div()
@@ -17838,6 +18047,12 @@ fn agent_from_terminal_title(title: &str) -> Option<AgentKind> {
         normalized.trim_start_matches(|character: char| !character.is_ascii_alphanumeric());
     if leading_title.starts_with("claude code") {
         return Some(AgentKind::Claude);
+    }
+    let application = leading_title.split(|character: char| !character.is_ascii_alphanumeric()).next();
+    match application {
+        Some("opencode") => return Some(AgentKind::OpenCode),
+        Some("antigravity" | "agy") => return Some(AgentKind::Antigravity),
+        _ => {}
     }
     if has_word("gemini") {
         return Some(AgentKind::Gemini);

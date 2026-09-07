@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /** An overlaid thumb keeps section borders full-width instead of reserving a gutter. */
 export function SidebarScrollArea({ children, label }: { children: ReactNode; label: string }) {
+  const viewportId = useId();
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const drag = useRef<{ y: number; top: number; ratio: number } | null>(null);
@@ -31,7 +32,7 @@ export function SidebarScrollArea({ children, label }: { children: ReactNode; la
   const travel = metrics.height - thumbHeight;
   const thumbTop = maxScroll > 0 ? Math.max(0, Math.min(travel, metrics.top / maxScroll * travel)) : 0;
   return <div className="sidebar-scroll-region">
-    <div className="sidebar-scroll" id="sidebar-scroll-content" ref={viewport}>
+    <div className="sidebar-scroll" id={viewportId} ref={viewport} role="region" aria-label={label} tabIndex={0}>
       <div ref={content}>{children}</div>
     </div>
     {maxScroll > 1 && <div className="sidebar-scroll-track"
@@ -39,7 +40,7 @@ export function SidebarScrollArea({ children, label }: { children: ReactNode; la
         if (viewport.current) viewport.current.scrollTop += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? metrics.height : 1);
       }}>
       <div className="sidebar-scroll-thumb" role="scrollbar" tabIndex={0}
-        aria-label={label} aria-controls="sidebar-scroll-content" aria-orientation="vertical"
+        aria-label={label} aria-controls={viewportId} aria-orientation="vertical"
         aria-valuemin={0} aria-valuemax={Math.round(maxScroll)} aria-valuenow={Math.round(Math.max(0, Math.min(maxScroll, metrics.top)))}
         style={{ height: thumbHeight, transform: `translateY(${thumbTop}px)` }}
         onPointerDown={(event) => {

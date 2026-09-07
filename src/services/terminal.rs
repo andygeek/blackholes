@@ -29,6 +29,39 @@ pub struct SpawnedTerminal {
 pub struct TerminalService;
 
 impl TerminalService {
+    /// Event-driven fallback for TUIs that do not advertise their provider in an OSC title.
+    /// Inspect only executable names, never prompt text or arbitrary command arguments.
+    pub fn foreground_agent(process_id: i32) -> Option<AgentKind> {
+        let output = std::process::Command::new("ps")
+            .args(["-p", &process_id.to_string(), "-o", "comm=", "-o", "args="])
+            .output()
+            .ok()?;
+        if !output.status.success() { return None; }
+        let output = String::from_utf8(output.stdout).ok()?;
+        let mut words = output.split_whitespace();
+        let executable = words.next()?;
+        let identify = |value: &str| match Path::new(value).file_name()?.to_str()? {
+            "claude" => Some(AgentKind::Claude),
+            "codex" => Some(AgentKind::Codex),
+            "gemini" => Some(AgentKind::Gemini),
+            "opencode" => Some(AgentKind::OpenCode),
+            "agy" | "antigravity" => Some(AgentKind::Antigravity),
+            _ => None,
+        };
+        if let Some(agent) = identify(executable) { return Some(agent); }
+        // For interpreter-based CLIs, args repeats the interpreter before the script path.
+        if matches!(Path::new(executable).file_name()?.to_str()?, "node" | "bun") {
+            words.next()?;
+            let script = words.next()?;
+            return identify(script).or_else(|| {
+                let parent = Path::new(script).parent()?;
+                let package = if parent.ends_with("bin") { parent.parent()? } else { parent };
+                identify(package.to_str()?)
+            });
+        }
+        None
+    }
+
     pub fn spawn(&self, descriptor: &TerminalDescriptor) -> Result<SpawnedTerminal> {
         if !descriptor.cwd.is_dir() {
             bail!(
@@ -164,6 +197,8 @@ fn agent_name(agent: AgentKind) -> &'static str {
         AgentKind::Codex => "codex",
         AgentKind::Claude => "claude",
         AgentKind::Gemini => "gemini",
+        AgentKind::OpenCode => "opencode",
+        AgentKind::Antigravity => "antigravity",
     }
 }
 

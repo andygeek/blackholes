@@ -11,9 +11,10 @@ export function AppModal({ modal, language, onDismiss }: {
   const section = useRef<HTMLElement>(null);
   const [pending, setPending] = useState(false);
   const [offset, setOffset] = useState(0);
-  const isProject = modal.kind === "create_project";
+  const isProject = modal.kind === "create_project" || modal.kind === "add_repository";
   const isTask = modal.kind === "create_task";
   const isForm = isProject || isTask;
+  useEffect(() => { if (modal.feedback) setPending(false); }, [modal.feedback]);
 
   useEffect(() => {
     if (pending) section.current?.focus();
@@ -70,9 +71,15 @@ export function AppModal({ modal, language, onDismiss }: {
         <strong>{modal.name}</strong>
         {modal.context && <span className="app-modal__context">{modal.context}</span>}
         <p id="app-modal-description">{modal.description}</p>
+        {modal.feedback?.error && <p className="app-modal__error" role="alert">{modal.feedback.error}</p>}
         <footer>
-          <button type="button" className="app-modal__cancel" data-initial-focus onClick={dismiss}>{modal.cancel_label}</button>
-          <button type="button" className="app-modal__confirm" onClick={() => {
+          <button type="button" className="app-modal__cancel" disabled={pending} data-initial-focus onClick={dismiss}>{modal.cancel_label}</button>
+          <button type="button" className="app-modal__confirm" disabled={pending} onClick={() => {
+            if (modal.kind === "remove_repository") {
+              setPending(true);
+              postNative({ type: "confirm_remove_repository", request_id: modal.request_id });
+              return;
+            }
             postNative(modal.kind === "remove_agent"
               ? { type: "confirm_remove_agent", scope: modal.scope }
               : modal.kind === "remove_task" ? { type: "confirm_remove_task", task_id: modal.task_id }

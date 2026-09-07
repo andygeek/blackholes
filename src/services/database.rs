@@ -150,6 +150,27 @@ impl Database {
         Ok(())
     }
 
+    /// Do not overwrite project edits received from another process while an
+    /// import or a removal confirmation was in progress.
+    pub fn replace_workspace_if_unchanged(&self, expected: &Workspace, workspace: &Workspace) -> Result<()> {
+        anyhow::ensure!(expected.id == workspace.id, "Project identity changed");
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let payload: String = transaction.query_row(
+            "SELECT payload FROM workspaces WHERE id = ?1", [expected.id.to_string()], |row| row.get(0),
+        ).context("The project is no longer registered")?;
+        let current: Workspace = serde_json::from_str(&payload)?;
+        anyhow::ensure!(serde_json::to_value(&current)? == serde_json::to_value(expected)?,
+            "The project changed during this operation. Refresh it before trying again.");
+        transaction.execute(
+            "UPDATE workspaces SET payload = ?1, updated_at = ?2 WHERE id = ?3",
+            params![serde_json::to_string(workspace)?, workspace.updated_at.to_rfc3339(), workspace.id.to_string()],
+        )?;
+        insert_event(&transaction, "workspace.upserted", workspace.id, &serde_json::json!({ "workspace": workspace }))?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn remove_workspace(&self, workspace_id: Uuid) -> Result<()> {
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
@@ -519,6 +540,8 @@ fn parse_agent(value: Option<&str>) -> AgentKind {
         Some("codex") => AgentKind::Codex,
         Some("claude") => AgentKind::Claude,
         Some("gemini") => AgentKind::Gemini,
+        Some("opencode") => AgentKind::OpenCode,
+        Some("antigravity") => AgentKind::Antigravity,
         _ => AgentKind::Shell,
     }
 }

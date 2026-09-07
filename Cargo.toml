@@ -1,6 +1,6 @@
 [package]
 name = "blackholes-rust"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 authors = ["Andy Eulogio Sulluchuco"]
 description = "A native, GPU-accelerated workspace for orchestrating coding agents."
@@ -36,7 +36,7 @@ wry = { version = "0.53.3", package = "lb-wry" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAppearance", "NSApplication", "NSImage", "NSPasteboard", "NSResponder"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAppearance", "NSApplication", "NSImage", "NSPasteboard", "NSResponder", "NSMenu", "NSMenuItem", "NSEvent"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSString"] }
 
 [profile.release]

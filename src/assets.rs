@@ -9,6 +9,8 @@ impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "app-icon.png" => Some(include_bytes!("../assets/app-icon.png")),
+            "icons/antigravity.png" => Some(include_bytes!("../assets/icons/antigravity.png")),
+            "icons/opencode.svg" => Some(include_bytes!("../assets/icons/opencode.svg")),
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/chevron-right.svg" => Some(include_bytes!("../assets/icons/chevron-right.svg")),
             "icons/chevrons-up.svg" => Some(include_bytes!("../assets/icons/chevrons-up.svg")),
@@ -54,6 +56,7 @@ impl AssetSource for AppAssets {
             "claude-code.svg".into(),
             "code-2.svg".into(),
             "codex.svg".into(),
+            "opencode.svg".into(),
             "database.svg".into(),
             "ellipsis-vertical.svg".into(),
             "file.svg".into(),
@@ -83,6 +86,7 @@ pub enum AppIcon {
     ClaudeCode,
     Code2,
     Codex,
+    OpenCode,
     Database,
     EllipsisVertical,
     File,
@@ -111,6 +115,7 @@ impl IconNamed for AppIcon {
             Self::ClaudeCode => "icons/claude-code.svg",
             Self::Code2 => "icons/code-2.svg",
             Self::Codex => "icons/codex.svg",
+            Self::OpenCode => "icons/opencode.svg",
             Self::Database => "icons/database.svg",
             Self::EllipsisVertical => "icons/ellipsis-vertical.svg",
             Self::File => "icons/file.svg",

@@ -4,7 +4,7 @@ A macOS desktop workspace for coding agents, Git repositories, isolated tasks, a
 
 > Documentation status: Work in progress.
 
-Version: **0.1.4**. Blackholes' original source code is licensed under
+Version: **0.1.5**. Blackholes' original source code is licensed under
 [MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
 
 ## Installing the desktop app
@@ -41,8 +41,13 @@ Project creation offers two modes for local repositories:
 GitHub imports always clone into a child repository folder. Selected project
 skills and instructions apply to linked repositories as well as managed copies;
 the project context stays in the container, not in the linked originals.
-Add more local (linked) or GitHub repositories from
-the project's `+` menu. Existing project paths and custom project-root settings are
+Use **Add repository** in the project's `+` menu for the same local link/copy
+options or GitHub imports. A repository's `…` menu offers removal with an explicit
+confirmation and the exact affected path. Removing a link preserves the original;
+removing a managed repository moves its full folder to Trash (including uncommitted
+changes and environment files). Emptying Trash permanently deletes those data.
+Close project terminals and finish active agents first; repositories used by tasks
+or other projects and project root folders are protected. Existing project paths and custom project-root settings are
 preserved; changing the default is not a migration of previous workspaces.
 
 Create a project by naming it and selecting the repositories to include. Add a

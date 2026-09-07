@@ -9,6 +9,7 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
   modal: AppModalState; language: "en" | "es"; onDismiss: () => void; onBusyChange: (busy: boolean) => void;
 }) {
   const tr = (en: string, es: string) => language === "en" ? en : es;
+  const adding = modal.kind === "add_repository";
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [showGithub, setShowGithub] = useState(false);
@@ -23,7 +24,7 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
     setPending(null);
     setError(modal.feedback.error || "");
     const repositories = modal.feedback.repositories || [];
-    setSources(current => [...current, ...repositories
+    setSources(current => [...current.filter(source => !modal.feedback?.completed_sources?.includes(source.value)), ...repositories
       .filter(repo => !current.some(source => source.kind === "local" && source.value === repo.path))
       .map(repo => ({ kind: "local" as const, value: repo.path, name: repo.name, selected: true }))]);
   }, [modal.feedback]);
@@ -47,26 +48,26 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
 
   return <form className="create-project-form" onSubmit={event => {
     event.preventDefault();
-    if (pending || !name.trim()) return;
+    if (pending || (adding ? !selected.length : !name.trim())) return;
     if (url.trim()) { setShowGithub(true); setError(tr("Add the GitHub repository first, or clear its URL.", "Agrega primero el repositorio de GitHub o borra su URL.")); return; }
     setError(""); setPending("create"); onBusyChange(true);
-    postNative({ type: "submit_create_project", request_id: modal.request_id, name: name.trim(),
+    postNative({ type: adding ? "submit_add_repositories" : "submit_create_project", workspace_id: modal.workspace_id, request_id: modal.request_id, name: name.trim(),
       mode, sources: selected.map(({ kind, value }) => ({ kind, value })) });
   }}>
-    <p id="app-modal-description">{tr("Your repositories, together in one project.", "Tus repositorios, juntos en un proyecto.")}</p>
+    <p id="app-modal-description">{adding ? modal.name : tr("Your repositories, together in one project.", "Tus repositorios, juntos en un proyecto.")}</p>
     <fieldset disabled={pending !== null} className="project-modal-fields">
       <legend>{tr("Project settings", "Configuración del proyecto")}</legend>
-      <label>{tr("Name", "Nombre")}
+      {!adding && <label>{tr("Name", "Nombre")}
         <input data-initial-focus required value={name} onChange={event => setName(event.target.value)} placeholder={tr("My project", "Mi proyecto")} />
-      </label>
+      </label>}
       <div className="project-repository-heading">
-        <span>{tr("Repositories", "Repositorios")} <small>{tr("Optional", "Opcional")}</small></span>
+        <span>{tr("Repositories", "Repositorios")} {!adding && <small>{tr("Optional", "Opcional")}</small>}</span>
         {sources.length > 1 && <button type="button" className="project-text-button" onClick={() => setSources(current => current.map(source => ({ ...source, selected: selected.length !== sources.length })))}>
           {selected.length === sources.length ? tr("Deselect all", "Quitar selección") : tr("Select all", "Seleccionar todos")}
         </button>}
       </div>
       <div className="project-source-actions">
-        <button type="button" onClick={() => {
+        <button type="button" data-initial-focus={adding || undefined} onClick={() => {
           setPending("scan"); onBusyChange(true); setError("");
           postNative({ type: "choose_project_modal_folder", request_id: modal.request_id });
         }}><FolderOpen size={16} />{pending === "scan" ? tr("Searching…", "Buscando…") : tr("Local folder", "Carpeta local")}</button>
@@ -108,7 +109,7 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
       </div>}
       <details className="project-details">
         <summary tabIndex={pending ? -1 : 0} onClick={event => { if (pending) event.preventDefault(); }}>{tr("Location and details", "Ubicación y detalles")}</summary>
-        <small>{tr("Projects folder", "Carpeta de proyectos")}</small>
+        <small>{adding ? tr("Project folder", "Carpeta del proyecto") : tr("Projects folder", "Carpeta de proyectos")}</small>
         <code>{modal.projects_root}</code>
         <p>{tr("Each project has its own instructions and notes. Local links appear directly in its folder and work without Blackholes. GitHub repositories are downloaded there.", "Cada proyecto tiene sus instrucciones y notas. Los enlaces locales aparecen directamente en su carpeta y funcionan sin Blackholes. Los repositorios de GitHub se descargan allí.")}</p>
         {mode === "copy" && <p>{tr("Copies files, Git history and dependencies. Pause running processes first. Large folders take longer; symbolic links may still point outside the copy.", "Copia archivos, historial Git y dependencias. Pausa los procesos antes de copiar. Las carpetas grandes tardan más; los enlaces simbólicos pueden seguir apuntando fuera de la copia.")}</p>}
@@ -117,7 +118,7 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
     {error && <p className="app-modal__error" role="alert">{error}</p>}
     <footer>
       <button type="button" className="app-modal__cancel" disabled={pending !== null} onClick={onDismiss}>{modal.cancel_label}</button>
-      <button type="submit" className="app-modal__primary" disabled={pending !== null || !name.trim()}>{pending === "create" ? tr("Creating…", "Creando…") : modal.confirm_label}</button>
+      <button type="submit" className="app-modal__primary" disabled={pending !== null || (adding ? !selected.length : !name.trim())}>{pending === "create" ? (adding ? tr("Adding…", "Agregando…") : tr("Creating…", "Creando…")) : modal.confirm_label}</button>
     </footer>
   </form>;
 }

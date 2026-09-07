@@ -299,6 +299,10 @@ fn agent_from_protocol_name(value: &str) -> Option<AgentKind> {
         Some(AgentKind::Codex)
     } else if normalized.contains("gemini") {
         Some(AgentKind::Gemini)
+    } else if normalized.contains("opencode") {
+        Some(AgentKind::OpenCode)
+    } else if normalized.contains("antigravity") || normalized == "agy" {
+        Some(AgentKind::Antigravity)
     } else {
         None
     }

@@ -67,12 +67,13 @@ export interface ChatModelOption {
 }
 
 export interface AppModalState {
-  kind: "remove_project" | "remove_agent" | "remove_task" | "create_project" | "create_task";
+  kind: "remove_project" | "remove_agent" | "remove_task" | "create_project" | "create_task" | "add_repository" | "remove_repository";
+  repository_id?: string;
   task_id?: string;
   request_id?: string;
   projects_root?: string;
   over_terminal?: boolean;
-  feedback?: { path?: string | null; error?: string; branches?: TaskBranchAvailability[]; repositories?: { name: string; path: string }[] };
+  feedback?: { path?: string | null; error?: string; completed_sources?: string[]; branches?: TaskBranchAvailability[]; repositories?: { name: string; path: string }[] };
   repositories?: { id: string; name: string }[];
   workspace_id?: string;
   scope?: string;

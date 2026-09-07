@@ -117,6 +117,16 @@ pub enum OrchestratorChatCommand {
     ConfirmRemoveProject {
         workspace_id: uuid::Uuid,
     },
+    SubmitAddRepositories {
+        request_id: uuid::Uuid,
+        workspace_id: uuid::Uuid,
+        sources: Vec<crate::services::projects::ProjectRepositorySource>,
+        #[serde(default)]
+        mode: crate::services::projects::ProjectRepositoryMode,
+    },
+    ConfirmRemoveRepository {
+        request_id: uuid::Uuid,
+    },
     ConfirmRemoveAgent {
         scope: String,
     },

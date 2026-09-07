@@ -89,6 +89,9 @@ pub enum AgentKind {
     Codex,
     Claude,
     Gemini,
+    #[serde(rename = "opencode")]
+    OpenCode,
+    Antigravity,
 }
 
 impl AgentKind {
@@ -98,6 +101,8 @@ impl AgentKind {
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
             Self::Gemini => "Gemini",
+            Self::OpenCode => "OpenCode",
+            Self::Antigravity => "Antigravity",
         }
     }
 
@@ -123,6 +128,8 @@ impl AgentKind {
                 ],
             )),
             Self::Gemini => Some(("gemini", vec![])),
+            Self::OpenCode => Some(("opencode", vec![])),
+            Self::Antigravity => Some(("agy", vec![])),
         }
     }
 }

@@ -537,6 +537,9 @@ function ChatApp() {
       if (!event.metaKey && !event.ctrlKey) return;
       const input = promptRef.current;
       const letter = shortcutLetter(event);
+      // Notes own rich clipboard serialization. Do not intercept their copy
+      // shortcut and flatten the selection into the chat's plain-text bridge.
+      if (event.target instanceof Element && event.target.closest(".blackholes-notion-editor")) return;
       if (document.activeElement !== input) {
         if (letter !== "c") return;
         const selectedText = window.getSelection()?.toString() || "";
