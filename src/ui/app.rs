@@ -474,6 +474,8 @@ enum QuickOpenMode {
 
 #[derive(Clone)]
 enum QuickOpenTarget {
+    Agent { scope: OrchestratorChatScope },
+    Terminal { terminal_id: Uuid },
     Project {
         workspace_id: Uuid,
     },
@@ -497,6 +499,8 @@ struct QuickOpenItem {
     icon: AppIcon,
     color: gpui::Rgba,
     color_css: String,
+    agent_identity: Option<&'static str>,
+    terminal_provider: Option<AgentKind>,
     target: QuickOpenTarget,
 }
 
@@ -815,6 +819,12 @@ impl Render for ProjectAppearanceEditor {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AgentRemovalTarget {
+    BuiltIn(OrchestratorChatScope),
+    Terminal(Uuid),
+}
+
 pub struct BlackholesApp {
     update_state: crate::services::updater::UpdateState,
     paths: AppPaths,
@@ -823,11 +833,14 @@ pub struct BlackholesApp {
     navigation_webview: Option<Entity<gpui_component::webview::WebView>>,
     orchestrator_webview: Option<Entity<gpui_component::webview::WebView>>,
     project_modal_request: Option<Uuid>,
+    project_appearance_request: Option<(Uuid, Uuid)>,
     repository_modal_workspace: Option<Uuid>,
     repository_removal: Option<(Uuid, Uuid, Uuid, RepositoryRemoval)>,
     project_modal_submitting: bool,
     project_modal_sources: Vec<PathBuf>,
     task_modal_request: Option<(Uuid, Uuid)>,
+    task_removal_confirmation: Option<Uuid>,
+    agent_removal_confirmation: Option<AgentRemovalTarget>,
     task_modal_submitting: bool,
     orchestrator_chats: OrchestratorChatStore,
     active_orchestrator_scope: OrchestratorChatScope,
@@ -1114,11 +1127,14 @@ impl BlackholesApp {
             navigation_webview,
             orchestrator_webview,
             project_modal_request: None,
+            project_appearance_request: None,
             repository_modal_workspace: None,
             repository_removal: None,
             project_modal_submitting: false,
             project_modal_sources: Vec::new(),
             task_modal_request: None,
+            task_removal_confirmation: None,
+            agent_removal_confirmation: None,
             task_modal_submitting: false,
             orchestrator_chats,
             active_orchestrator_scope: OrchestratorChatScope::Global,
@@ -1231,7 +1247,10 @@ impl BlackholesApp {
     fn sync_update_guard(&self) {
         let blocked = self.busy.is_some()
             || self.task_modal_request.is_some()
+            || self.task_removal_confirmation.is_some()
+            || self.agent_removal_confirmation.is_some()
             || self.project_modal_request.is_some()
+            || self.project_appearance_request.is_some()
             || !self.orchestrator_turns.is_empty()
             || self.pending_orchestrator_turns.values().any(|queue| !queue.is_empty())
             || !self.terminals.is_empty()
@@ -1561,8 +1580,8 @@ impl BlackholesApp {
             OrchestratorChatCommand::DismissAppModal => {
                 self.dismiss_app_modal(cx);
                 if self.show_terminal && self.project_modal_request.is_none() && self.task_modal_request.is_none() {
-                    if let Some(handle) = self.selected_terminal_id().and_then(|id| self.terminals.get(&id)) {
-                        handle.view.read(cx).focus_handle().focus(window);
+                    if let Some(terminal_id) = self.selected_terminal_id() {
+                        self.focus_terminal_input(terminal_id, window, cx);
                     }
                 }
             }
@@ -1616,6 +1635,26 @@ impl BlackholesApp {
             OrchestratorChatCommand::SubmitCreateProject { request_id, name, sources, mode } => {
                 self.submit_create_project_modal(request_id, name, sources, mode, cx);
             }
+            OrchestratorChatCommand::SubmitEditProject { request_id, workspace_id, name, icon, color } => {
+                if self.project_appearance_request != Some((request_id, workspace_id)) {
+                    return;
+                }
+                if self.update_project_presentation(workspace_id, name, icon, color, cx) {
+                    self.dismiss_app_modal(cx);
+                    if self.show_terminal {
+                        if let Some(terminal_id) = self.selected_terminal_id() {
+                            self.focus_terminal_input(terminal_id, window, cx);
+                        }
+                    }
+                } else {
+                    let error = self.status.as_ref().map(|(message, _)| message.clone())
+                        .unwrap_or_else(|| self.tr("Could not update the project.", "No se pudo actualizar el proyecto.").to_string());
+                    self.dispatch_orchestrator_event(serde_json::json!({
+                        "type": "app_modal_feedback", "request_id": request_id,
+                        "feedback": { "error": error },
+                    }), cx);
+                }
+            }
             OrchestratorChatCommand::SubmitAddRepositories { request_id, workspace_id, sources, mode } => {
                 self.submit_add_repositories(request_id, workspace_id, sources, mode, cx);
             }
@@ -1627,14 +1666,24 @@ impl BlackholesApp {
                 self.dismiss_app_modal(cx);
             }
             OrchestratorChatCommand::ConfirmRemoveAgent { scope } => {
-                if let Some(scope) = parse_navigation_scope(&scope) {
+                if let Some(scope) = parse_navigation_scope(&scope)
+                    && self.agent_removal_confirmation == Some(AgentRemovalTarget::BuiltIn(scope))
+                {
                     self.remove_orchestrator_agent(scope, cx);
+                    self.dismiss_app_modal(cx);
                 }
-                self.dismiss_app_modal(cx);
+            }
+            OrchestratorChatCommand::ConfirmCloseTerminal { terminal_id } => {
+                if self.agent_removal_confirmation == Some(AgentRemovalTarget::Terminal(terminal_id)) {
+                    self.close_terminal(terminal_id, cx);
+                    self.dismiss_app_modal(cx);
+                }
             }
             OrchestratorChatCommand::ConfirmRemoveTask { task_id } => {
-                self.start_remove_task(task_id, cx);
-                self.dismiss_app_modal(cx);
+                if self.task_removal_confirmation == Some(task_id) {
+                    self.start_remove_task(task_id, cx);
+                    self.dismiss_app_modal(cx);
+                }
             }
             OrchestratorChatCommand::RevealProjectsRoot => self.reveal_projects_root(cx),
             OrchestratorChatCommand::ChooseProjectsRoot => {
@@ -1666,6 +1715,19 @@ impl BlackholesApp {
             }
             OrchestratorChatCommand::SetAgentMcpEnabled { name, enabled } => {
                 self.set_agent_mcp_enabled(name, enabled, cx)
+            }
+            OrchestratorChatCommand::SetProjectTerminalSkipPermissions { workspace_id, enabled } => {
+                if self.workspaces.iter().any(|workspace| workspace.id == workspace_id) {
+                    let result = self.database.set_setting(
+                        &format!("project-terminal-skip-permissions-{workspace_id}"),
+                        if enabled { "true" } else { "false" },
+                    );
+                    if let Err(error) = result {
+                        self.set_status(format!("Could not save terminal permissions: {error:#}"), true, cx);
+                    }
+                    self.hydrate_project_settings_surface(workspace_id, cx);
+                    cx.notify();
+                }
             }
             OrchestratorChatCommand::SetProjectAgentSkillEnabled {
                 workspace_id,
@@ -1838,11 +1900,14 @@ impl BlackholesApp {
                 else {
                     return;
                 };
-                self.activate_quick_open_target(target, cx);
+                self.activate_quick_open_target(target, window, cx);
             }
             OrchestratorChatCommand::QuickOpenDismiss { open_id } => {
                 if self.quick_open.as_ref().map(|state| state.id) == Some(open_id) {
                     self.close_quick_open(cx);
+                    if self.show_terminal && let Some(id) = self.selected_terminal_id() {
+                        self.focus_terminal_input(id, window, cx);
+                    }
                 }
             }
             OrchestratorChatCommand::DismissStatus => {
@@ -1954,7 +2019,21 @@ impl BlackholesApp {
                 self.focus_terminal(terminal_id, window, cx)
             }
             NavigationCommand::CloseTerminal { terminal_id } => {
-                self.close_terminal(terminal_id, cx)
+                self.request_close_terminal(terminal_id, window, cx)
+            }
+            NavigationCommand::ReorderAgents { ids } => {
+                let mut seen = HashSet::new();
+                self.session.agent_order = ids.into_iter().filter(|id| {
+                    let exists = if let Some(scope) = id.strip_prefix("agent:") {
+                        parse_navigation_scope(scope).is_some_and(|scope| self.orchestrator_chats.has_agent(scope))
+                    } else if let Some(id) = id.strip_prefix("terminal:").and_then(|id| Uuid::parse_str(id).ok()) {
+                        self.session.terminals.iter().any(|terminal| terminal.id == id && terminal.agent != AgentKind::Shell)
+                    } else { false };
+                    exists && seen.insert(id.clone())
+                }).collect();
+                self.persist_session();
+                self.hydrate_navigation(cx);
+                cx.notify();
             }
             NavigationCommand::ShowSettings => self.show_settings(cx),
         }
@@ -2391,6 +2470,7 @@ impl BlackholesApp {
                 "settings_selected": self.show_settings,
                 "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
                 "global_agents": global_agents,
+                "agent_order": self.session.agent_order,
                 "terminal_agents": self.session.terminals.iter()
                     .filter(|terminal| terminal.agent != AgentKind::Shell)
                     .map(|terminal| self.navigation_terminal(terminal, active_terminal_id))
@@ -2713,6 +2793,7 @@ impl BlackholesApp {
                     "workspace_id": workspace.id,
                     "title": workspace.label(),
                     "skills": skills,
+                    "terminal_skip_permissions": self.project_terminal_skip_permissions(workspace.id),
                     "mcps": mcps,
                     "external_mcp_control_supported": AgentMcpService::supports_external_servers(self.agent_provider()),
                     "project_revision": content_revision(&project_instructions),
@@ -4668,12 +4749,14 @@ impl BlackholesApp {
             Language::Spanish => "Eliminar agente",
         };
 
-        if !self.show_terminal && self.orchestrator_webview.is_some() {
+        if self.orchestrator_webview.is_some() {
+            self.agent_removal_confirmation = Some(AgentRemovalTarget::BuiltIn(scope));
             self.dispatch_orchestrator_event(
                 serde_json::json!({
                     "type": "app_modal",
                     "modal": {
                         "kind": "remove_agent",
+                        "over_terminal": self.show_terminal,
                         "scope": navigation_scope_id(scope),
                         "title": title,
                         "name": agent_name,
@@ -4693,6 +4776,7 @@ impl BlackholesApp {
                 serde_json::json!({ "type": "modal_visibility", "visible": true }),
                 cx,
             );
+            cx.notify();
             return;
         }
 
@@ -5339,7 +5423,7 @@ impl BlackholesApp {
         self.next_quick_open_id = self.next_quick_open_id.wrapping_add(1);
         let id = self.next_quick_open_id;
         let placeholder = self
-            .tr("Search projects and tasks…", "Buscar proyectos y tareas…")
+            .tr("Search projects, tasks, agents and terminals…", "Buscar proyectos, tareas, agentes y terminales…")
             .to_string();
         let input_placeholder = placeholder.clone();
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(input_placeholder));
@@ -5466,8 +5550,8 @@ impl BlackholesApp {
             QuickOpenMode::Navigation => (
                 "⌘O",
                 self.tr(
-                    "Projects and tasks · Notes open directly",
-                    "Proyectos y tareas · Las notas se abren directamente",
+                    "Projects · Tasks · Agents · Terminals",
+                    "Proyectos · Tareas · Agentes · Terminales",
                 ),
             ),
             QuickOpenMode::Files => (
@@ -5488,6 +5572,8 @@ impl BlackholesApp {
                     "kind_label": item.kind_label,
                     "icon": quick_open_icon_id(item.icon),
                     "color": item.color_css,
+                    "agent_identity": item.agent_identity,
+                    "terminal_provider": item.terminal_provider,
                 })
             })
             .collect::<Vec<_>>();
@@ -5495,6 +5581,8 @@ impl BlackholesApp {
             serde_json::json!({
                 "type": "quick_open",
                 "open_id": state.id,
+                "sidebar_width": if self.show_settings { 0.0 } else { self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) },
+                "over_terminal": self.show_terminal,
                 "query": query,
                 "placeholder": state.placeholder.clone(),
                 "shortcut": shortcut,
@@ -5549,6 +5637,8 @@ impl BlackholesApp {
                 icon: project_icon_kind(&workspace.icon),
                 color: workspace_color(workspace.color),
                 color_css: workspace_color_css(workspace.color).to_string(),
+                agent_identity: None,
+                terminal_provider: None,
                 target: QuickOpenTarget::Project {
                     workspace_id: workspace.id,
                 },
@@ -5571,12 +5661,71 @@ impl BlackholesApp {
                 icon: project_icon_kind(&task.icon),
                 color: workspace_color(task.color),
                 color_css: workspace_color_css(task.color).to_string(),
+                agent_identity: None,
+                terminal_provider: None,
                 target: QuickOpenTarget::Task {
                     workspace_id: task.workspace_id,
                     task_id: task.id,
                 },
             });
         }
+        let mut scopes = Vec::new();
+        if self.orchestrator_chats.has_agent(OrchestratorChatScope::Global) {
+            scopes.push(OrchestratorChatScope::Global);
+        }
+        scopes.extend(self.orchestrator_chats.global_agent_ids().iter().copied().map(OrchestratorChatScope::GlobalAgent));
+        for workspace in &self.workspaces {
+            let scope = OrchestratorChatScope::Project(workspace.id);
+            if self.orchestrator_chats.has_agent(scope) { scopes.push(scope); }
+            scopes.extend(self.orchestrator_chats.project_agent_ids(workspace.id).iter().copied()
+                .map(|agent_id| OrchestratorChatScope::ProjectAgent { project_id: workspace.id, agent_id }));
+            for task in self.tasks.iter().filter(|task| task.workspace_id == workspace.id) {
+                let scope = OrchestratorChatScope::Task(task.id);
+                if self.orchestrator_chats.has_agent(scope) { scopes.push(scope); }
+                scopes.extend(self.orchestrator_chats.task_agent_ids(task.id).iter().copied()
+                    .map(|agent_id| OrchestratorChatScope::TaskAgent { task_id: task.id, agent_id }));
+            }
+        }
+        let mut sessions = Vec::new();
+        for scope in scopes {
+            let identity = self.orchestrator_chats.avatar_color(scope);
+            let title = identity.display_name().to_string();
+            let task = scope.task_id().and_then(|id| self.tasks.iter().find(|task| task.id == id));
+            let project_id = task.map(|task| task.workspace_id).or_else(|| scope.project_id());
+            let project = project_id.and_then(|id| self.workspaces.iter().find(|workspace| workspace.id == id));
+            let subtitle = match (project, task) {
+                (Some(project), Some(task)) => format!("{}/{}", project.label(), task.title),
+                (Some(project), None) => project.label().to_string(),
+                _ => self.tr("Global agent", "Agente global").to_string(),
+            };
+            let kind_label = self.tr("Agent", "Agente").to_string();
+            sessions.push((format!("agent:{}", navigation_scope_id(scope)), QuickOpenItem {
+                search_key: format!("{title} {subtitle} {kind_label}").to_ascii_lowercase(),
+                title, subtitle, kind_label, icon: AppIcon::SquareTerminal,
+                color: rgb(0x8190d7), color_css: "#8190d7".into(),
+                agent_identity: Some(identity.id()), terminal_provider: None,
+                target: QuickOpenTarget::Agent { scope },
+            }));
+        }
+        for terminal in &self.session.terminals {
+            let context = self.navigation_terminal(terminal, None)["context"].as_str().unwrap_or_default().to_string();
+            let repository = self.workspaces.iter().find(|workspace| workspace.id == terminal.workspace_id)
+                .and_then(|workspace| workspace.repositories.iter().find(|repo| Some(repo.id) == terminal.repository_id));
+            let subtitle = format!("{} · {}{}", terminal.agent.label(), context,
+                repository.map(|repo| format!(" · {}", repo.name)).unwrap_or_default());
+            let kind_label = self.tr("Terminal", "Terminal").to_string();
+            sessions.push((format!("terminal:{}", terminal.id), QuickOpenItem {
+                search_key: format!("{} {subtitle} {kind_label} {} {}", terminal.label,
+                    if terminal.agent == AgentKind::Antigravity { "agy" } else { "" },
+                    if terminal.agent == AgentKind::Shell { "shell" } else { "agent agente" }).to_ascii_lowercase(),
+                title: terminal.label.clone(), subtitle, kind_label,
+                icon: AppIcon::SquareTerminal, color: rgb(0x8190d7), color_css: "#8190d7".into(),
+                agent_identity: None, terminal_provider: Some(terminal.agent),
+                target: QuickOpenTarget::Terminal { terminal_id: terminal.id },
+            }));
+        }
+        sessions.sort_by_key(|(id, _)| self.session.agent_order.iter().position(|key| key == id).unwrap_or(usize::MAX));
+        items.extend(sessions.into_iter().map(|(_, item)| item));
         items
     }
 
@@ -5616,6 +5765,8 @@ impl BlackholesApp {
                             icon,
                             color,
                             color_css: quick_open_css_color(color),
+                            agent_identity: None,
+                            terminal_provider: None,
                             target: QuickOpenTarget::File {
                                 root: root.clone(),
                                 root_label: root_label.clone(),
@@ -5650,7 +5801,9 @@ impl BlackholesApp {
         matches.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
         matches
             .into_iter()
-            .take(QUICK_OPEN_RESULT_LIMIT)
+            // Navigation is a small in-memory list: do not hide agents behind
+            // the file search's result cap when projects/tasks fill the list.
+            .take(if state.mode == QuickOpenMode::Navigation { usize::MAX } else { QUICK_OPEN_RESULT_LIMIT })
             .map(|(_, _, item)| item.clone())
             .collect()
     }
@@ -5707,12 +5860,34 @@ impl BlackholesApp {
         else {
             return;
         };
-        self.activate_quick_open_target(target, cx);
+        let Some(window_handle) = cx.active_window() else { return; };
+        cx.spawn(async move |this, cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |app, cx| app.activate_quick_open_target(target, window, cx));
+            });
+        }).detach();
     }
 
-    fn activate_quick_open_target(&mut self, target: QuickOpenTarget, cx: &mut Context<Self>) {
+    fn activate_quick_open_target(&mut self, target: QuickOpenTarget, window: &mut Window, cx: &mut Context<Self>) {
         self.close_quick_open(cx);
         match target {
+            QuickOpenTarget::Agent { scope } => {
+                if self.orchestrator_chats.has_agent(scope) {
+                    self.show_orchestrator_chat(scope, cx);
+                    self.hydrate_navigation(cx);
+                    self.dispatch_navigation_event(serde_json::json!({
+                        "type": "reveal_agent", "row_id": format!("nav-agent-{}", navigation_scope_id(scope)),
+                    }), cx);
+                    if let Some(webview) = &self.orchestrator_webview { let _ = webview.read(cx).raw().focus(); }
+                }
+            }
+            QuickOpenTarget::Terminal { terminal_id } => {
+                self.focus_terminal(terminal_id, window, cx);
+                self.hydrate_navigation(cx);
+                self.dispatch_navigation_event(serde_json::json!({
+                    "type": "reveal_agent", "row_id": format!("nav-terminal-{terminal_id}"),
+                }), cx);
+            }
             QuickOpenTarget::Project { workspace_id } => self.show_project_notes(workspace_id, cx),
             QuickOpenTarget::Task {
                 workspace_id,
@@ -9633,6 +9808,37 @@ impl BlackholesApp {
         else {
             return;
         };
+        if self.orchestrator_webview.is_some() {
+            let request_id = Uuid::new_v4();
+            self.project_appearance_request = Some((request_id, workspace_id));
+            self.dispatch_orchestrator_event(serde_json::json!({
+                "type": "app_modal", "modal": {
+                    "kind": "edit_project", "request_id": request_id, "workspace_id": workspace_id,
+                    "over_terminal": self.show_terminal,
+                    "title": self.tr("Edit project", "Editar proyecto"),
+                    "name": workspace.label(), "icon": workspace.icon,
+                    "color_id": workspace_color_id(workspace.color),
+                    "icon_options": project_icon_options(self.session.language).into_iter()
+                        .map(|(value, label, _)| serde_json::json!({ "value": value, "label": label })).collect::<Vec<_>>(),
+                    "color_options": project_colors().into_iter().map(|color| serde_json::json!({
+                        "value": workspace_color_id(color), "label": workspace_color_id(color), "color": workspace_color_css(color),
+                    })).collect::<Vec<_>>(),
+                    "description": self.tr(
+                        "Change how this project appears in Blackholes. Its folder and repositories will not be renamed.",
+                        "Cambia cómo aparece este proyecto en Blackholes. Su carpeta y repositorios no serán renombrados.",
+                    ),
+                    "confirm_label": self.tr("Save changes", "Guardar cambios"),
+                    "cancel_label": self.tr("Cancel", "Cancelar"),
+                    "offset_x": if self.show_settings { 0.0 } else {
+                        -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0)
+                    },
+                }
+            }), cx);
+            self.dispatch_navigation_event(serde_json::json!({ "type": "modal_visibility", "visible": true }), cx);
+            if let Some(webview) = &self.orchestrator_webview { let _ = webview.read(cx).raw().focus(); }
+            cx.notify();
+            return;
+        }
         let language = self.session.language;
         let name =
             cx.new(|cx| InputState::new(window, cx).default_value(workspace.label().to_string()));
@@ -9897,7 +10103,10 @@ impl BlackholesApp {
             return;
         }
         self.task_modal_request = None;
+        self.task_removal_confirmation = None;
+        self.agent_removal_confirmation = None;
         self.project_modal_request = None;
+        self.project_appearance_request = None;
         self.repository_modal_workspace = None;
         self.repository_removal = None;
         self.project_modal_sources.clear();
@@ -10090,11 +10299,16 @@ impl BlackholesApp {
         let language = self.session.language;
         let task_title = task.title.clone();
         let worktree_path = task.worktree_root_path.display().to_string();
-        if !self.show_terminal && self.orchestrator_webview.is_some() {
+        // Use the shared overlay even over a native terminal. GPUI dialogs hide
+        // the child WebViews to avoid native layering conflicts, blanking the
+        // navigation sidebar. The web overlay preserves and dims both surfaces.
+        if self.orchestrator_webview.is_some() {
+            self.task_removal_confirmation = Some(task_id);
             self.dispatch_orchestrator_event(serde_json::json!({
                 "type": "app_modal",
                 "modal": {
                     "kind": "remove_task", "task_id": task_id,
+                    "over_terminal": self.show_terminal,
                     "title": self.tr("Delete task and worktrees?", "¿Eliminar tarea y worktrees?"),
                     "name": task_title, "context": worktree_path,
                     "description": self.tr(
@@ -10114,6 +10328,7 @@ impl BlackholesApp {
             if let Some(webview) = &self.orchestrator_webview {
                 let _ = webview.read(cx).raw().focus();
             }
+            cx.notify();
             return;
         }
         let weak = cx.weak_entity();
@@ -12526,10 +12741,18 @@ impl BlackholesApp {
         }
         self.add_task_session(&descriptor);
         self.persist_session();
-        if let Some(handle) = self.terminals.get(&descriptor.id) {
-            handle.view.read(cx).focus_handle().focus(window);
-        }
+        self.focus_terminal_input(descriptor.id, window, cx);
         cx.notify();
+    }
+
+    fn project_terminal_skip_permissions(&self, workspace_id: Uuid) -> bool {
+        // Local, per-project opt-in. Missing/invalid settings default to normal
+        // provider permissions; never inherit the built-in agents' global mode.
+        self.database
+            .setting(&format!("project-terminal-skip-permissions-{workspace_id}"))
+            .ok()
+            .flatten()
+            .as_deref() == Some("true")
     }
 
     fn spawn_terminal_view(
@@ -12541,7 +12764,10 @@ impl BlackholesApp {
         if self.terminals.contains_key(&descriptor.id) {
             return Ok(());
         }
-        let spawned = TerminalService.spawn(descriptor)?;
+        let spawned = TerminalService.spawn(
+            descriptor,
+            self.project_terminal_skip_permissions(descriptor.workspace_id),
+        )?;
         let master = spawned.master.clone();
         let master_for_resize = spawned.master.clone();
         let terminal_id = descriptor.id;
@@ -12655,9 +12881,7 @@ impl BlackholesApp {
         match self.spawn_terminal_view(&descriptor, window, cx) {
             Ok(()) => {
                 self.update_terminal_state(terminal_id, descriptor.state);
-                if let Some(handle) = self.terminals.get(&terminal_id) {
-                    handle.view.read(cx).focus_handle().focus(window);
-                }
+                self.focus_terminal_input(terminal_id, window, cx);
                 self.persist_session();
                 cx.notify();
             }
@@ -12991,6 +13215,27 @@ impl BlackholesApp {
         }
     }
 
+    fn focus_terminal_input(&self, terminal_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(handle) = self.terminals.get(&terminal_id) else {
+            return;
+        };
+        handle.view.read(cx).focus_handle().focus(window);
+
+        // GPUI focus and AppKit's first responder are separate. Selecting a
+        // terminal in the navigation WKWebView must hand the native keyboard
+        // back as well, even when the central WebView was already hidden.
+        // Otherwise WebKit can consume Space while forwarding other keys.
+        // Both WebViews are children of the same native GPUI content view.
+        if let Some(webview) = self.navigation_webview.as_ref().or(self.orchestrator_webview.as_ref()) {
+            if let Err(error) = webview.read(cx).raw().focus_parent() {
+                tracing::warn!(?error, "could not return native keyboard focus to terminal");
+            }
+        }
+        // Refresh even if this terminal already owns logical focus: its input
+        // handler must be installed for the newly visible native surface.
+        window.refresh();
+    }
+
     fn focus_terminal(&mut self, terminal_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         let Some(descriptor) = self
             .session
@@ -13042,18 +13287,66 @@ impl BlackholesApp {
             return;
         }
 
-        if let Some(handle) = self.terminals.get(&terminal_id) {
-            handle.view.read(cx).focus_handle().focus(window);
-            if descriptor.state == SessionState::Attention {
-                // Focusing acknowledges attention; it does not submit work.
-                self.update_terminal_state(terminal_id, SessionState::Idle);
-                cx.notify();
-                return;
-            }
+        self.focus_terminal_input(terminal_id, window, cx);
+        if descriptor.state == SessionState::Attention {
+            // Focusing acknowledges attention; it does not submit work.
+            self.update_terminal_state(terminal_id, SessionState::Idle);
+            cx.notify();
+            return;
         }
 
         self.persist_session();
         cx.notify();
+    }
+
+    fn request_close_terminal(&mut self, terminal_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = self.session.terminals.iter().find(|terminal| terminal.id == terminal_id) else {
+            return;
+        };
+        // Plain shells retain their existing close behavior. Agent sessions must
+        // be confirmed, regardless of which X (Agents, project tree or pane) was used.
+        if terminal.agent == AgentKind::Shell {
+            self.close_terminal(terminal_id, cx);
+            return;
+        }
+        let name = terminal.label.clone();
+        let context = self.navigation_terminal(terminal, self.selected_terminal_id())["context"].clone();
+        let title = self.tr("Close this terminal agent?", "¿Cerrar este agente de terminal?");
+        let description = self.tr(
+            "The terminal and its running agent will be stopped and removed from Blackholes' restored session. Repository files are not deleted. Conversation history saved by the provider remains available.",
+            "Se detendrán la terminal y su agente, y dejarán de restaurarse al abrir Blackholes. No se eliminan archivos del repositorio. Se conserva el historial que haya guardado el proveedor.",
+        );
+        let confirm_label = self.tr("Close agent", "Cerrar agente");
+        if self.orchestrator_webview.is_some() {
+            self.agent_removal_confirmation = Some(AgentRemovalTarget::Terminal(terminal_id));
+            self.dispatch_orchestrator_event(serde_json::json!({
+                "type": "app_modal", "modal": {
+                    "kind": "close_terminal", "terminal_id": terminal_id,
+                    "over_terminal": self.show_terminal,
+                    "title": title, "name": name, "context": context,
+                    "description": description, "confirm_label": confirm_label,
+                    "cancel_label": self.tr("Cancel", "Cancelar"),
+                    "offset_x": if self.show_settings { 0.0 } else {
+                        -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0)
+                    },
+                }
+            }), cx);
+            self.dispatch_navigation_event(serde_json::json!({
+                "type": "modal_visibility", "visible": true,
+            }), cx);
+            cx.notify();
+            return;
+        }
+        let weak = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let weak_submit = weak.clone();
+            dialog.title(title).w(px(480.))
+                .child(v_flex().gap_3().child(name.clone()).child(description))
+                .button_props(DialogButtonProps::default().ok_text(confirm_label))
+                .confirm().on_ok(move |_, _, cx| {
+                    weak_submit.update(cx, |app, cx| { app.close_terminal(terminal_id, cx); true }).unwrap_or(false)
+                })
+        });
     }
 
     fn close_terminal(&mut self, terminal_id: Uuid, cx: &mut Context<Self>) {
@@ -15224,9 +15517,9 @@ impl BlackholesApp {
                                 app.show_orchestrator_chat(project_scope, cx)
                             });
                         },
-                        move |_, _, cx| {
+                        move |_, window, cx| {
                             let _ = weak_remove_project_agent.update(cx, |app, cx| {
-                                app.remove_orchestrator_agent(project_scope, cx)
+                                app.open_remove_orchestrator_agent_confirmation(project_scope, window, cx)
                             });
                         },
                     )),
@@ -15261,9 +15554,9 @@ impl BlackholesApp {
                             let _ = weak_select
                                 .update(cx, |app, cx| app.show_orchestrator_chat(scope, cx));
                         },
-                        move |_, _, cx| {
+                        move |_, window, cx| {
                             let _ = weak_remove
-                                .update(cx, |app, cx| app.remove_orchestrator_agent(scope, cx));
+                                .update(cx, |app, cx| app.open_remove_orchestrator_agent_confirmation(scope, window, cx));
                         },
                     )),
                 );
@@ -15304,10 +15597,10 @@ impl BlackholesApp {
                             let _ = weak_terminal
                                 .update(cx, |app, cx| app.focus_terminal(terminal_id, window, cx));
                         },
-                        move |_, _, cx| {
+                        move |_, window, cx| {
                             cx.stop_propagation();
                             let _ = weak_close_terminal
-                                .update(cx, |app, cx| app.close_terminal(terminal_id, cx));
+                                .update(cx, |app, cx| app.request_close_terminal(terminal_id, window, cx));
                         },
                     )));
             }
@@ -15365,10 +15658,10 @@ impl BlackholesApp {
                                     app.focus_terminal(terminal_id, window, cx)
                                 });
                             },
-                            move |_, _, cx| {
+                            move |_, window, cx| {
                                 cx.stop_propagation();
                                 let _ = weak_close_terminal
-                                    .update(cx, |app, cx| app.close_terminal(terminal_id, cx));
+                                    .update(cx, |app, cx| app.request_close_terminal(terminal_id, window, cx));
                             },
                         ),
                     ));
@@ -15543,9 +15836,9 @@ impl BlackholesApp {
                                         app.show_orchestrator_chat(task_scope, cx)
                                     });
                                 },
-                                move |_, _, cx| {
+                                move |_, window, cx| {
                                     let _ = weak_remove_task_agent.update(cx, |app, cx| {
-                                        app.remove_orchestrator_agent(task_scope, cx)
+                                        app.open_remove_orchestrator_agent_confirmation(task_scope, window, cx)
                                     });
                                 },
                             )),
@@ -15582,9 +15875,9 @@ impl BlackholesApp {
                                         app.show_orchestrator_chat(scope, cx)
                                     });
                                 },
-                                move |_, _, cx| {
+                                move |_, window, cx| {
                                     let _ = weak_remove.update(cx, |app, cx| {
-                                        app.remove_orchestrator_agent(scope, cx)
+                                        app.open_remove_orchestrator_agent_confirmation(scope, window, cx)
                                     });
                                 },
                             )),
@@ -15626,10 +15919,10 @@ impl BlackholesApp {
                                     app.focus_terminal(terminal_id, window, cx)
                                 });
                             },
-                            move |_, _, cx| {
+                            move |_, window, cx| {
                                 cx.stop_propagation();
                                 let _ = weak_close_terminal
-                                    .update(cx, |app, cx| app.close_terminal(terminal_id, cx));
+                                    .update(cx, |app, cx| app.request_close_terminal(terminal_id, window, cx));
                             },
                         ),
                     ));
@@ -15701,10 +15994,10 @@ impl BlackholesApp {
                                         app.focus_terminal(terminal_id, window, cx)
                                     });
                                 },
-                                move |_, _, cx| {
+                                move |_, window, cx| {
                                     cx.stop_propagation();
                                     let _ = weak_close_terminal
-                                        .update(cx, |app, cx| app.close_terminal(terminal_id, cx));
+                                        .update(cx, |app, cx| app.request_close_terminal(terminal_id, window, cx));
                                 },
                             ),
                         ));
@@ -15741,9 +16034,9 @@ impl BlackholesApp {
                         app.show_orchestrator_chat(OrchestratorChatScope::Global, cx)
                     });
                 },
-                move |_, _, cx| {
+                move |_, window, cx| {
                     let _ = weak_remove_global_agent.update(cx, |app, cx| {
-                        app.remove_orchestrator_agent(OrchestratorChatScope::Global, cx)
+                        app.open_remove_orchestrator_agent_confirmation(OrchestratorChatScope::Global, window, cx)
                     });
                 },
             ));
@@ -15768,9 +16061,9 @@ impl BlackholesApp {
                 move |_, _, cx| {
                     let _ = weak_select.update(cx, |app, cx| app.show_orchestrator_chat(scope, cx));
                 },
-                move |_, _, cx| {
+                move |_, window, cx| {
                     let _ =
-                        weak_remove.update(cx, |app, cx| app.remove_orchestrator_agent(scope, cx));
+                        weak_remove.update(cx, |app, cx| app.open_remove_orchestrator_agent_confirmation(scope, window, cx));
                 },
             ));
         }
@@ -15985,9 +16278,10 @@ impl BlackholesApp {
                         .px_2()
                         .cursor_pointer()
                         .hover(|style| style.text_color(rgb(0xff7b72)))
-                        .on_click(move |_, _, cx| {
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
                             let _ = weak_close
-                                .update(cx, |app, cx| app.close_terminal(terminal_id, cx));
+                                .update(cx, |app, cx| app.request_close_terminal(terminal_id, window, cx));
                         })
                         .child(Icon::new(AppIcon::X).with_size(px(12.))),
                 ),
@@ -16203,8 +16497,8 @@ impl BlackholesApp {
         };
         let footer_label = match mode {
             QuickOpenMode::Navigation => self.tr(
-                "Projects and tasks · Notes open directly",
-                "Proyectos y tareas · Las notas se abren directamente",
+                    "Projects · Tasks · Agents · Terminals",
+                    "Proyectos · Tareas · Agentes · Terminales",
             ),
             QuickOpenMode::Files => self.tr(
                 "Files from the selected repository",
@@ -16236,11 +16530,11 @@ impl BlackholesApp {
                     .text_color(rgb(0xe5e9f0))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(0x292c33)))
-                    .on_click(move |_, _, cx| {
+                    .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         let target = target.clone();
                         let _ = weak_activate
-                            .update(cx, |app, cx| app.activate_quick_open_target(target, cx));
+                            .update(cx, |app, cx| app.activate_quick_open_target(target, window, cx));
                     })
                     .child(
                         div()
@@ -16459,7 +16753,12 @@ impl Render for BlackholesApp {
         // high-throughput native terminal. Quick-open lives inside that same
         // surface so macOS can preserve the real content beneath its backdrop.
         let terminal_modal = self.show_terminal
-            && (self.project_modal_request.is_some() || self.task_modal_request.is_some());
+            && (self.project_modal_request.is_some()
+                || self.project_appearance_request.is_some()
+                || self.task_modal_request.is_some()
+                || self.task_removal_confirmation.is_some()
+                || self.agent_removal_confirmation.is_some()
+                || self.quick_open.is_some());
         let orchestrator_visible =
             (!self.show_terminal || terminal_modal || self.quick_open.is_some()) && !window.has_active_dialog(cx);
         if let Some(webview) = &self.orchestrator_webview {

@@ -4,7 +4,7 @@ A macOS desktop workspace for coding agents, Git repositories, isolated tasks, a
 
 > Documentation status: Work in progress.
 
-Version: **0.1.5**. Blackholes' original source code is licensed under
+Version: **0.1.6**. Blackholes' original source code is licensed under
 [MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
 
 ## Installing the desktop app
@@ -64,6 +64,29 @@ Terminal rows use the detected provider's icon. They do not show persistent
 loading dots or green presence badges; launching or focusing a CLI alone is not
 treated as submitting an agent turn.
 
+The Agents section combines built-in bots and terminal agents. Press and hold a
+card by its icon or title, then drag to reorder the mixed list. The cursor changes
+only once the hold activates reordering; the insertion marker and edge
+scrolling help with long lists. Keyboard users can focus a card and use
+`Option+Up` / `Option+Down`. The order survives app restarts and does not change
+project/task ownership or the project tree.
+
+Closing a terminal agent from Agents, the project tree or its terminal pane
+requires confirmation. It stops the terminal and removes it from session
+restoration, without deleting repository files or provider-saved conversations.
+Removing a built-in bot confirms deletion of its Blackholes conversation history.
+Both confirmations use the shared modal with the sidebar visible beneath its
+dimmed, blurred backdrop, including when a native terminal is active.
+Editing a project's visible name, icon and color uses that same shared modal,
+preserving the sidebar and current workspace beneath the backdrop. Appearance
+changes are saved only on confirmation; repository and folder names stay unchanged.
+
+`Cmd+O` searches projects, tasks, built-in agents and terminal sessions (including
+plain shells). Search by agent/provider name, terminal title, project, task or
+repository context. Agent and terminal results open the existing session rather
+than creating a duplicate; project and task results still open their notes.
+The palette accounts for the sidebar when centering and adapts to narrow windows.
+
 ## Build and run
 
 Requires macOS 13+, Node.js 20.19+, Git, and the stable Rust toolchain configured in `rust-toolchain.toml`.
@@ -97,6 +120,29 @@ window again. Quitting the application is separate from hiding its window.
 - Run native terminals with tabs, splits, scrollback, and session restoration.
 
 Worktrees separate working files and branches. They are not containers or security sandboxes. The file workspace provides focused editing and diffs, not a full IDE or language-server environment.
+
+### Terminal agent permissions
+
+In **Project settings → Terminals**, enable **Start agents without permission
+prompts** to opt in for that project and its tasks. It is off by default and
+saved locally per project. Blackholes reads it whenever it starts or restores
+a terminal agent, including after quitting and reopening the app. Existing
+Claude/Codex session IDs and profiles are preserved.
+
+| Agent | Launch flag | Reference |
+| --- | --- | --- |
+| Claude Code | `--dangerously-skip-permissions` | [CLI reference](https://code.claude.com/docs/en/cli-reference) |
+| Codex | `--dangerously-bypass-approvals-and-sandbox` | [CLI reference](https://developers.openai.com/codex/cli/reference/) |
+| Antigravity (`agy`) | `--dangerously-skip-permissions` | [Using the CLI](https://antigravity.google/docs/cli/using/) |
+| OpenCode | `--auto` | [CLI reference](https://opencode.ai/docs/cli/) |
+| Gemini | `--approval-mode=yolo` | [CLI reference](https://geminicli.com/docs/cli/cli-reference/) |
+
+Use only with trusted projects: this allows file changes and commands without
+confirmation. Codex also disables its sandbox; OpenCode preserves explicit deny
+rules. This does not change running agents, built-in bots, manually typed commands,
+or provider configuration files. Turning it off stops Blackholes from adding
+bypass flags on subsequent launches; the provider's own settings still apply.
+It does not add new session-resume support to providers.
 
 ## Architecture
 

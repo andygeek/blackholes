@@ -17,6 +17,9 @@ use std::borrow::Cow;
 #[path = "bin/blackholes-mcp.rs"]
 mod blackholes_mcp;
 
+#[cfg(target_os = "macos")]
+gpui::actions!(blackholes_application, [Quit]);
+
 fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("claude-session-hook") {
         return run_claude_session_hook();
@@ -48,7 +51,6 @@ fn main() -> Result<()> {
         }
     });
     application.run(move |cx| {
-        configure_macos_application();
         blackholes_rust::services::updater::initialize();
         if let Err(error) = cx.text_system().add_fonts(vec![Cow::Borrowed(
             include_bytes!("../assets/fonts/GeistMono-ExtraBold.ttf").as_slice(),
@@ -56,6 +58,7 @@ fn main() -> Result<()> {
             tracing::warn!(?error, "failed to register Geist Mono");
         }
         gpui_component::init(cx);
+        configure_macos_application(cx);
         apply_native_theme(initial_theme, None, cx);
         cx.on_app_quit(|_| async {
             terminate_all_agent_processes();
@@ -115,57 +118,44 @@ fn show_main_window(paths: &AppPaths, database: &Database, cx: &mut App) -> Resu
 }
 
 #[cfg(target_os = "macos")]
-fn configure_macos_application() {
-    use objc2::{AnyThread as _, MainThreadMarker, MainThreadOnly as _, sel};
-    use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSImage, NSMenu, NSMenuItem};
-    use objc2_foundation::{NSData, NSString};
+fn configure_macos_application(cx: &mut App) {
+    use gpui::{KeyBinding, Menu, MenuItem, OsAction};
+    use gpui_component::input::{Copy, Cut, Paste, SelectAll};
+    use objc2::{AnyThread as _, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+
+    // Register every item through GPUI so native validation AND dispatch have
+    // valid entries in its menu_actions table. GPUI 0.2.2 re-locks its platform
+    // mutex without releasing it when a foreign item's tag is out of range.
+    // Hand-built NSMenuItems (including tag -1) can therefore deadlock the main
+    // thread when AppKit inspects menus, even without the user opening a menu.
+    // OsAction keeps the native selectors and nil targets, so focused WKWebView
+    // editors still receive their own rich clipboard actions via NSResponder.
+    // Run after gpui_component::init so its edit keybindings are already known.
+    cx.set_menus(vec![
+        Menu {
+            name: "Blackholes".into(),
+            items: vec![MenuItem::action("Quit Blackholes", Quit)],
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                MenuItem::os_action("Cut", Cut, OsAction::Cut),
+                MenuItem::os_action("Copy", Copy, OsAction::Copy),
+                MenuItem::os_action("Paste", Paste, OsAction::Paste),
+                MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+            ],
+        },
+    ]);
 
     let Some(main_thread) = MainThreadMarker::new() else {
         return;
     };
     let application = NSApplication::sharedApplication(main_thread);
-
-    // Child WKWebViews hand Command-key equivalents back to the main menu.
-    // Standard nil-target edit actions route to WebKit's focused responder,
-    // preserving BlockNote's native clipboard events, rich text and undo history.
-    // Keep any existing application menu rather than replacing its commands.
-    let main_menu = application.mainMenu().unwrap_or_else(|| {
-        let menu = NSMenu::initWithTitle(NSMenu::alloc(main_thread), &NSString::from_str("Blackholes"));
-        let app_menu = NSMenu::initWithTitle(NSMenu::alloc(main_thread), &NSString::from_str("Blackholes"));
-        // SAFETY: Standard AppKit action with no explicit target; AppKit resolves
-        // the live responder. All menu creation occurs on the main thread.
-        unsafe {
-            app_menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Quit Blackholes"), Some(sel!(terminate:)), &NSString::from_str("q"),
-            );
-        }
-        let item = NSMenuItem::new(main_thread);
-        item.setSubmenu(Some(&app_menu));
-        menu.addItem(&item);
-        application.setMainMenu(Some(&menu));
-        menu
-    });
-    let edit_menu = NSMenu::initWithTitle(NSMenu::alloc(main_thread), &NSString::from_str("Edit"));
-    for (title, selector, key) in [
-        ("Cut", sel!(cut:), "x"),
-        ("Copy", sel!(copy:), "c"),
-        ("Paste", sel!(paste:), "v"),
-        ("Select All", sel!(selectAll:), "a"),
-    ] {
-        // SAFETY: These are standard NSResponder edit selectors. Leaving the
-        // target unset lets AppKit validate and dispatch to the focused editor.
-        let item = unsafe { edit_menu.addItemWithTitle_action_keyEquivalent(
-            &NSString::from_str(title), Some(selector), &NSString::from_str(key),
-        ) };
-        // These native-only items are not entries in GPUI's indexed action
-        // table. If no native editor handles one, it must not invoke action 0.
-        item.setTag(-1);
-        item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
-    }
-    let edit_item = NSMenuItem::new(main_thread);
-    edit_item.setTitle(&NSString::from_str("Edit"));
-    edit_item.setSubmenu(Some(&edit_menu));
-    main_menu.addItem(&edit_item);
 
     let data = NSData::with_bytes(include_bytes!("../assets/app-icon.png"));
     let Some(icon) = NSImage::initWithData(NSImage::alloc(), &data) else {
@@ -177,4 +167,4 @@ fn configure_macos_application() {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn configure_macos_application() {}
+fn configure_macos_application(_: &mut App) {}

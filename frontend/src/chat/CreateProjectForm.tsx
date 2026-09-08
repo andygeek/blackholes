@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, GitBranch, Plus, X } from "lucide-react";
+import { FolderOpen, GitBranch, LoaderCircle, Plus, X } from "lucide-react";
 import { postNative } from "../shared/native";
 import type { AppModalState } from "./types";
 
@@ -18,6 +18,8 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
   const [pending, setPending] = useState<"scan" | "create" | null>(null);
   const [error, setError] = useState("");
   const selected = sources.filter(source => source.selected);
+  const copying = mode === "copy" && selected.some(source => source.kind === "local");
+  const downloading = selected.some(source => source.kind === "github");
 
   useEffect(() => {
     if (!modal.feedback) return;
@@ -55,7 +57,18 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
       mode, sources: selected.map(({ kind, value }) => ({ kind, value })) });
   }}>
     <p id="app-modal-description">{adding ? modal.name : tr("Your repositories, together in one project.", "Tus repositorios, juntos en un proyecto.")}</p>
-    <fieldset disabled={pending !== null} className="project-modal-fields">
+    {pending === "create" && <div className="project-import-progress" role="status" aria-live="polite" aria-atomic="true">
+      <LoaderCircle className="project-import-progress__spinner" size={36} strokeWidth={1.75} aria-hidden="true" />
+      <strong>{copying ? tr("Copying repositories…", "Copiando repositorios…")
+        : downloading ? tr("Downloading repositories…", "Descargando repositorios…")
+          : adding ? tr("Adding repositories…", "Agregando repositorios…") : tr("Creating your project…", "Creando tu proyecto…")}</strong>
+      <p>{copying
+        ? tr("Copying files, Git history and dependencies can take several minutes, especially with large repositories.", "Copiar archivos, historial Git y dependencias puede tardar varios minutos, especialmente con repositorios grandes.")
+        : downloading ? tr("This may take a few minutes, depending on repository size and your connection.", "Esto puede tardar unos minutos, según el tamaño de los repositorios y tu conexión.")
+          : tr("Preparing your project and its repository links.", "Preparando tu proyecto y los enlaces a sus repositorios.")}</p>
+      <small>{tr("Keep Blackholes open until the operation finishes.", "Mantén Blackholes abierto hasta que termine.")}</small>
+    </div>}
+    <fieldset disabled={pending !== null} hidden={pending === "create"} className="project-modal-fields">
       <legend>{tr("Project settings", "Configuración del proyecto")}</legend>
       {!adding && <label>{tr("Name", "Nombre")}
         <input data-initial-focus required value={name} onChange={event => setName(event.target.value)} placeholder={tr("My project", "Mi proyecto")} />

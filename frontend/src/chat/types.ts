@@ -67,7 +67,12 @@ export interface ChatModelOption {
 }
 
 export interface AppModalState {
-  kind: "remove_project" | "remove_agent" | "remove_task" | "create_project" | "create_task" | "add_repository" | "remove_repository";
+  kind: "remove_project" | "remove_agent" | "close_terminal" | "remove_task" | "create_project" | "edit_project" | "create_task" | "add_repository" | "remove_repository";
+  icon?: string;
+  color_id?: string;
+  icon_options?: { value: string; label: string }[];
+  color_options?: { value: string; label: string; color: string }[];
+  terminal_id?: string;
   repository_id?: string;
   task_id?: string;
   request_id?: string;

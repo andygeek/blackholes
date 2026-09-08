@@ -62,7 +62,7 @@ impl TerminalService {
         None
     }
 
-    pub fn spawn(&self, descriptor: &TerminalDescriptor) -> Result<SpawnedTerminal> {
+    pub fn spawn(&self, descriptor: &TerminalDescriptor, skip_agent_permissions: bool) -> Result<SpawnedTerminal> {
         if !descriptor.cwd.is_dir() {
             bail!(
                 "terminal directory does not exist: {}",
@@ -138,7 +138,7 @@ impl TerminalService {
             .take_writer()
             .context("could not open terminal input")?;
 
-        if let Some((program, args)) = initial_agent_command(descriptor) {
+        if let Some((program, args)) = initial_agent_command(descriptor, skip_agent_permissions) {
             let initial_command = render_command(program, &args);
             writer
                 .write_all(initial_command.as_bytes())
@@ -156,7 +156,32 @@ impl TerminalService {
     }
 }
 
-fn initial_agent_command(descriptor: &TerminalDescriptor) -> Option<(&'static str, Vec<String>)> {
+fn initial_agent_command(
+    descriptor: &TerminalDescriptor,
+    skip_permissions: bool,
+) -> Option<(&'static str, Vec<String>)> {
+    let (program, mut args) = session_agent_command(descriptor)?;
+    // Apply the current project preference at spawn time, not the preference
+    // from the saved terminal. Disabling it must also affect resumed sessions.
+    // Do not export permission settings into the shell or rewrite user configs.
+    if skip_permissions && let Some(flag) = permission_bypass_flag(descriptor.agent) {
+        args.push(flag.into());
+    }
+    Some((program, args))
+}
+
+fn permission_bypass_flag(agent: AgentKind) -> Option<&'static str> {
+    match agent {
+        AgentKind::Shell => None,
+        AgentKind::Claude | AgentKind::Antigravity => Some("--dangerously-skip-permissions"),
+        AgentKind::Codex => Some("--dangerously-bypass-approvals-and-sandbox"),
+        AgentKind::Gemini => Some("--approval-mode=yolo"),
+        // OpenCode auto-approves requests but preserves explicit deny rules.
+        AgentKind::OpenCode => Some("--auto"),
+    }
+}
+
+fn session_agent_command(descriptor: &TerminalDescriptor) -> Option<(&'static str, Vec<String>)> {
     if descriptor.agent == AgentKind::Claude
         && let Some(session) = descriptor.claude_session.as_ref()
     {
@@ -226,4 +251,74 @@ fn shell_quote(value: &str) -> String {
     }
 
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ClaudeSession, CodexSession, SessionState};
+
+    fn descriptor(agent: AgentKind) -> TerminalDescriptor {
+        TerminalDescriptor {
+            id: uuid::Uuid::new_v4(),
+            workspace_id: uuid::Uuid::new_v4(),
+            task_id: None,
+            repository_id: None,
+            agent,
+            label: String::new(),
+            cwd: "/tmp".into(),
+            state: SessionState::Restored,
+            codex_session: None,
+            claude_session: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn permission_bypass_is_opt_in_for_each_provider() {
+        for (agent, flag) in [
+            (AgentKind::Claude, "--dangerously-skip-permissions"),
+            (AgentKind::Codex, "--dangerously-bypass-approvals-and-sandbox"),
+            (AgentKind::Antigravity, "--dangerously-skip-permissions"),
+            (AgentKind::OpenCode, "--auto"),
+            (AgentKind::Gemini, "--approval-mode=yolo"),
+        ] {
+            let terminal = descriptor(agent);
+            let normal = initial_agent_command(&terminal, false).unwrap();
+            assert_eq!(normal, agent.command().unwrap());
+            let mut expected = normal;
+            expected.1.push(flag.into());
+            assert_eq!(initial_agent_command(&terminal, true).unwrap(), expected);
+        }
+        for enabled in [false, true] {
+            assert!(initial_agent_command(&descriptor(AgentKind::Shell), enabled).is_none());
+        }
+    }
+
+    #[test]
+    fn restored_sessions_keep_profile_and_id_with_current_preference() {
+        for (agent, program, resume, flag) in [
+            (AgentKind::Claude, "claude-work", "--resume", "--dangerously-skip-permissions"),
+            (AgentKind::Codex, "codex-work", "resume", "--dangerously-bypass-approvals-and-sandbox"),
+        ] {
+            let mut terminal = descriptor(agent);
+            // Task terminals use the same startup path as project terminals.
+            terminal.task_id = Some(uuid::Uuid::new_v4());
+            match agent {
+                AgentKind::Claude => terminal.claude_session = Some(ClaudeSession {
+                    id: "saved-session-id".into(), profile: ClaudeProfile::Work,
+                }),
+                AgentKind::Codex => terminal.codex_session = Some(CodexSession {
+                    id: "saved-session-id".into(), profile: CodexProfile::Work,
+                }),
+                _ => unreachable!(),
+            }
+            for enabled in [true, false] {
+                let mut args = agent.command().unwrap().1;
+                args.extend([resume.into(), "saved-session-id".into()]);
+                if enabled { args.push(flag.into()); }
+                assert_eq!(initial_agent_command(&terminal, enabled), Some((program, args)));
+            }
+        }
+    }
 }

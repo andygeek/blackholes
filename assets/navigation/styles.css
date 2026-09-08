@@ -172,6 +172,18 @@ button:focus-visible {
 .agent-open { display: flex; align-items: center; flex: 1; min-width: 0; min-height: 52px; gap: 9px; padding: 7px 0; cursor: pointer; border-radius: 6px; }
 .agent-card .agent-name { flex-shrink: 0; }
 .agent-card .remove-button { opacity: .45; transition: opacity 140ms ease; }
+.sortable-agent { position: relative; min-width: 0; }
+.sortable-agent .agent-card, .sortable-agent .agent-open { cursor: default; }
+.sortable-agent .agent-open { user-select: none; -webkit-user-select: none; }
+.global-agents.is-reordering, .global-agents.is-reordering * { cursor: grabbing; }
+.sortable-agent.is-dragging { opacity: .45; }
+.sortable-agent.drop-before::before, .sortable-agent.drop-after::after {
+  content: ""; position: absolute; left: 8px; right: 8px; height: 2px;
+  border-radius: 2px; background: #8190d7; pointer-events: none;
+}
+.sortable-agent.drop-before::before { top: -3px; }
+.sortable-agent.drop-after::after { bottom: -3px; }
+.agent-order-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .agent-card:hover .remove-button, .agent-card:focus-within .remove-button { opacity: 1; }
 
 .agent-card:hover,

@@ -56,7 +56,7 @@ const AGENT_OUTPUT_SETTLE_DELAY: Duration = Duration::from_secs(4);
 const TERMINAL_KEY_CONTEXT: &str = "BlackholesTerminal";
 const MAX_TERMINAL_SEARCH_MATCHES: usize = 20_000;
 
-gpui::actions!(blackholes_terminal, [SendTab, SendBackTab]);
+gpui::actions!(blackholes_terminal, [SendTab, SendBackTab, SendSpace]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentTerminalSignalKind {
@@ -316,6 +316,8 @@ impl FastTerminalView {
         cx.bind_keys([
             KeyBinding::new("tab", SendTab, Some(TERMINAL_KEY_CONTEXT)),
             KeyBinding::new("shift-tab", SendBackTab, Some(TERMINAL_KEY_CONTEXT)),
+            KeyBinding::new("space", SendSpace, Some(TERMINAL_KEY_CONTEXT)),
+            KeyBinding::new("shift-space", SendSpace, Some(TERMINAL_KEY_CONTEXT)),
         ]);
     }
 
@@ -847,18 +849,15 @@ impl FastTerminalView {
         // directly to the PTY unless an IME composition is active; in that
         // case Space must remain available for candidate selection.
         #[cfg(target_os = "macos")]
-        if key == "space"
+        if matches!(key, "space" | " ")
             && self.ime_marked.is_none()
             && !modifiers.alt
             && !modifiers.control
             && !modifiers.platform
             && !modifiers.function
         {
-            self.report_focus(true);
-            self.scroll_to_bottom();
-            self.write(b" ");
+            self.send_space(cx);
             cx.stop_propagation();
-            cx.notify();
             return;
         }
 
@@ -901,6 +900,24 @@ impl FastTerminalView {
 
     fn on_action_back_tab(&mut self, _: &SendBackTab, _: &mut Window, cx: &mut Context<Self>) {
         self.send_tab(true, cx);
+    }
+
+    fn on_action_space(&mut self, _: &SendSpace, window: &mut Window, cx: &mut Context<Self>) {
+        // Claim Space before the native input context can consume it without
+        // committing text after a focus change. Never steal it from search or
+        // an active IME candidate list; those own their text input independently.
+        if !self.focus_handle.is_focused(window) || self.ime_marked.is_some() {
+            cx.propagate();
+            return;
+        }
+        self.send_space(cx);
+    }
+
+    fn send_space(&mut self, cx: &mut Context<Self>) {
+        self.report_focus(true);
+        self.scroll_to_bottom();
+        self.write(b" ");
+        cx.notify();
     }
 
     fn send_tab(&mut self, reverse: bool, cx: &mut Context<Self>) {
@@ -1507,6 +1524,7 @@ impl Render for FastTerminalView {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_action_tab))
             .on_action(cx.listener(Self::on_action_back_tab))
+            .on_action(cx.listener(Self::on_action_space))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))

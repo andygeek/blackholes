@@ -118,6 +118,16 @@
 .settings-section h3 { color: #8e97aa; font-size: 10px; }
 .settings-section > p { color: #8e97aa; font-size: 12px; line-height: 1.45; }
 
+.project-terminal-permissions { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+.project-terminal-permissions input[type="checkbox"] { flex: none; width: 18px; height: 18px; margin: 2px 0 0; padding: 0; accent-color: #8190d7; }
+.project-terminal-permissions > span { min-width: 0; }
+.project-terminal-permissions strong { font-size: 14px; }
+.project-terminal-permissions p { margin-top: 6px; font-size: 12px; line-height: 1.5; opacity: .75; }
+.project-terminal-permission-flags { font-size: 12px; line-height: 1.6; }
+.project-terminal-permission-flags summary { cursor: pointer; }
+.project-terminal-permission-flags ul { margin: 10px 0 0; padding-left: 20px; }
+.project-terminal-permission-flags code { overflow-wrap: anywhere; }
+
 .workspace-choice-group,
 .inline-actions {
   display: flex;
@@ -349,6 +359,11 @@
 .appearance-picker summary { display: grid; width: 72px; height: 72px; cursor: pointer; place-items: center; border: 1px solid currentColor; border-radius: 16px; background: #15181e; list-style: none; }
 .appearance-picker > div { position: absolute; z-index: 8; top: 78px; left: 0; width: 390px; padding: 13px; border: 1px solid #3b4350; border-radius: 10px; background: #171a20; box-shadow: 0 16px 42px rgba(0,0,0,.5); }
 .appearance-picker > div > span { display: block; margin: 5px 0 8px; color: #8e97aa; font-size: 10px; font-weight: 650; }
+.note-icon-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.note-icon-options button { display: grid; place-items: center; height: 46px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: transparent; cursor: pointer; }
+.note-icon-options button:hover { background: color-mix(in srgb, var(--surface-raised) 90%, var(--text)); }
+.note-icon-options button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--surface-raised) 88%, var(--accent)); }
+.note-icon-options button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .color-options { display: flex; gap: 8px; }
 .color-options button { width: 25px; height: 25px; cursor: pointer; border: 3px solid #171a20; border-radius: 50%; outline: 1px solid transparent; }
 .color-options button.is-selected { outline-color: white; }

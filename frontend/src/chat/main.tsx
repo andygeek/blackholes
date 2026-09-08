@@ -126,12 +126,12 @@ function ChatApp() {
   const [modelCatalogError, setModelCatalogError] = useState(false);
   const [modelControlSupported, setModelControlSupported] = useState(false);
   const [appModal, setAppModal] = useState<AppModalState | null>(null);
-  const overTerminal = Boolean(appModal?.over_terminal);
+  const [quickOpen, setQuickOpen] = useState<QuickOpenState | null>(null);
+  const overTerminal = Boolean(appModal?.over_terminal || quickOpen?.over_terminal);
   useLayoutEffect(() => {
     document.documentElement.classList.toggle("native-terminal-overlay", overTerminal);
     return () => document.documentElement.classList.remove("native-terminal-overlay");
   }, [overTerminal]);
-  const [quickOpen, setQuickOpen] = useState<QuickOpenState | null>(null);
   const [showJump, setShowJump] = useState(false);
 
   const messagesRef = useRef<HTMLElement>(null);
@@ -755,13 +755,13 @@ function ChatApp() {
     postNative({ type: "dismiss_app_modal" });
   };
 
-  const appModalLayer = appModal && <AppModal key={appModal.request_id || `${appModal.kind}:${appModal.scope || appModal.workspace_id || appModal.task_id}`}
+  const appModalLayer = appModal && <AppModal key={appModal.request_id || `${appModal.kind}:${appModal.scope || appModal.workspace_id || appModal.task_id || appModal.terminal_id}`}
     modal={appModal} language={language} onDismiss={dismissAppModal} />;
 
   const quickOpenLayer = quickOpen && <QuickOpen state={quickOpen} />;
   // A transparent native WebView overlays the live terminal without replacing
   // or restarting it. The same form/backdrop is used on every workspace surface.
-  if (overTerminal) return <>{appModalLayer}</>;
+  if (overTerminal) return <>{appModalLayer}{quickOpenLayer}</>;
   const sidebarDivider = !appModal && !quickOpen && <SidebarResizeHandle width={sidebarWidth}
     left={0} hitWidth={8} edge="left" fixed label={language === "en" ? "Resize sidebar" : "Cambiar ancho del menú lateral"} />;
 

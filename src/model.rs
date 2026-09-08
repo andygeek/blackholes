@@ -310,6 +310,9 @@ pub struct AppSession {
     #[serde(default)]
     pub unseen_task_ids: Vec<Uuid>,
     pub terminals: Vec<TerminalDescriptor>,
+    /// Mixed built-in/terminal agent order in the Agents section; independent of the project tree.
+    #[serde(default)]
+    pub agent_order: Vec<String>,
     pub docks: std::collections::HashMap<String, DockState>,
     pub language: Language,
     #[serde(default)]
@@ -328,6 +331,7 @@ impl Default for AppSession {
             navigation_expansion_initialized: false,
             unseen_task_ids: Vec::new(),
             terminals: Vec::new(),
+            agent_order: Vec::new(),
             docks: Default::default(),
             language: Language::English,
             theme: AppTheme::Dark,

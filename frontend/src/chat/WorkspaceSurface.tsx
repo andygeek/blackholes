@@ -128,6 +128,7 @@ export interface ProjectSettingsData {
   theme: AppTheme;
   workspace_id: string;
   title: string;
+  terminal_skip_permissions: boolean;
   skills: SkillItem[];
   mcps: McpItem[];
   external_mcp_control_supported: boolean;
@@ -971,12 +972,13 @@ function ProjectInstructionsEditor({
 
 function ProjectSettingsView({ data }: { data: ProjectSettingsData }) {
   const language = data.language;
-  const [activeTab, setActiveTab] = useState<"capabilities" | "instructions">("capabilities");
+  const [activeTab, setActiveTab] = useState<"capabilities" | "instructions" | "terminals">("capabilities");
   const enabledCapabilities = data.skills.filter((skill) => skill.enabled).length
     + data.mcps.filter((mcp) => mcp.enabled).length;
-  const tabs: SettingsTab<"capabilities" | "instructions">[] = [
+  const tabs: SettingsTab<"capabilities" | "instructions" | "terminals">[] = [
     { value: "capabilities", label: t(language, "Capabilities", "Capacidades"), icon: Puzzle, badge: enabledCapabilities },
     { value: "instructions", label: t(language, "Agent instructions", "Instrucciones de agentes"), icon: FileCode2 },
+    { value: "terminals", label: t(language, "Terminals", "Terminales"), icon: SquareTerminal },
   ];
   return (
     <main className="workspace-page settings-page project-settings-page">
@@ -997,6 +999,34 @@ function ProjectSettingsView({ data }: { data: ProjectSettingsData }) {
           onChange={(value) => setActiveTab(value as typeof activeTab)}
           label={t(language, "Project settings sections", "Secciones de configuración del proyecto")}
         />
+
+        {activeTab === "terminals" && (
+          <div className="settings-tab-panel">
+            <SettingsSection wide title={t(language, "Agent permissions", "Permisos de agentes")}
+              description={t(language, "For agents launched or restored by Blackholes in this project and its tasks.", "Para los agentes que Blackholes inicia o restaura en este proyecto y sus tareas.")}>
+              <label className="project-terminal-permissions">
+                <input type="checkbox" checked={Boolean(data.terminal_skip_permissions)}
+                  aria-describedby="terminal-permissions-description"
+                  onChange={event => postNative({ type: "set_project_terminal_skip_permissions", workspace_id: data.workspace_id, enabled: event.target.checked })} />
+                <span><strong>{t(language, "Start agents without permission prompts", "Iniciar agentes sin pedir permisos")}</strong>
+                  <p>{t(language, "Off by default. Changes apply the next time a terminal agent starts, including after reopening Blackholes.", "Desactivado por defecto. Se aplica la próxima vez que se inicie un agente de terminal, incluso al volver a abrir Blackholes.")}</p>
+                </span>
+              </label>
+              <p id="terminal-permissions-description">{t(language,
+                "Use only with trusted projects: agents can edit files and run commands without confirmation. Codex also disables its sandbox. Running agents, built-in bots and manually typed commands are unchanged. When off, Blackholes adds no bypass flags; your provider settings still apply.",
+                "Úsalo solo en proyectos de confianza: los agentes podrán modificar archivos y ejecutar comandos sin confirmación. Codex también desactiva su sandbox. No cambia agentes activos, bots integrados ni comandos escritos manualmente. Al desactivarlo, Blackholes no añade flags de omisión; sigue aplicándose la configuración del proveedor.")}</p>
+              <details className="project-terminal-permission-flags">
+                <summary>{t(language, "Flags by agent", "Flags por agente")}</summary>
+                <ul>
+                  <li>Claude Code / Antigravity (agy): <code>--dangerously-skip-permissions</code></li>
+                  <li>Codex: <code>--dangerously-bypass-approvals-and-sandbox</code></li>
+                  <li>OpenCode: <code>--auto</code> · {t(language, "Explicit deny rules remain enforced.", "Conserva las reglas explícitas de denegación.")}</li>
+                  <li>Gemini: <code>--approval-mode=yolo</code></li>
+                </ul>
+              </details>
+            </SettingsSection>
+          </div>
+        )}
 
         {activeTab === "capabilities" && (
           <div className="settings-tab-panel">
@@ -1182,14 +1212,22 @@ function NoteView({ data }: { data: NoteData }) {
     <main className="workspace-page note-page notion-note-page">
       <header className="note-toolbar">
         <span className={`save-state is-${saveState}`}>{saveStateLabel(saveState, data.language)}</span>
-        <button className="workspace-icon-button" type="button" title={t(data.language, "Reload", "Recargar")} onClick={() => postNative({ type: "reload_note", owner: data.owner, id: data.id })}><RefreshCw size={15} /></button>
       </header>
       <article className="note-document">
         <details className="appearance-picker">
-          <summary style={{ color: data.color }}><NoteIcon size={34} /></summary>
+          <summary style={{ color: data.color }} aria-label={t(data.language, "Choose icon and color", "Elegir icono y color")}><NoteIcon size={34} /></summary>
           <div>
             <span>{t(data.language, "Icon", "Icono")}</span>
-            <ChoiceGroup choices={data.icon_options} value={data.icon} onChange={(icon) => postNative({ type: "set_note_appearance", owner: data.owner, id: data.id, icon })} />
+            <div className="note-icon-options" role="group" aria-label={t(data.language, "Icon", "Icono")}>
+              {data.icon_options.map(option => {
+                const OptionIcon = iconFor(option.value);
+                return <button key={option.value} type="button" title={option.label} aria-label={option.label}
+                  aria-pressed={option.value === data.icon} style={{ color: data.color }}
+                  onClick={() => postNative({ type: "set_note_appearance", owner: data.owner, id: data.id, icon: option.value })}>
+                  <OptionIcon size={24} aria-hidden="true" />
+                </button>;
+              })}
+            </div>
             <span>{t(data.language, "Color", "Color")}</span>
             <div className="color-options">{data.color_options.map((option) => <button key={option.value} type="button" className={option.value === data.color_id ? "is-selected" : ""} style={{ background: option.color }} aria-label={option.label} onClick={() => postNative({ type: "set_note_appearance", owner: data.owner, id: data.id, color: option.value })} />)}</div>
           </div>

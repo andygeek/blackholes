@@ -14,6 +14,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { postNative } from "../shared/native";
+import { AgentAvatar } from "../shared/AgentAvatar";
+import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
 
 export type QuickOpenItem = {
   title: string;
@@ -21,10 +23,14 @@ export type QuickOpenItem = {
   kind_label: string;
   icon: string;
   color: string;
+  agent_identity?: string | null;
+  terminal_provider?: string | null;
 };
 
 export type QuickOpenState = {
   open_id: number;
+  sidebar_width?: number;
+  over_terminal?: boolean;
   query: string;
   placeholder: string;
   shortcut: string;
@@ -54,6 +60,22 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const openIdRef = useRef(state.open_id);
+  const [layout, setLayout] = useState({ width: 0, offset: 0 });
+
+  useLayoutEffect(() => {
+    const resize = () => {
+      // Account for the sidebar outside this WebView while keeping the panel
+      // within its visible bounds when the app window is narrow.
+      const sidebar = state.sidebar_width || 0;
+      const available = Math.max(0, window.innerWidth - 56);
+      const width = Math.min(760, available, Math.max(260, available - sidebar));
+      const offset = -Math.min(sidebar / 2, Math.max(0, (available - width) / 2));
+      setLayout({ width, offset });
+    };
+    window.addEventListener("resize", resize);
+    resize();
+    return () => window.removeEventListener("resize", resize);
+  }, [state.sidebar_width]);
 
   useEffect(() => {
     if (openIdRef.current !== state.open_id) {
@@ -74,7 +96,7 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
   }, [selected]);
 
   const dismiss = () => postNative({ type: "quick_open_dismiss", open_id: state.open_id });
-  const activate = (resultIndex: number) => postNative({
+  const activate = (resultIndex: number) => query === state.query && postNative({
     type: "quick_open_activate",
     open_id: state.open_id,
     result_index: resultIndex,
@@ -87,7 +109,12 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
         if (event.target === event.currentTarget) dismiss();
       }}
     >
-      <section className="quick-open-panel" role="dialog" aria-modal="true" aria-label={state.placeholder}>
+      <section className={`quick-open-panel${layout.width < 640 ? " is-compact" : ""}`} role="dialog" aria-modal="true" aria-label={state.placeholder}
+        style={{ width: layout.width || undefined, transform: `translateX(${layout.offset}px)` }}
+        onKeyDown={event => {
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); }
+          if (event.key === "Tab") { event.preventDefault(); inputRef.current?.focus(); }
+        }}>
         <div className="quick-open-search">
           <Search size={19} aria-hidden="true" />
           <input
@@ -105,12 +132,14 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
             }}
             onKeyDown={(event) => {
               event.stopPropagation();
-              if (event.key === "ArrowUp") {
+              if (event.key === "Tab") {
+                event.preventDefault();
+              } else if (event.key === "ArrowUp") {
                 event.preventDefault();
                 setSelected((current) => Math.max(0, current - 1));
               } else if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setSelected((current) => Math.min(state.results.length - 1, current + 1));
+                setSelected((current) => Math.min(Math.max(0, state.results.length - 1), current + 1));
               } else if (event.key === "Enter" && state.results[selected]) {
                 event.preventDefault();
                 activate(selected);
@@ -142,7 +171,10 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
                   onMouseEnter={() => setSelected(index)}
                   onClick={() => activate(index)}
                 >
-                  <span className="quick-open-row__icon" style={{ color: item.color }}><Icon size={17} /></span>
+                  <span className="quick-open-row__icon" style={{ color: item.color }}>
+                    {item.agent_identity ? <AgentAvatar identity={item.agent_identity} size={24} />
+                      : item.terminal_provider ? <TerminalProviderIcon provider={item.terminal_provider} /> : <Icon size={17} />}
+                  </span>
                   <span className="quick-open-row__title">{item.title}</span>
                   <span className="quick-open-row__subtitle">{item.subtitle}</span>
                   <span className="quick-open-row__kind">{item.kind_label}</span>

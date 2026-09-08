@@ -28,6 +28,9 @@ pub enum NavigationCommand {
     RemoveAgent {
         scope: String,
     },
+    ReorderAgents {
+        ids: Vec<String>,
+    },
     CollapseAll,
     NewProject,
     AddProjectRepository {

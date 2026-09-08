@@ -30,6 +30,7 @@ import { AgentAvatar } from "../shared/AgentAvatar";
 import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
 import { SidebarResizeHandle } from "../shared/SidebarResizeHandle";
 import { SidebarScrollArea } from "./SidebarScrollArea";
+import { SortableAgentList } from "./SortableAgentList";
 import { postNative, type NativeCommand } from "../shared/native";
 import { applyAppTheme, type AppTheme } from "../shared/theme";
 
@@ -136,6 +137,7 @@ interface NavigationState {
   sidebar_width: number;
   global_agents: AgentItem[];
   terminal_agents: TerminalItem[];
+  agent_order?: string[];
   projects: ProjectItem[];
 }
 
@@ -707,6 +709,10 @@ function NavigationApp() {
           const target = event as { workspace_id: string; task_id?: string | null };
           setMenu(null);
           setRevealTarget({ id: target.task_id ? `nav-task-${target.task_id}` : `nav-project-${target.workspace_id}` });
+        } else if ((event as { type?: string }).type === "reveal_agent") {
+          const target = event as { row_id: string };
+          setMenu(null);
+          setRevealTarget({ id: target.row_id });
         } else if ((event as { type?: string }).type === "hydrate") {
           const next = event as NavigationState;
           document.documentElement.lang = next.language || "es";
@@ -744,16 +750,27 @@ function NavigationApp() {
     setRevealTarget({ id: `nav-terminal-${terminal.id}` });
     postNative({ type: "focus_terminal", terminal_id: terminal.id });
   };
+  const agentRanks = new Map((state?.agent_order || []).map((id, index) => [id, index]));
+  const agentItems = [
+    ...(state?.global_agents || []).map(agent => ({
+      id: `agent:${agent.scope}`, label: agent.name,
+      content: <GlobalAgentRow agent={agent} copy={copy} onOpen={openAgent} />,
+    })),
+    ...(state?.terminal_agents || []).map(terminal => ({
+      id: `terminal:${terminal.id}`, label: `${terminal.context} · ${terminal.provider_label}`,
+      content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} />,
+    })),
+  ].sort((a, b) => (agentRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (agentRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER));
 
   return (
     <aside className="sidebar" aria-label="Blackholes">
       <SidebarResizeHandle width={state?.sidebar_width ?? 280} right={-1} hitWidth={4} label={state?.language === "en" ? "Resize sidebar" : "Cambiar ancho del menú lateral"} />
-      <header className="brand">
+      <header className="brand" inert={modalVisible}>
         <button className="brand__name" type="button" onClick={() => postNative({ type: "open_agent", scope: "global" })}>
           BLACKHOLES
         </button>
       </header>
-      <div className="sidebar-sections">
+      <div className="sidebar-sections" inert={modalVisible}>
         <section className="agents-shell" aria-label={state?.language === "en" ? "Agents" : "Agentes"}>
           <header className="section-header">
             <span>{state?.language === "en" ? "Agents" : "Agentes"}</span>
@@ -764,14 +781,11 @@ function NavigationApp() {
             </span>
           </header>
           <SidebarScrollArea label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
-          <div className="global-agents">
-            {(state?.global_agents || []).map((agent) => (
-              <GlobalAgentRow key={agent.scope} agent={agent} copy={copy} onOpen={openAgent} />
-            ))}
-            {(state?.terminal_agents || []).map((terminal) => (
-              <TerminalAgentRow key={terminal.id} terminal={terminal} copy={copy} onOpen={openTerminalAgent} />
-            ))}
-          </div>
+          <SortableAgentList items={agentItems} disabled={modalVisible} language={state?.language || "es"}
+            onReorder={ids => {
+              setState(previous => previous ? { ...previous, agent_order: ids } : previous);
+              postNative({ type: "reorder_agents", ids });
+            }} />
           </SidebarScrollArea>
         </section>
         <section className="projects-shell">
@@ -800,7 +814,7 @@ function NavigationApp() {
           </SidebarScrollArea>
         </section>
       </div>
-      <footer className="sidebar-footer">
+      <footer className="sidebar-footer" inert={modalVisible}>
         <button
           type="button"
           className={`settings-button${state?.settings_selected ? " is-selected" : ""}`}

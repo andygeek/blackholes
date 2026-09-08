@@ -114,6 +114,13 @@ pub enum OrchestratorChatCommand {
         #[serde(default)]
         mode: crate::services::projects::ProjectRepositoryMode,
     },
+    SubmitEditProject {
+        request_id: uuid::Uuid,
+        workspace_id: uuid::Uuid,
+        name: String,
+        icon: String,
+        color: WorkspaceColor,
+    },
     ConfirmRemoveProject {
         workspace_id: uuid::Uuid,
     },
@@ -129,6 +136,9 @@ pub enum OrchestratorChatCommand {
     },
     ConfirmRemoveAgent {
         scope: String,
+    },
+    ConfirmCloseTerminal {
+        terminal_id: uuid::Uuid,
     },
     ConfirmRemoveTask {
         task_id: uuid::Uuid,
@@ -150,6 +160,10 @@ pub enum OrchestratorChatCommand {
     SetProjectAgentSkillEnabled {
         workspace_id: uuid::Uuid,
         name: String,
+        enabled: bool,
+    },
+    SetProjectTerminalSkipPermissions {
+        workspace_id: uuid::Uuid,
         enabled: bool,
     },
     SetProjectAgentMcpEnabled {
