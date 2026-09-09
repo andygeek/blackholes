@@ -13,8 +13,6 @@ fi
 
 "$script_dir/build-frontend"
 
-if [[ ! -d "$sidecar_root/node_modules/@anthropic-ai/claude-agent-sdk" ]]; then
-  npm ci --prefix "$sidecar_root"
-fi
+node "$script_dir/prepare-agent-bridge.mjs" "$sidecar_root"
 
 cargo build --release --bins --manifest-path "$repo_root/Cargo.toml"

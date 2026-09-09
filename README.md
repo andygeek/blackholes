@@ -4,16 +4,40 @@ A macOS desktop workspace for coding agents, Git repositories, isolated tasks, a
 
 > Documentation status: Work in progress.
 
-Version: **0.1.6**. Blackholes' original source code is licensed under
+Version: **0.1.7**. Blackholes' original source code is licensed under
 [MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
 
 ## Installing the desktop app
 
-Packaged releases include Node.js, npm/npx, and the supported agent runtimes.
-No global Node or provider CLI installation is required. Connect your own provider
-account in Settings → Accounts. Models, MCPs, and Usage follow that selection;
+Blackholes uses the agent CLIs installed on your computer: `codex`, `claude`,
+`gemini`, `opencode`, and `agy` (Antigravity terminals). Install and update the
+providers you use with their own tools; no provider CLI is included in the app.
+Missing providers do not prevent the app or other providers from working.
+Connect your own provider account in Settings → Accounts. Models, MCPs, and Usage follow that selection;
 plan limits are queried for the selected account, while local token/cost totals
 are grouped by provider. Unsupported plan-limit queries are shown as unavailable.
+
+Terminals resolve commands after your interactive login shell starts. Black Bots,
+authentication, model discovery, and usage queries resolve the installed executable
+using that shell's PATH, including shell-configured Homebrew and version managers.
+Conventional user installation directories are fallback search locations. The
+lookup runs off the UI thread and is bounded; shell functions and aliases remain
+terminal features. A missing CLI produces an installation message, without
+downloading a replacement. Updating a CLI takes effect on its next launch;
+already-running sessions keep their current executable.
+
+Packaged apps retain a private Node.js engine and integration SDK libraries for
+the Black Bot bridge. They do not add these to your terminal PATH. Claude's SDK
+is explicitly pointed at your installed `claude`; its optional native binaries
+are omitted. Black Bot protocol compatibility still depends on the installed CLI;
+provider protocol changes may require a Blackholes integration update.
+
+On first launch and after updates, Blackholes also prepares its MCP connection
+and routing skill in the user's Codex and Claude Code profiles. This runs inside
+the app, with no installer script, CLI process, or global Node requirement. It
+works with either client installed, both, or neither; prepared profiles can be
+used when a client is installed later. Start a new external agent session after
+setup. Provider sign-in remains separate.
 
 On a Mac without Apple's Git command-line tools, Blackholes opens setup settings
 with an installation button. Apple's installer requires user confirmation; the app
@@ -96,7 +120,7 @@ Requires macOS 13+, Node.js 20.19+, Git, and the stable Rust toolchain configure
 ./target/release/blackholes-rust
 ```
 
-The build script generates the React bundles for the three WebViews and the lazy-loaded editor, installs missing frontend and agent-runtime dependencies, and compiles the release binaries. It does not launch the application. Use this script for release builds so Rust embeds the current frontend assets.
+The build script generates the React bundles for the three WebViews and the lazy-loaded editor, prepares frontend and integration SDK dependencies, and compiles the release binaries. It removes stale provider packages from the bridge when its dependency lock changes and rejects bundled CLIs. It does not launch the application. Use this script for release builds so Rust embeds the current frontend assets.
 
 On macOS it also downloads the pinned, checksum-verified Sparkle framework into
 `target/` for the native updater bridge. Bare development executables cannot
@@ -143,6 +167,61 @@ rules. This does not change running agents, built-in bots, manually typed comman
 or provider configuration files. Turning it off stops Blackholes from adding
 bypass flags on subsequent launches; the provider's own settings still apply.
 It does not add new session-resume support to providers.
+
+### Start task agents from any MCP client
+
+Ask your agent to create implementation tasks. `create_task` now starts each
+task agent automatically (`startAgent:true`), using the caller's provider.
+Pass `startAgent:false` for planning/backlog-only work or explicit requests not
+to execute. `agentPrompt` can supply the implementation brief and constraints.
+
+For a batch, the coordinating agent creates each task with `startAgent:false`,
+then calls `start_task_agents` once with their IDs:
+
+```json
+{
+  "tasks": [
+    { "taskId": "<first-task-id>", "prompt": "Implement the Teams page. Do not run tests or push." },
+    { "taskId": "<second-task-id>", "prompt": "Improve mobile navigation. Do not run tests or push." },
+    { "taskId": "<third-task-id>", "prompt": "Improve empty states. Do not run tests or push." }
+  ]
+}
+```
+
+The tool launches 1–8 visible native terminals in their respective task
+workspaces, with the implementation brief already submitted. They run
+concurrently and appear beneath their tasks; the coordinating chat keeps focus.
+Each agent is told to read the task note and repository instructions, work only
+in the attached worktrees, and show its progress and result in its terminal.
+No completion notification is required.
+
+Provider selection uses a per-task `agent`, then the batch `agent`, then the
+calling terminal/provider or MCP client's identity. Supported values are
+`codex`, `claude`, `gemini`, and `opencode`. Other MCP clients can
+specify one of these providers explicitly. The launcher reuses provider profile directories
+when supplied by the caller (Codex, Claude, and Gemini), without copying credentials.
+Task terminals run the installed CLI through the same interactive login shell
+as manually opened terminals. Missing commands and provider startup errors are
+visible in that terminal. `handoff_to_agent` remains available for built-in Black Bots.
+The initial launch injects the Blackholes MCP connection through invocation
+settings for Codex/Claude/OpenCode and workspace settings in the managed task
+container for Gemini. It does not require an MCP registration in the inherited profile.
+
+Each task uses its project's **Start agents without permission prompts** setting.
+For these prompted launches, Codex also receives a session-only trust override
+for the task directory, Claude acknowledges its bypass-mode confirmation through
+session settings, and Gemini receives `--skip-trust`. User configuration files
+are not rewritten. Existing sign-in and provider onboarding are still required;
+Blackholes does not type arbitrary confirmation responses into a terminal.
+
+Creation returns `agentStartRequested` and, when requested, `agentLaunch` alongside
+the task metadata. Task creation can succeed while launching fails: retry that
+existing task ID instead of recreating it. Launch results distinguish started
+terminals, already-open terminals, and per-task errors. Retrying a live task/provider does not submit its prompt again. A launch
+confirmation does not mean the provider has authenticated or completed the work.
+Initial prompts are not persisted or replayed when restoring terminal sessions.
+Reopen the updated Blackholes application and reconnect existing MCP clients
+after installing a build that adds the tool.
 
 ## Architecture
 
@@ -212,7 +291,32 @@ Project/task notes use Markdown with a rich-block JSON sidecar. Terminal output 
 
 ## Connect external AI clients
 
-The in-app agents receive the built-in MCP automatically. To register it and its routing skill in detected external Codex and Claude Code profiles:
+The in-app agents receive the built-in MCP automatically. The desktop also
+configures external Codex and Claude Code on startup, including after updates.
+Default profiles, `CODEX_HOME` / `CLAUDE_CONFIG_DIR`, existing `-work` profiles,
+and the legacy Claude script profile are supported. Configuring one client does
+not require the other client to exist, and a profile failure does not block the app
+or the remaining profiles.
+
+The MCP registration points to a private launcher under Application Support.
+Blackholes updates that launcher to its current executable location, so an app
+update does not leave each client pointing to an old build. The routing skill is
+embedded in the executable; packaged releases need no repository checkout or
+copy of `scripts/install-ai-integrations`. Install the app in Applications and
+open it there; setup is deferred while running from a disk image or Gatekeeper's
+temporary App Translocation directory.
+
+Setup preserves unrelated MCPs, configuration values, custom Blackholes entries
+and unmanaged skills. Codex TOML comments are retained. Files are replaced
+atomically only when changed; unexpected concurrent edits are reported for retry.
+Explicitly disabled Codex entries remain disabled. No credentials, approval modes,
+shell profiles, or global PATH entries are installed or modified by this setup.
+See **Settings → MCP servers → Blackholes in your terminal agents** for profile
+status or to refresh the connection. "Configured" describes registration, not
+CLI installation, authentication, or a verified agent session.
+
+The repository script remains available as an optional manual tool for advanced
+profiles and development:
 
 ```bash
 ./scripts/install-ai-integrations

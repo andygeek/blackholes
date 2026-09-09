@@ -9,7 +9,8 @@ use std::{
     time::Duration,
 };
 
-const MAX_FRAME_BYTES: u64 = 128 * 1024;
+// Eight 16k-character briefs, including Unicode and nested JSON escaping.
+const MAX_FRAME_BYTES: u64 = 2 * 1024 * 1024;
 
 pub struct AgentCommand {
     pub message: String,
@@ -27,7 +28,7 @@ fn read_frame(stream: &mut UnixStream) -> Result<String> {
 
 pub fn send(paths: &AppPaths, message: &str) -> Result<Value> {
     let mut stream = UnixStream::connect(paths.data_dir.join("agent-commands.sock"))
-        .context("Cannot reach the running Blackholes app. Reopen the updated app before delegating")?;
+        .context("Cannot reach the running Blackholes app. Reopen the updated app before starting agents")?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let frame = serde_json::to_string(message)?;
@@ -37,7 +38,7 @@ pub fn send(paths: &AppPaths, message: &str) -> Result<Value> {
     stream.write_all(frame.as_bytes())?;
     stream.write_all(b"\n")?;
     let response = read_frame(&mut stream).context(
-        "The app did not confirm the handoff. Its state is unknown; check the destination agent before retrying",
+        "The app did not confirm the agent command. Its state is unknown; check the destination before retrying",
     )?;
     let response: Value = serde_json::from_str(&response)?;
     if response.get("accepted").and_then(Value::as_bool) != Some(true) {

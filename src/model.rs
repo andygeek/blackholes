@@ -295,6 +295,9 @@ pub struct TerminalDescriptor {
     pub codex_session: Option<CodexSession>,
     #[serde(default)]
     pub claude_session: Option<ClaudeSession>,
+    /// Inherit a caller's provider profile without copying its credentials or session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_config_dir: Option<PathBuf>,
     pub created_at: DateTime<Utc>,
 }
 

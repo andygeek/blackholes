@@ -71,14 +71,17 @@ in their respective source distributions. `Cargo.lock` records their versions.
 
 ## Agent runtimes
 
-Packaged macOS apps include the official Node.js 22.23.2 runtime and npm/npx.
-Their bundled license and third-party notices are copied from the verified upstream
+Packaged macOS apps include the official Node.js 22.23.2 engine for the integration bridge.
+Its license and third-party notices are copied from the verified upstream
 distribution to `Contents/Resources/node/LICENSE` and `licenses/NODE.txt` in the app.
 The archive version and SHA-256 values are pinned in `scripts/fetch-node`.
 
-The Claude Agent SDK and its platform binaries are proprietary Anthropic
-components, governed by the legal agreements referenced in their distributed
-`LICENSE.md` files and [Anthropic's legal documentation](https://code.claude.com/docs/en/legal-and-compliance).
-They are not covered by any license chosen for Blackholes' own source code.
-The other SDKs and runtimes retain their package licenses; exact versions are
-recorded in `agent-sidecar/package-lock.json`.
+The Claude Agent SDK adapter is an Anthropic component, governed by the legal
+agreements referenced in its distributed notices and
+[Anthropic's legal documentation](https://code.claude.com/docs/en/legal-and-compliance).
+It is not covered by the license chosen for Blackholes' own source code.
+The integration SDKs retain their package licenses; exact versions are recorded
+in `agent-sidecar/package-lock.json`. Provider CLIs and Claude's optional platform
+binaries are not distributed. Optional binary packages can appear in the npm
+lockfile as dependency metadata, but build and packaging omit their installation
+and reject any accidentally included CLI copies.

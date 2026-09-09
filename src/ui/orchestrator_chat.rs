@@ -147,6 +147,7 @@ pub enum OrchestratorChatCommand {
     ChooseProjectsRoot,
     InstallGitTools,
     RefreshRuntimeStatus,
+    RefreshExternalIntegrations,
     RevealAgentSkills,
     ImportAgentSkills,
     SetAgentSkillEnabled {

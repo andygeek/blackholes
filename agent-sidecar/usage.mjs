@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { JsonRpcProcess } from "./json-rpc.mjs";
-import { packageBinary, providerEnvironment } from "./runtime.mjs";
+import { installedAgentBinary, providerEnvironment } from "./runtime.mjs";
 
 // Account metadata only: no prompts, threads, tools, or billable generations.
 const request = JSON.parse(readFileSync(0, "utf8"));
@@ -17,6 +17,7 @@ async function claudeUsage() {
   let finishInput;
   const input = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(resolve => { finishInput = resolve; }) }) };
   const agent = query({ prompt: input, options: {
+    pathToClaudeCodeExecutable: installedAgentBinary("claude"),
     env: environment, persistSession: false, settingSources: [], tools: [],
     mcpServers: {}, strictMcpConfig: true, abortController, stderr: () => {},
   } });
@@ -35,7 +36,7 @@ async function claudeUsage() {
 }
 
 async function codexUsage() {
-  const child = spawn(packageBinary("codex"), ["app-server", "--stdio"], {
+  const child = spawn(installedAgentBinary("codex"), ["app-server", "--stdio"], {
     env: environment, stdio: ["pipe", "pipe", "pipe"], signal: abortController.signal,
   });
   const rpc = new JsonRpcProcess(child, { onRequest: async () => { throw new Error("Interactive requests disabled"); } });

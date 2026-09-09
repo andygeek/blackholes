@@ -1243,6 +1243,7 @@ pub fn stream_agent_turn(
         scope,
     };
     let payload = serde_json::to_vec(&request)?;
+    let working_directory = request.cwd.clone();
     let (sender, receiver) = flume::unbounded();
     let (cancel, cancel_receiver) = flume::bounded(1);
     let (control, control_receiver) = flume::unbounded();
@@ -1251,6 +1252,8 @@ pub fn stream_agent_turn(
         .name(format!("blackholes-{}-agent", provider.id()))
         .spawn(move || {
             let result = run_sidecar_process(
+                provider,
+                &working_directory,
                 &node,
                 &script,
                 &payload,
@@ -1273,6 +1276,8 @@ pub fn stream_agent_turn(
 }
 
 fn run_sidecar_process(
+    provider: AgentProvider,
+    cwd: &Path,
     node: &Path,
     script: &Path,
     payload: &[u8],
@@ -1280,7 +1285,11 @@ fn run_sidecar_process(
     cancel: flume::Receiver<()>,
     control: flume::Receiver<AgentRuntimeControl>,
 ) -> Result<()> {
+    if cancel.try_recv() != Err(flume::TryRecvError::Empty) { return Ok(()); }
+    let agent = super::installed_agents::InstalledAgent::resolve(provider.id(), cwd)?;
+    if cancel.try_recv() != Err(flume::TryRecvError::Empty) { return Ok(()); }
     let mut command = Command::new(node);
+    agent.configure_sidecar(&mut command);
     command
         .arg(script)
         .stdin(Stdio::piped())
@@ -1425,13 +1434,16 @@ pub struct AgentModelInfo {
     pub efforts: Vec<String>,
 }
 
-/// Metadata discovery uses the same bundled runtime and auth environment as turns.
+/// Metadata discovery uses the same installed CLI and auth environment as turns.
 /// Bounded stdout is drained concurrently so a large model catalog cannot deadlock.
 pub fn refresh_agent_models(provider: AgentProvider, auth_mode: AgentAuthMode, profile: PathBuf, cwd: PathBuf,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<AgentModelCatalog> {
     if cancel.load(std::sync::atomic::Ordering::Relaxed) { bail!("Model discovery cancelled"); }
     let script = locate_sidecar_script()?.with_file_name("models.mjs");
+    let agent = super::installed_agents::InstalledAgent::resolve(provider.id(), &cwd)?;
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) { bail!("Model discovery cancelled"); }
     let mut command = Command::new(locate_node_binary());
+    agent.configure_sidecar(&mut command);
     command.arg(script).current_dir(&cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(unix)]
     {
@@ -1477,7 +1489,10 @@ pub fn refresh_agent_models(provider: AgentProvider, auth_mode: AgentAuthMode, p
 /// Runs on a background executor; the deadline also covers SDK startup/cleanup.
 pub fn refresh_agent_plan_usage(provider: AgentProvider, auth_mode: AgentAuthMode, profile: PathBuf) -> Result<ClaudePlanUsage> {
     let script = locate_sidecar_script()?.with_file_name("usage.mjs");
+    let cwd = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
+    let agent = super::installed_agents::InstalledAgent::resolve(provider.id(), &cwd)?;
     let mut command = Command::new(locate_node_binary());
+    agent.configure_sidecar(&mut command);
     command.arg(script).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(unix)]
     {
@@ -1549,7 +1564,7 @@ fn locate_sidecar_script() -> Result<PathBuf> {
     ))
 }
 
-fn locate_node_binary() -> PathBuf {
+pub(crate) fn locate_node_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("BLACKHOLES_NODE_BINARY") {
         return PathBuf::from(path);
     }
@@ -1632,14 +1647,31 @@ pub fn start_agent_authentication(
         prepare_gemini_oauth_profile(&profile_dir)?;
     }
 
-    let (program, args) = authentication_command(provider)?;
-    let mut command = if authentication_binary_needs_node(&program) {
-        let mut command = Command::new(locate_node_binary());
-        command.arg(&program);
-        command
-    } else {
-        Command::new(&program)
-    };
+    let (event_sender, events) = flume::unbounded();
+    let (input, input_receiver) = flume::unbounded::<String>();
+    let (cancel, cancel_receiver) = flume::bounded(1);
+    // Authenticate is explicit consent to Gemini's non-TTY browser sign-in.
+    if provider == AgentProvider::Gemini { input.send("y".into())?; }
+    std::thread::Builder::new().name(format!("blackholes-{}-auth", provider.id()))
+        .spawn(move || {
+            if let Err(error) = run_agent_authentication(provider, profile_dir, event_sender.clone(), input_receiver, cancel_receiver) {
+                let _ = event_sender.send(AgentAuthEvent::Error { message: format!("{error:#}") });
+            }
+        })?;
+    Ok(AgentAuthStream { events, input, cancel })
+}
+
+fn run_agent_authentication(
+    provider: AgentProvider,
+    profile_dir: PathBuf,
+    event_sender: flume::Sender<AgentAuthEvent>,
+    input_receiver: flume::Receiver<String>,
+    cancel_receiver: flume::Receiver<()>,
+) -> Result<()> {
+    let (program, args) = authentication_command(provider);
+    let agent = super::installed_agents::InstalledAgent::resolve(program, &profile_dir)?;
+    if cancel_receiver.try_recv() != Err(flume::TryRecvError::Empty) { return Ok(()); }
+    let mut command = agent.command();
     command
         .args(&args)
         .current_dir(&profile_dir)
@@ -1687,20 +1719,6 @@ pub fn start_agent_authentication(
         .stderr
         .take()
         .context("Authentication stderr is unavailable")?;
-    let (event_sender, events) = flume::unbounded();
-    let (input, input_receiver) = flume::unbounded::<String>();
-    let (cancel, cancel_receiver) = flume::bounded(1);
-
-    // Gemini asks for terminal consent before opening OAuth whenever stdin is
-    // not a TTY. Clicking "Authenticate" in Blackholes is that explicit
-    // consent, so answer it here instead of exposing a hidden CLI prompt that
-    // would otherwise leave the UI waiting forever.
-    if provider == AgentProvider::Gemini {
-        input
-            .send("y".to_string())
-            .context("Unable to confirm Gemini browser authentication")?;
-    }
-
     for (name, reader) in [
         ("stdout", Box::new(stdout) as Box<dyn Read + Send>),
         ("stderr", Box::new(stderr) as Box<dyn Read + Send>),
@@ -1720,35 +1738,11 @@ pub fn start_agent_authentication(
                 terminate_sidecar_process(process_id);
             }
         })?;
-    std::thread::Builder::new()
-        .name(format!("blackholes-{}-auth", provider.id()))
-        .spawn(move || {
-            let _active_process = active_process;
-            match child.wait() {
-                Ok(status) if status.success() => {
-                    let _ = event_sender.send(AgentAuthEvent::Completed);
-                }
-                Ok(status) => {
-                    let _ = event_sender.send(AgentAuthEvent::Error {
-                        message: format!(
-                            "{} authentication exited with {status}",
-                            provider.display_name()
-                        ),
-                    });
-                }
-                Err(error) => {
-                    let _ = event_sender.send(AgentAuthEvent::Error {
-                        message: format!("Authentication process failed: {error}"),
-                    });
-                }
-            }
-        })?;
-
-    Ok(AgentAuthStream {
-        events,
-        input,
-        cancel,
-    })
+    let _active_process = active_process;
+    let status = child.wait().context("Authentication process failed")?;
+    if !status.success() { bail!("{} authentication exited with {status}", provider.display_name()); }
+    let _ = event_sender.send(AgentAuthEvent::Completed);
+    Ok(())
 }
 
 pub fn authenticate_agent_mcp(
@@ -1855,20 +1849,8 @@ pub fn authenticate_agent_mcp(
 }
 
 fn agent_cli_command(provider: AgentProvider) -> Result<Command> {
-    let binary_name = match provider {
-        AgentProvider::Claude => "claude",
-        AgentProvider::Codex => "codex",
-        AgentProvider::Gemini => "gemini",
-        AgentProvider::OpenCode => "opencode",
-    };
-    let binary = locate_agent_binary(binary_name)?;
-    if authentication_binary_needs_node(&binary) {
-        let mut command = Command::new(locate_node_binary());
-        command.arg(binary);
-        Ok(command)
-    } else {
-        Ok(Command::new(binary))
-    }
+    let cwd = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
+    Ok(super::installed_agents::InstalledAgent::resolve(provider.id(), &cwd)?.command())
 }
 
 fn configure_agent_cli_profile(
@@ -1943,66 +1925,13 @@ fn cancellable_cli_output(
     }
 }
 
-fn authentication_command(provider: AgentProvider) -> Result<(PathBuf, Vec<&'static str>)> {
-    let (binary, args) = match provider {
+fn authentication_command(provider: AgentProvider) -> (&'static str, Vec<&'static str>) {
+    match provider {
         AgentProvider::Claude => ("claude", vec!["auth", "login"]),
         AgentProvider::Codex => ("codex", vec!["login"]),
         AgentProvider::Gemini => ("gemini", vec!["--list-sessions"]),
         AgentProvider::OpenCode => ("opencode", vec!["auth", "login", "--provider", "opencode"]),
-    };
-    Ok((locate_agent_binary(binary)?, args))
-}
-
-fn locate_agent_binary(binary: &str) -> Result<PathBuf> {
-    if let Some(sidecar_root) = locate_sidecar_script()?.parent() {
-        let bundled = sidecar_root.join("node_modules/.bin").join(binary);
-        if bundled.is_file() {
-            return Ok(bundled);
-        }
-        if binary == "claude" {
-            let anthropic_modules = sidecar_root.join("node_modules/@anthropic-ai");
-            if let Ok(entries) = fs::read_dir(anthropic_modules) {
-                if let Some(bundled) = entries.flatten().find_map(|entry| {
-                    let name = entry.file_name();
-                    let name = name.to_string_lossy();
-                    let candidate = entry.path().join("claude");
-                    (name.starts_with("claude-agent-sdk-") && candidate.is_file())
-                        .then_some(candidate)
-                }) {
-                    return Ok(bundled);
-                }
-            }
-        }
     }
-    let mut directories = std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .unwrap_or_default();
-    directories.extend([
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ]);
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        directories.extend([
-            home.join(".local/bin"),
-            home.join(".volta/bin"),
-            home.join(".asdf/shims"),
-        ]);
-    }
-    directories
-        .into_iter()
-        .map(|directory| directory.join(binary))
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| anyhow!("{} is not installed", binary))
-}
-
-fn authentication_binary_needs_node(binary: &Path) -> bool {
-    fs::read(binary).ok().is_some_and(|bytes| {
-        let prefix = &bytes[..bytes.len().min(256)];
-        prefix.starts_with(b"#!")
-            && String::from_utf8_lossy(&prefix)
-                .to_ascii_lowercase()
-                .contains("node")
-    })
 }
 
 fn prepare_gemini_oauth_profile(profile_dir: &Path) -> Result<()> {

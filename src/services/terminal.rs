@@ -63,6 +63,15 @@ impl TerminalService {
     }
 
     pub fn spawn(&self, descriptor: &TerminalDescriptor, skip_agent_permissions: bool) -> Result<SpawnedTerminal> {
+        self.spawn_with_prompt(descriptor, skip_agent_permissions, None)
+    }
+
+    pub fn spawn_with_prompt(
+        &self,
+        descriptor: &TerminalDescriptor,
+        skip_agent_permissions: bool,
+        prompt: Option<&str>,
+    ) -> Result<SpawnedTerminal> {
         if !descriptor.cwd.is_dir() {
             bail!(
                 "terminal directory does not exist: {}",
@@ -78,27 +87,25 @@ impl TerminalService {
             })
             .context("could not allocate a native PTY")?;
 
-        let shell = login_shell();
+        let shell = super::installed_agents::login_shell();
         let mut command = CommandBuilder::new(&shell);
         command.arg("-l");
+        if let Some(prompt) = prompt {
+            let (program, mut args) = prompted_agent_command(descriptor, skip_agent_permissions, prompt)?;
+            configure_task_mcp(descriptor, &mut args, &mut command)?;
+            // Pass the brief as a process argument, not keystrokes: long/multiline
+            // prompts must not hit the PTY line limit or shell-startup timing races.
+            command.arg("-i");
+            command.arg("-c");
+            // Resolve the CLI after interactive login startup, exactly as when
+            // typing its name manually. Never pin tasks to an app-owned binary.
+            command.arg(format!("{}; exec {} -l", render_command(program, &args).trim_end_matches('\r'), shell_quote(&shell)));
+        }
         command.cwd(&descriptor.cwd);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         command.env("TERM_PROGRAM", "Blackholes");
         command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
-        // Make the app's runtimes available in its terminals as well, without
-        // installing anything into the user's shell profile or global PATH.
-        if let Ok(executable) = env::current_exe() {
-            if let Some(contents) = executable.parent().and_then(Path::parent) {
-                let node_bin = contents.join("Resources/node/bin");
-                if node_bin.join("node").is_file() {
-                    let mut directories = vec![node_bin];
-                    if let Some(path) = env::var_os("PATH") { directories.extend(env::split_paths(&path)); }
-                    directories.push(contents.join("Resources/agent-sidecar/node_modules/.bin"));
-                    if let Ok(path) = env::join_paths(directories) { command.env("PATH", path); }
-                }
-            }
-        }
         // Advertise compatibility with the structured OSC 777 CLI-agent
         // protocol used by Warp's public Claude plugin. TERM_PROGRAM remains
         // truthful, while users who already have that plugin installed get
@@ -114,6 +121,16 @@ impl TerminalService {
         );
         command.env("BLACKHOLES_TERMINAL_ID", descriptor.id.to_string());
         command.env("BLACKHOLES_AGENT", agent_name(descriptor.agent));
+        command.env("BLACKHOLES_AGENT_PROVIDER", agent_name(descriptor.agent));
+        command.env("BLACKHOLES_AGENT_CONFIG_DIR", descriptor.agent_config_dir.as_deref().unwrap_or(Path::new("")));
+        if let Some(config_dir) = &descriptor.agent_config_dir {
+            match descriptor.agent {
+                AgentKind::Codex => command.env("CODEX_HOME", config_dir),
+                AgentKind::Claude => command.env("CLAUDE_CONFIG_DIR", config_dir),
+                AgentKind::Gemini => command.env("GEMINI_CLI_HOME", config_dir),
+                _ => {},
+            }
+        }
 
         if let Some(task_id) = descriptor.task_id {
             command.env("BLACKHOLES_TASK_ID", task_id.to_string());
@@ -138,7 +155,7 @@ impl TerminalService {
             .take_writer()
             .context("could not open terminal input")?;
 
-        if let Some((program, args)) = initial_agent_command(descriptor, skip_agent_permissions) {
+        if prompt.is_none() && let Some((program, args)) = initial_agent_command(descriptor, skip_agent_permissions) {
             let initial_command = render_command(program, &args);
             writer
                 .write_all(initial_command.as_bytes())
@@ -154,6 +171,114 @@ impl TerminalService {
             process_id,
         })
     }
+}
+
+fn prompted_agent_command(
+    descriptor: &TerminalDescriptor,
+    skip_permissions: bool,
+    prompt: &str,
+) -> Result<(&'static str, Vec<String>)> {
+    if prompt.trim().is_empty() || prompt.contains('\0') {
+        bail!("The initial prompt must be non-empty and contain no NUL");
+    }
+    if descriptor.agent == AgentKind::Antigravity {
+        bail!("Automatic task prompts are not supported by the Antigravity terminal launcher. Select codex, claude, gemini, or opencode");
+    }
+    let (program, mut args) = initial_agent_command(descriptor, skip_permissions)
+        .context("A task needs a coding agent, not a plain shell")?;
+    if skip_permissions && descriptor.agent == AgentKind::Codex {
+        // Trust only this task for this invocation; never rewrite ~/.codex/config.toml.
+        let path = serde_json::to_string(&descriptor.cwd.to_string_lossy())?;
+        args.extend(["-c".into(), format!("projects={{ {path} = {{ trust_level = \"trusted\" }} }}")]);
+    }
+    if skip_permissions && descriptor.agent == AgentKind::Claude {
+        // Merge into the existing one-session settings argument, preserving notifications.
+        if let Some(index) = args.iter().position(|arg| arg == "--settings") {
+            let mut settings: serde_json::Value = serde_json::from_str(&args[index + 1])?;
+            settings["skipDangerousModePermissionPrompt"] = true.into();
+            args[index + 1] = serde_json::to_string(&settings)?;
+        }
+    }
+    if skip_permissions && descriptor.agent == AgentKind::Gemini {
+        args.push("--skip-trust".into());
+    }
+    match descriptor.agent {
+        AgentKind::Gemini => args.push("--prompt-interactive".into()),
+        AgentKind::OpenCode => args.push("--prompt".into()),
+        _ => args.push("--".into()),
+    }
+    args.push(prompt.into());
+    Ok((program, args))
+}
+
+fn configure_task_mcp(
+    descriptor: &TerminalDescriptor,
+    args: &mut Vec<String>,
+    command: &mut CommandBuilder,
+) -> Result<()> {
+    let executable = env::current_exe().context("Could not locate the Blackholes MCP executable")?;
+    let environment = serde_json::json!({
+        "BLACKHOLES_WORKSPACE_ID": descriptor.workspace_id.to_string(),
+        "BLACKHOLES_TASK_ID": descriptor.task_id.map(|id| id.to_string()).unwrap_or_default(),
+        "BLACKHOLES_TERMINAL_ID": descriptor.id.to_string(),
+        "BLACKHOLES_AGENT_PROVIDER": agent_name(descriptor.agent),
+        "BLACKHOLES_AGENT_CONFIG_DIR": descriptor.agent_config_dir.as_deref().unwrap_or(Path::new("")),
+    });
+    let server = serde_json::json!({ "command": executable, "args": ["mcp"], "env": environment });
+    let mut options = Vec::new();
+    match descriptor.agent {
+        AgentKind::Codex => {
+            // A TOML inline table replaces a stale server entry for this invocation only.
+            let env = environment.as_object().context("Invalid MCP environment")?.iter()
+                .map(|(key, value)| format!("{key} = {value}"))
+                .collect::<Vec<_>>().join(", ");
+            options.extend(["-c".into(), format!(
+                "mcp_servers.blackholes={{ command = {}, args = [\"mcp\"], env = {{ {env} }}, enabled = true }}",
+                serde_json::to_string(&executable)?,
+            )]);
+        }
+        AgentKind::Claude => options.extend([
+            "--mcp-config".into(), serde_json::json!({ "mcpServers": { "blackholes": server } }).to_string(),
+        ]),
+        AgentKind::Gemini => {
+            // Gemini uses workspace settings. Only add our server in the managed
+            // task container, preserving any other settings and provider permissions.
+            let directory = descriptor.cwd.join(".gemini");
+            let path = directory.join("settings.json");
+            let mut settings: serde_json::Value = match std::fs::read_to_string(&path) {
+                Ok(content) => serde_json::from_str(&content).context("Invalid task Gemini settings")?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+                Err(error) => return Err(error.into()),
+            };
+            set_task_mcp_entry(&mut settings, "mcpServers", server)?;
+            std::fs::create_dir_all(directory)?;
+            std::fs::write(path, serde_json::to_vec_pretty(&settings)?)?;
+        }
+        AgentKind::OpenCode => {
+            let mut settings: serde_json::Value = match env::var("OPENCODE_CONFIG_CONTENT") {
+                Ok(value) if !value.trim().is_empty() => serde_json::from_str(&value)
+                    .context("Invalid inherited OpenCode inline configuration")?,
+                _ => serde_json::json!({}),
+            };
+            set_task_mcp_entry(&mut settings, "mcp", serde_json::json!({
+                "type": "local", "command": [executable, "mcp"],
+                "environment": environment, "enabled": true,
+            }))?;
+            command.env("OPENCODE_CONFIG_CONTENT", serde_json::to_string(&settings)?);
+        }
+        _ => {},
+    }
+    // Provider options precede the positional-prompt separator.
+    args.splice(0..0, options);
+    Ok(())
+}
+
+fn set_task_mcp_entry(settings: &mut serde_json::Value, key: &str, server: serde_json::Value) -> Result<()> {
+    let settings = settings.as_object_mut().context("Agent settings must be an object")?;
+    let servers = settings.entry(key).or_insert_with(|| serde_json::json!({}));
+    servers.as_object_mut().context("Agent MCP settings must be an object")?
+        .insert("blackholes".into(), server);
+    Ok(())
 }
 
 fn initial_agent_command(
@@ -207,13 +332,6 @@ fn session_agent_command(descriptor: &TerminalDescriptor) -> Option<(&'static st
         return Some((program, args));
     }
     descriptor.agent.command()
-}
-
-fn login_shell() -> String {
-    env::var("SHELL")
-        .ok()
-        .filter(|shell| Path::new(shell).is_file())
-        .unwrap_or_else(|| "/bin/zsh".into())
 }
 
 fn agent_name(agent: AgentKind) -> &'static str {
@@ -270,6 +388,7 @@ mod tests {
             state: SessionState::Restored,
             codex_session: None,
             claude_session: None,
+            agent_config_dir: None,
             created_at: chrono::Utc::now(),
         }
     }

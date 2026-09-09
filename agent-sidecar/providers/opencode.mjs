@@ -3,7 +3,7 @@ import { createOpencode } from "@opencode-ai/sdk";
 import {
   genericUsage,
   normalizedImages,
-  packageBinary,
+  installedAgentBinary,
   promptWithHistory,
   providerEnvironment,
   requestsBackgroundExecution,
@@ -20,7 +20,7 @@ const errorMessage = (error) => {
 
 export const runOpenCode = async ({ request, emit, signal, setStopper, setController }) => {
   const environment = providerEnvironment(request);
-  environment.PATH = `${dirname(packageBinary("opencode"))}${delimiter}${environment.PATH || ""}`;
+  environment.PATH = `${dirname(installedAgentBinary("opencode"))}${delimiter}${environment.PATH || ""}`;
   Object.assign(process.env, environment);
   const permission = request.full_access
     ? { edit: "allow", bash: "allow", webfetch: "allow", doom_loop: "allow", external_directory: "allow" }

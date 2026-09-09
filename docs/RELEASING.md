@@ -35,14 +35,16 @@ survive an application restart.
 Use macOS with Xcode command-line tools, the Rust toolchain, Node.js, npm, and
 your Developer ID Application certificate with its private key in the Keychain.
 Packaged apps include the checksum-pinned standalone Node.js 22.23.2 distribution
-(Node, npm/npx, and its license), plus provider dependencies. Users do not install
-Node or provider CLIs globally. On Macs without Git developer tools, the app opens
+(Node and its license), plus integration SDK libraries. Provider CLIs are not
+bundled: users install and update their own Codex, Claude, Gemini, OpenCode, or
+Antigravity CLI. On Macs without Git developer tools, the app opens
 setup settings offering Apple's user-confirmed Command Line Tools installer.
 Provider authentication and repository-specific development tools remain separate.
 
 `scripts/fetch-node` downloads the matching official arm64 or x64 archive and checks
-its pinned SHA-256. Packaging puts the runtime in `Contents/Resources/node`; app
-launch prefers that runtime and child CLI PATHs include its bin directory. The
+its pinned SHA-256. Packaging puts the runtime in `Contents/Resources/node`; the app
+uses that runtime only for its JavaScript bridge. Provider CLIs use the user's
+login-shell PATH; the app does not inject its private Node into terminals. The
 Node executable is signed with its own JIT entitlements; these do not apply to the
 main app. Keep the pinned version/checksums current when shipping security updates.
 
@@ -71,7 +73,7 @@ app-specific password. The profile name is not a secret; its password is.
 ## Build a release
 
 Review third-party redistribution rights before packaging, especially the
-proprietary Claude Agent SDK and runtime. MPL-2.0 does not grant those rights.
+Claude Agent SDK adapter. MPL-2.0 does not grant those rights.
 The explicit acknowledgement below records this prerequisite, not legal clearance.
 
 Commit the intended source and generated frontend assets, then run:
@@ -85,7 +87,8 @@ node scripts/package-release.mjs
 ```
 
 The script requires a clean source tree, calls `./scripts/build-release`, builds
-a fresh `.app`, installs runtime dependencies without npm lifecycle scripts,
+a fresh `.app`, installs integration libraries without npm lifecycle scripts or
+optional provider binaries, rejects accidentally included CLI copies,
 embeds Sparkle, signs nested executables inside out, submits to Apple, saves its
 log, requires `Accepted`, staples the ticket, and creates the update feed and
 source archive. It never publishes to GitHub or changes the repository visibility.

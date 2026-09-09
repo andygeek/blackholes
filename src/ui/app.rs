@@ -45,6 +45,7 @@ use crate::{
             RepositoryPreparation, TaskBranchSource, TaskService,
         },
         terminal::{SharedChild, SharedMasterPty, TerminalService},
+        task_agents::{StartTaskAgentsRequest, TaskAgentRequest, implementation_prompt},
     },
 };
 use anyhow::{Context as _, Result};
@@ -827,6 +828,7 @@ enum AgentRemovalTarget {
 
 pub struct BlackholesApp {
     update_state: crate::services::updater::UpdateState,
+    external_integrations: crate::services::external_integrations::IntegrationStatus,
     paths: AppPaths,
     database: Database,
     app_logo: Arc<gpui::RenderImage>,
@@ -1061,7 +1063,7 @@ impl BlackholesApp {
         if let Err(error) = install_event_bridge(&paths, cx) {
             status = Some((format!("Local AI bridge is unavailable: {error:#}"), true));
         }
-        if let Err(error) = install_agent_command_bridge(&paths, cx) {
+        if let Err(error) = install_agent_command_bridge(&paths, window, cx) {
             status = Some((format!("Agent command bridge is unavailable: {error:#}"), true));
         }
         if let Err(error) = install_codex_session_hooks() {
@@ -1121,6 +1123,7 @@ impl BlackholesApp {
         let navigation_window = window.window_handle();
         let mut app = Self {
             update_state: crate::services::updater::state(),
+            external_integrations: Default::default(),
             paths,
             database,
             app_logo,
@@ -1228,6 +1231,7 @@ impl BlackholesApp {
             app.schedule_default_global_agent(cx);
         }
         app.refresh_model_catalog(false, cx);
+        app.refresh_external_integrations(cx);
         cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(Duration::from_secs(2)).await;
@@ -1242,6 +1246,23 @@ impl BlackholesApp {
             }
         }).detach();
         app
+    }
+
+    fn refresh_external_integrations(&mut self, cx: &mut Context<Self>) {
+        if self.external_integrations.running { return; }
+        self.external_integrations.running = true;
+        let paths = self.paths.clone();
+        self.hydrate_active_workspace_surface(cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                crate::services::external_integrations::synchronize(&paths)
+            }).await;
+            let _ = this.update(cx, |app, cx| {
+                app.external_integrations = result;
+                app.hydrate_active_workspace_surface(cx);
+                cx.notify();
+            });
+        }).detach();
     }
 
     fn sync_update_guard(&self) {
@@ -1554,6 +1575,7 @@ impl BlackholesApp {
                 }
             }
             OrchestratorChatCommand::RefreshRuntimeStatus => self.hydrate_active_workspace_surface(cx),
+            OrchestratorChatCommand::RefreshExternalIntegrations => self.refresh_external_integrations(cx),
             OrchestratorChatCommand::RefreshModelCatalog { force } => self.refresh_model_catalog(force, cx),
             OrchestratorChatCommand::RevealAgentContext { project_only } => {
                 self.reveal_agent_context(project_only, cx);
@@ -2704,6 +2726,7 @@ impl BlackholesApp {
                     "skills": skills,
                     "mcps": mcps,
                     "external_mcp_control_supported": AgentMcpService::supports_external_servers(provider),
+                    "external_integrations": self.external_integrations,
                     "usage_cards": usage_cards,
                     "token_detail": token_detail,
                     "usage_updated": usage_updated,
@@ -12714,6 +12737,7 @@ impl BlackholesApp {
             state: SessionState::Idle,
             codex_session: None,
             claude_session: None,
+            agent_config_dir: None,
             created_at: now,
         };
 
@@ -12755,18 +12779,148 @@ impl BlackholesApp {
             .as_deref() == Some("true")
     }
 
+    fn start_task_agents(
+        &mut self,
+        request: StartTaskAgentsRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value> {
+        request.validate()?;
+        self.reload_external_data(cx);
+        let source = request.source_terminal_id.and_then(|id| {
+            self.session.terminals.iter().find(|terminal| terminal.id == id).cloned()
+        });
+        let source_agent = request.source_agent.or_else(|| source.as_ref().map(|terminal| terminal.agent)
+            .filter(|agent| *agent != AgentKind::Shell));
+        let mut results = Vec::new();
+        for entry in &request.tasks {
+            let result = (|| -> Result<serde_json::Value> {
+                let agent = entry.agent.or(request.agent).or(source_agent)
+                    .filter(|agent| *agent != AgentKind::Shell)
+                    .context("Could not detect the calling agent. Specify agent: codex, claude, gemini, or opencode")?;
+                let config_dir = if Some(agent) == source_agent {
+                    request.source_config_dir.clone()
+                        .or_else(|| source.as_ref().filter(|terminal| terminal.agent == agent)
+                            .and_then(|terminal| terminal.agent_config_dir.clone()))
+                        .or_else(|| {
+                            let terminal = source.as_ref()?;
+                            let home = std::env::var_os("HOME").map(PathBuf::from)?;
+                            match agent {
+                                AgentKind::Codex if terminal.codex_session.as_ref().is_some_and(|session| session.profile == crate::model::CodexProfile::Work) => Some(home.join(".codex-work")),
+                                AgentKind::Claude if terminal.claude_session.as_ref().is_some_and(|session| session.profile == crate::model::ClaudeProfile::Work) => Some(home.join(".claude-work")),
+                                _ => None,
+                            }
+                        })
+                } else { None };
+                self.start_task_terminal(entry, agent, config_dir, request.source_terminal_id, window, cx)
+            })();
+            results.push(result.unwrap_or_else(|error| serde_json::json!({
+                "taskId": entry.task_id, "started": false, "reused": false, "error": format!("{error:#}"),
+            })));
+        }
+        self.persist_session();
+        self.hydrate_navigation(cx);
+        cx.notify();
+        Ok(serde_json::json!({
+            "accepted": true,
+            "startedCount": results.iter().filter(|result| result["started"] == true).count(),
+            "reusedCount": results.iter().filter(|result| result["reused"] == true).count(),
+            "failedCount": results.iter().filter(|result| result.get("error").is_some()).count(),
+            "results": results,
+        }))
+    }
+
+    fn start_task_terminal(
+        &mut self,
+        request: &TaskAgentRequest,
+        agent: AgentKind,
+        config_dir: Option<PathBuf>,
+        source_terminal_id: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value> {
+        let task = self.tasks.iter().find(|task| task.id == request.task_id)
+            .cloned().context("The task does not exist")?;
+        if let Some(existing) = self.session.terminals.iter().find(|terminal| {
+            terminal.task_id == Some(task.id) && terminal.agent == agent
+                && terminal.state != SessionState::Exited && self.terminals.contains_key(&terminal.id)
+        }) {
+            // Retrying an acknowledged/ambiguous request must not submit the work twice.
+            return Ok(serde_json::json!({
+                "taskId": task.id, "terminalId": existing.id, "agent": agent,
+                "started": false, "reused": true,
+                "message": if source_terminal_id == Some(existing.id) {
+                    "This terminal already owns the task. Implement here; do not delegate to yourself."
+                } else { "A terminal for this task and agent is already open. No prompt was resubmitted." },
+            }));
+        }
+        if task.repositories.is_empty() || task.repositories.iter().any(|repository| !repository.worktree_path.is_dir()) {
+            anyhow::bail!("The task needs its attached worktrees before an agent can start");
+        }
+        let prompt = implementation_prompt(&task, request.prompt.as_deref())?;
+        let descriptor = TerminalDescriptor {
+            id: Uuid::new_v4(), workspace_id: task.workspace_id,
+            task_id: Some(task.id), repository_id: None, agent,
+            label: format!("{} · {}", agent.label(), task.title),
+            cwd: task.worktree_root_path.clone(), state: SessionState::Idle,
+            codex_session: None, claude_session: None, agent_config_dir: config_dir,
+            created_at: Utc::now(),
+        };
+        self.spawn_terminal_view_with_prompt(&descriptor, Some(&prompt), window, cx)?;
+        let tab_id = Uuid::new_v4();
+        let dock = self.session.docks.entry(dock_key(task.workspace_id, Some(task.id), None)).or_default();
+        dock.tabs.push(DockTab {
+            id: tab_id, title: descriptor.label.clone(),
+            root: DockNode::Panel { terminal_id: descriptor.id }, active_terminal_id: descriptor.id,
+        });
+        dock.active_tab_id = Some(tab_id);
+        self.session.terminals.push(descriptor.clone());
+        insert_unique(&mut self.session.expanded_workspace_ids, task.workspace_id);
+        insert_unique(&mut self.session.expanded_task_ids, task.id);
+        self.add_task_session(&descriptor);
+        // Keep the caller's selection and terminal focused while all tasks launch.
+        let persistence_warning = self.tasks.iter().find(|task| task.id == request.task_id)
+            .map(|task| self.database.upsert_task(task))
+            .unwrap_or(Ok(()))
+            .and_then(|_| self.database.save_session(&self.session))
+            .err().map(|error| format!("Terminal started but session persistence failed: {error:#}"));
+        self.app_toasts.push(AppToast {
+            target: AppToastTarget::Terminal { terminal_id: descriptor.id, agent },
+            title: format!("{} · {}", agent.label(), task.title),
+            message: self.tr("Task terminal started. Click to follow its work.", "Terminal de la tarea iniciada. Haz clic para seguir el trabajo.").into(),
+        });
+        Ok(serde_json::json!({
+            "taskId": task.id, "terminalId": descriptor.id, "agent": agent,
+            "cwd": descriptor.cwd, "started": true, "reused": false,
+            "skipPermissions": self.project_terminal_skip_permissions(task.workspace_id),
+            "warning": persistence_warning,
+            "message": "Terminal launched with the task prompt. Provider authentication or first-run setup, if needed, is visible in that terminal.",
+        }))
+    }
+
     fn spawn_terminal_view(
         &mut self,
         descriptor: &TerminalDescriptor,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
+        self.spawn_terminal_view_with_prompt(descriptor, None, window, cx)
+    }
+
+    fn spawn_terminal_view_with_prompt(
+        &mut self,
+        descriptor: &TerminalDescriptor,
+        prompt: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         if self.terminals.contains_key(&descriptor.id) {
             return Ok(());
         }
-        let spawned = TerminalService.spawn(
+        let spawned = TerminalService.spawn_with_prompt(
             descriptor,
             self.project_terminal_skip_permissions(descriptor.workspace_id),
+            prompt,
         )?;
         let master = spawned.master.clone();
         let master_for_resize = spawned.master.clone();
@@ -19108,20 +19262,28 @@ fn toggle_id(ids: &mut Vec<Uuid>, id: Uuid) {
     }
 }
 
-fn install_agent_command_bridge(paths: &AppPaths, cx: &mut Context<BlackholesApp>) -> Result<()> {
+fn install_agent_command_bridge(paths: &AppPaths, window: &Window, cx: &mut Context<BlackholesApp>) -> Result<()> {
     let receiver = crate::services::agent_commands::listen(paths)?;
+    let window_handle = window.window_handle();
     cx.spawn(async move |this, cx| {
         while let Ok(command) = receiver.recv_async().await {
-            let response = this.update(cx, |app, cx| -> Result<bool> {
-                let payload = command.message.strip_prefix("agent-handoff:")
-                    .ok_or_else(|| anyhow::anyhow!("Unsupported agent command"))?;
-                let payload = serde_json::from_str::<AgentHandoffPayload>(payload)?;
-                app.handle_agent_handoff(payload, cx)
-            });
+            let response = if let Some(payload) = command.message.strip_prefix("start-task-agents:") {
+                window_handle.update(cx, |_, window, cx| {
+                    this.update(cx, |app, cx| -> Result<serde_json::Value> {
+                        app.start_task_agents(serde_json::from_str(payload)?, window, cx)
+                    })
+                }).and_then(|result| result)
+            } else {
+                this.update(cx, |app, cx| -> Result<serde_json::Value> {
+                    let payload = command.message.strip_prefix("agent-handoff:")
+                        .ok_or_else(|| anyhow::anyhow!("Unsupported agent command"))?;
+                    let payload = serde_json::from_str::<AgentHandoffPayload>(payload)?;
+                    let started = app.handle_agent_handoff(payload, cx)?;
+                    Ok(serde_json::json!({ "accepted": true, "started": started, "queued": !started }))
+                })
+            };
             let response = match response {
-                Ok(Ok(started)) => serde_json::json!({
-                    "accepted": true, "started": started, "queued": !started,
-                }),
+                Ok(Ok(response)) => response,
                 Ok(Err(error)) => serde_json::json!({ "accepted": false, "error": error.to_string() }),
                 Err(_) => serde_json::json!({ "accepted": false, "error": "The app closed before handling the command" }),
             };

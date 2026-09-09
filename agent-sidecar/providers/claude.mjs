@@ -1,6 +1,7 @@
 import { forkSession, getSessionMessages, query } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import {
+  installedAgentBinary,
   normalizedImages,
   numberOrZero,
   promptWithHistory,
@@ -225,6 +226,7 @@ export const runClaude = async ({ request, emit, signal, setStopper, setControll
   );
 
   const options = {
+    pathToClaudeCodeExecutable: installedAgentBinary("claude"),
     cwd: request.cwd,
     additionalDirectories: request.additional_directories || [],
     mcpServers: { blackholes: {

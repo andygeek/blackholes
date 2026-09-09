@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { delimiter, dirname } from "node:path";
 import { JsonRpcProcess } from "./json-rpc.mjs";
-import { packageBinary, providerEnvironment } from "./runtime.mjs";
+import { installedAgentBinary, providerEnvironment } from "./runtime.mjs";
 
 // Metadata only. No prompt, generation, tool call or interactive authentication.
 // Run in a dedicated process so account environments never leak between providers.
@@ -22,6 +22,7 @@ async function claudeModels() {
   let finish;
   const input = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(resolve => { finish = resolve; }) }) };
   const agent = query({ prompt: input, options: {
+    pathToClaudeCodeExecutable: installedAgentBinary("claude"),
     cwd: request.cwd, env: environment, persistSession: false,
     settingSources: ["user", "project", "local"], tools: [], mcpServers: {},
     strictMcpConfig: true, abortController: abort, stderr: () => {},
@@ -34,7 +35,7 @@ async function claudeModels() {
 }
 
 function rpcProvider(binary, args) {
-  const child = spawn(packageBinary(binary), args, {
+  const child = spawn(installedAgentBinary(binary), args, {
     cwd: request.cwd, env: environment, stdio: ["pipe", "pipe", "pipe"], signal: abort.signal,
   });
   const rpc = new JsonRpcProcess(child, {
@@ -88,7 +89,7 @@ async function geminiModels() {
 
 async function openCodeModels() {
   Object.assign(process.env, environment, {
-    PATH: `${dirname(packageBinary("opencode"))}${delimiter}${environment.PATH || ""}`,
+    PATH: `${dirname(installedAgentBinary("opencode"))}${delimiter}${environment.PATH || ""}`,
   });
   const { createOpencode } = await import("@opencode-ai/sdk/v2");
   const runtime = await createOpencode({ signal: abort.signal, timeout: 15_000, port: 0,

@@ -115,6 +115,19 @@ export interface SettingsData {
   skills: SkillItem[];
   mcps: McpItem[];
   external_mcp_control_supported: boolean;
+  external_integrations?: {
+    running: boolean;
+    install_required: boolean;
+    error?: string | null;
+    profiles: Array<{
+      client: string;
+      config_path: string;
+      configured: boolean;
+      changed: boolean;
+      error?: string | null;
+      skill_warning?: string | null;
+    }>;
+  };
   usage_cards: UsageCard[];
   token_detail: string;
   usage_updated: string;
@@ -654,7 +667,7 @@ function SettingsView({ data }: { data: SettingsData }) {
   const providerControl = <PreferenceSelect label={t(language, "Agent provider", "Proveedor del agente")}
     choices={providers} value={data.provider} onChange={(provider) => postNative({ type: "set_agent_provider", provider })} />;
   const providerRow = <PreferenceRow title={t(language, "Agent provider", "Proveedor del agente")}
-    description={t(language, "Choose the active runtime for upcoming responses.", "Elige el motor activo para las próximas respuestas.")}>{providerControl}</PreferenceRow>;
+    description={t(language, "Uses the CLI installed on your computer. Install and update your chosen agent with its own tools.", "Usa el CLI instalado en tu computadora. Instala y actualiza el agente elegido con sus propias herramientas.")}>{providerControl}</PreferenceRow>;
 
   const pages: Array<{ id: PreferencePage; label: string; description: string; icon: LucideIcon; keywords: string; badge?: number; content: React.ReactNode }> = [
     {
@@ -664,8 +677,8 @@ function SettingsView({ data }: { data: SettingsData }) {
       content: <>
         {!data.git_available && <PreferenceGroup title={t(language, "Finish setup", "Completar instalación")}>
           <PreferenceRow title={t(language, "Git tools", "Herramientas de Git")} description={t(language,
-            "Node and the agent runtimes are included in the app. Cloning repositories also requires Apple's Command Line Tools. Install them, then check again.",
-            "Node y los motores de agentes vienen incluidos en la app. Para clonar repositorios también necesitas las herramientas de Apple. Instálalas y vuelve a comprobar.")}>
+            "Cloning repositories requires Apple's Command Line Tools. Install them, then check again.",
+            "Para clonar repositorios necesitas las herramientas de Apple. Instálalas y vuelve a comprobar.")}>
             <div className="inline-actions">
               <button className="workspace-button" type="button" onClick={() => postNative({ type: "install_git_tools" })}>{t(language, "Install Git tools", "Instalar herramientas de Git")}</button>
               <button className="workspace-button" type="button" onClick={() => postNative({ type: "refresh_runtime_status" })}>{t(language, "Check again", "Comprobar de nuevo")}</button>
@@ -841,6 +854,27 @@ function SettingsView({ data }: { data: SettingsData }) {
       keywords: "mcp servers servidores conexiones integrations integraciones " + data.mcps.map((mcp) => mcp.name + " " + mcp.source).join(" "),
       content: <>
         <div className="preference-toolbar"><span>{data.provider_label}</span><button className="workspace-button" type="button" onClick={() => setActivePage("accounts")}>{t(language, "Manage account", "Administrar cuenta")}</button></div>
+        <PreferenceGroup title={t(language, "Blackholes in your terminal agents", "Blackholes en tus agentes de terminal")}>
+          <PreferenceRow title={t(language, "Automatic connection", "Conexión automática")} description={t(language,
+            "Blackholes prepares its MCP connection for Codex and Claude Code when the app opens, including after updates. It can prepare the connection before you install either CLI. Open a new agent session to use it.",
+            "Blackholes prepara su conexión MCP para Codex y Claude Code al abrir la app, también después de actualizar. Puede preparar la conexión antes de que instales los CLI. Abre una nueva sesión del agente para usarla.")}>
+            <button type="button" className="workspace-button" disabled={data.external_integrations?.running}
+              onClick={() => postNative({ type: "refresh_external_integrations" })}>
+              <RefreshCw size={14} />{data.external_integrations?.running ? t(language, "Preparing…", "Preparando…") : t(language, "Refresh connection", "Actualizar conexión")}
+            </button>
+          </PreferenceRow>
+          {data.external_integrations?.install_required && <p className="preference-footnote" role="status">{t(language,
+            "Move Blackholes to Applications and open it there to finish connecting your terminal agents.",
+            "Mueve Blackholes a Aplicaciones y ábrelo desde allí para terminar de conectar tus agentes de terminal.")}</p>}
+          {data.external_integrations?.error && <p className="preference-footnote" role="status">{data.external_integrations.error}</p>}
+          {data.external_integrations?.profiles.map((profile) => <PreferenceRow key={profile.config_path} title={profile.client}
+            description={<>
+              {(profile.error || profile.skill_warning) && <span>{profile.error || profile.skill_warning}</span>}
+              <details className="preference-item-details"><summary>{t(language, "Configuration location", "Ubicación de la configuración")}</summary><code>{profile.config_path}</code></details>
+            </>}>
+            <span className="preference-value">{profile.configured ? t(language, "Configured", "Configurado") : t(language, "Needs attention", "Requiere atención")}</span>
+          </PreferenceRow>)}
+        </PreferenceGroup>
         <p className="preference-footnote">{data.external_mcp_control_supported
           ? t(language, "Blackholes is built in and always enabled. Manage project-specific installations in project settings.", "Blackholes está integrado y siempre activo. Administra las instalaciones específicas en la configuración del proyecto.")
           : t(language, "This adapter currently exposes only the built-in Blackholes MCP.", "Este adaptador actualmente expone solo el MCP integrado de Blackholes.")}</p>
@@ -1003,7 +1037,7 @@ function ProjectSettingsView({ data }: { data: ProjectSettingsData }) {
         {activeTab === "terminals" && (
           <div className="settings-tab-panel">
             <SettingsSection wide title={t(language, "Agent permissions", "Permisos de agentes")}
-              description={t(language, "For agents launched or restored by Blackholes in this project and its tasks.", "Para los agentes que Blackholes inicia o restaura en este proyecto y sus tareas.")}>
+              description={t(language, "For terminal agents launched or restored in this project and its tasks, including parallel launches through MCP.", "Para los agentes de terminal que se inician o restauran en este proyecto y sus tareas, incluidos los inicios en paralelo por MCP.")}>
               <label className="project-terminal-permissions">
                 <input type="checkbox" checked={Boolean(data.terminal_skip_permissions)}
                   aria-describedby="terminal-permissions-description"

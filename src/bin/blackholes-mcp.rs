@@ -1,11 +1,12 @@
 use anyhow::{Context, Result, bail};
 use blackholes_rust::{
-    model::{ProjectTask, Workspace, WorkspaceColor},
+    model::{AgentKind, ProjectTask, Workspace, WorkspaceColor},
     paths::AppPaths,
     services::{
         database::Database,
         notes::{PROJECT_NOTE_FILE_NAME, ProjectNoteService, TASK_NOTE_FILE_NAME, TaskNoteService},
         projects::ProjectService,
+        task_agents::{StartTaskAgentsRequest, TaskAgentRequest, detect_agent},
         tasks::{
             AddTaskRepositoriesRequest, CreateTaskRequest, ExistingBranchAction,
             RemoveTaskRepositoriesRequest, RepositoryPreparation, TaskBranchSource, TaskService,
@@ -30,7 +31,7 @@ fn main() -> Result<()> {
 pub fn run() -> Result<()> {
     let paths = AppPaths::discover()?;
     let database = Database::open(&paths)?;
-    let mut server = McpServer { paths, database };
+    let mut server = McpServer { paths, database, client_agent: None };
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let stdout = io::stdout();
@@ -62,6 +63,7 @@ const AGENT_HANDOFF_PROMPT_LIMIT: usize = 16_000;
 struct McpServer {
     paths: AppPaths,
     database: Database,
+    client_agent: Option<AgentKind>,
 }
 
 impl McpServer {
@@ -71,15 +73,19 @@ impl McpServer {
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
-            "initialize" => Ok(json!({
+            "initialize" => {
+                self.client_agent = request.pointer("/params/clientInfo/name")
+                    .and_then(Value::as_str).and_then(detect_agent);
+                Ok(json!({
                 "protocolVersion": request
                     .pointer("/params/protocolVersion")
                     .and_then(Value::as_str)
                     .unwrap_or("2025-06-18"),
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "blackholes-rust", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Blackholes is a local project and task manager exposed through this MCP. At the beginning of every Black Bot turn, call get_current_context before any other tool to verify that this required MCP is available. Whenever the user says \"in Blackholes\" or asks Blackholes to create or manage a project, repository, task, branch, worktree, note, agent handoff, navigation, or notification, use this MCP before filesystem, browser, or Computer Use tools. Never use Computer Use for an operation exposed by this server. When the user asks to create a project and provides only its name, call create_project with that name immediately; do not ask for a path or technology because the tool prepares the project container, Git repository, initial commit, and managed context automatically. When the user explicitly provides an existing local path, pass it to create_project to link its repositories to a new project container. Local sources stay in place, including pending changes and local environments. Linking does not edit files, but subsequent project work changes the originals. Global and project agents may inspect, review, edit, build, and test directly in the intended project repositories; tasks, isolated worktrees, and delegation are optional, not prerequisites. Resolve the intended project and repositories, respect user-authored project instructions and selected permissions, and preserve unrelated changes. Use isolated tasks when the user requests them, selects an existing task, or their project instructions require that workflow. A request to create a task and start or implement it is sufficient authorization: global/project agents must create it then immediately call handoff_to_agent with the returned taskId before implementation in the worktree. Do not ask for redundant delegation approval. Creating a task alone does not authorize execution. Ask only when execution intent or destination is unclear. The receiving task agent implements directly without recreating the task or handing it back. For implementation without a requested task, the global agent normally hands off to the project agent with projectId; that project agent works directly. Honor explicit requests to work here or not delegate. Do not require an isolation opt-out. When working in a task, change its attached worktrees rather than original checkouts. If delegating, use handoff_to_agent with projectId for direct project work or taskId for isolated work; after a successful handoff, the sender stops the delegated work and reports the transfer. Use search tools before asking for IDs. Read details before mutations. When a task must start from a specific base, such as a repository whose task branch does not exist yet, pass baseBranch to create_task or add_task_repositories instead of relying on whatever branch the repository has checked out. remove_task_repositories undoes a wrong add: it deletes those worktrees and keeps their branches unless deleteBranch is true. delete_task is destructive and requires explicit confirmation; it refuses active terminals or uncommitted worktree changes. The task agent that owns implementation finishes with notify_task_ready as its last tool call after black-bot completes. When the user asks to open, go to, or show a Blackholes task or project, call open_task or open_project; the app adds a persistent clickable navigation card to the current answer and changes view only when the user clicks it. Never use these navigation tools merely to announce work."
-            })),
+                "instructions": "Blackholes is a local project and task manager exposed through this MCP. At the beginning of every Black Bot turn, call get_current_context before any other tool to verify that this required MCP is available. Whenever the user says \"in Blackholes\" or asks Blackholes to create or manage a project, repository, task, branch, worktree, note, agent handoff, navigation, or notification, use this MCP before filesystem, browser, or Computer Use tools. Never use Computer Use for an operation exposed by this server. When the user asks to create a project and provides only its name, call create_project with that name immediately; do not ask for a path or technology because the tool prepares the project container, Git repository, initial commit, and managed context automatically. When the user explicitly provides an existing local path, pass it to create_project to link its repositories to a new project container. Local sources stay in place, including pending changes and local environments. Linking does not edit files, but subsequent project work changes the originals. Global and project agents may inspect, review, edit, build, and test directly in the intended project repositories; tasks, isolated worktrees, and delegation are optional, not prerequisites. Resolve the intended project and repositories, respect user-authored project instructions and selected permissions, and preserve unrelated changes. Use isolated tasks when the user requests them, selects an existing task, or their project instructions require that workflow. Creating implementation tasks launches visible terminal agents automatically: create_task defaults startAgent to true, detects the calling provider, and applies the project permission setting. Include user constraints in agentPrompt or the task note. To prepare a whole batch first, pass startAgent:false to every create_task, then call start_task_agents once with all taskIds and briefs. Use handoff_to_agent only for explicitly requested built-in Black Bots or global-to-project handoffs. Do not ask for redundant delegation approval. For planning-only requests, backlog preparation, or explicit instructions not to start, pass startAgent:false and do not call start_task_agents. Ask only when the requested work or destination is unclear. The receiving task agent implements directly without recreating the task or handing it back. For implementation without a requested task, the global agent normally hands off to the project agent with projectId; that project agent works directly. Honor explicit requests to work here or not delegate. Do not require an isolation opt-out. When working in a task, change its attached worktrees rather than original checkouts. For built-in Black Bots, use handoff_to_agent with projectId for project work or taskId for isolated work; after a successful handoff, the sender stops the delegated work and reports the transfer. Use search tools before asking for IDs. Read details before mutations. When a task must start from a specific base, such as a repository whose task branch does not exist yet, pass baseBranch to create_task or add_task_repositories instead of relying on whatever branch the repository has checked out. remove_task_repositories undoes a wrong add: it deletes those worktrees and keeps their branches unless deleteBranch is true. delete_task is destructive and requires explicit confirmation; it refuses active terminals or uncommitted worktree changes. Terminal agents launched with start_task_agents show progress and results in their terminals; do not require completion notifications. A built-in Black Bot that owns task implementation finishes with notify_task_ready as its last tool call after black-bot completes. When the user asks to open, go to, or show a Blackholes task or project, call open_task or open_project; the app adds a persistent clickable navigation card to the current answer and changes view only when the user clicks it. Never use these navigation tools merely to announce work."
+                }))
+            },
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tool_definitions() })),
             "tools/call" => {
@@ -102,7 +108,10 @@ impl McpServer {
 
     fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<Value> {
         match name {
-            "get_current_context" => self.get_current_context(arguments),
+            "get_current_context" => self.get_current_context(arguments).map(|mut context| {
+                context["callerAgent"] = json!(self.calling_agent());
+                context
+            }),
             "search_projects" => self.search_projects(arguments),
             "list_projects" => Ok(serde_json::to_value(self.database.workspaces()?)?),
             "get_project" => self.get_project(arguments),
@@ -127,6 +136,7 @@ impl McpServer {
             "write_task_note" => self.write_task_note(arguments),
             "append_task_note" => self.append_task_note(arguments),
             "handoff_to_agent" => self.handoff_to_agent(arguments),
+            "start_task_agents" => self.start_task_agents(arguments),
             "open_project" => self.open_project(arguments),
             "open_task" => self.open_task(arguments),
             "notify_task_ready" => self.notify_task_ready(arguments),
@@ -592,6 +602,19 @@ impl McpServer {
     }
 
     fn create_task(&self, arguments: &Value) -> Result<Value> {
+        let start_agent = arguments.get("startAgent")
+            .map(|value| value.as_bool().context("startAgent must be a boolean"))
+            .transpose()?.unwrap_or(true);
+        let mut launch_task = TaskAgentRequest {
+            task_id: Uuid::nil(),
+            agent: arguments.get("agent").cloned().map(serde_json::from_value).transpose()?,
+            prompt: arguments.get("agentPrompt").cloned().map(serde_json::from_value).transpose()?,
+        };
+        // Reject invalid launch options before creating any worktrees.
+        StartTaskAgentsRequest {
+            tasks: vec![launch_task.clone()], agent: None, source_agent: None,
+            source_terminal_id: None, source_config_dir: None,
+        }.validate()?;
         let project_id = required_uuid(arguments, "projectId")?;
         let project = find_workspace(&self.database.workspaces()?, project_id)?.clone();
         let mut repository_ids = optional_uuid_list(arguments, "repositoryIds")?;
@@ -685,7 +708,16 @@ impl McpServer {
             Some(task.id),
             format!("{} / {}", project.label(), task.title),
         )?;
-        Ok(serde_json::to_value(task)?)
+        launch_task.task_id = task.id;
+        let mut response = serde_json::to_value(task)?;
+        response["agentStartRequested"] = start_agent.into();
+        if start_agent {
+            // Creation succeeded even if the app/CLI cannot launch. Return both
+            // outcomes so a client retries the existing task, never its creation.
+            response["agentLaunch"] = self.start_task_agents(&json!({ "tasks": [launch_task] }))
+                .unwrap_or_else(|error| json!({ "accepted": false, "error": format!("{error:#}") }));
+        }
+        Ok(response)
     }
 
     fn update_task(&self, arguments: &Value) -> Result<Value> {
@@ -1060,6 +1092,42 @@ impl McpServer {
         }))
     }
 
+    fn calling_agent(&self) -> Option<AgentKind> {
+        self.client_agent.or_else(|| {
+            ["BLACKHOLES_AGENT_PROVIDER", "BLACKHOLES_AGENT"].iter()
+                .filter_map(|key| std::env::var(key).ok())
+                .find_map(|value| detect_agent(&value))
+        })
+    }
+
+    fn start_task_agents(&self, arguments: &Value) -> Result<Value> {
+        let source_agent = self.calling_agent();
+        let profile_variable = match source_agent {
+            Some(AgentKind::Codex) => Some("CODEX_HOME"),
+            Some(AgentKind::Claude) => Some("CLAUDE_CONFIG_DIR"),
+            Some(AgentKind::Gemini) => Some("GEMINI_CLI_HOME"),
+            _ => None,
+        };
+        let environment_agent = std::env::var("BLACKHOLES_AGENT_PROVIDER").ok()
+            .and_then(|value| detect_agent(&value));
+        let source_config_dir = (source_agent.is_some() && source_agent == environment_agent)
+            .then(|| std::env::var("BLACKHOLES_AGENT_CONFIG_DIR").ok()).flatten()
+            .filter(|path| !path.is_empty())
+            .or_else(|| profile_variable.and_then(|key| std::env::var(key).ok()))
+            .filter(|path| !path.is_empty()).map(PathBuf::from);
+        let request = StartTaskAgentsRequest {
+            tasks: serde_json::from_value(arguments.get("tasks").cloned().context("Missing tasks")?)?,
+            agent: arguments.get("agent").cloned().map(serde_json::from_value).transpose()?,
+            source_agent,
+            source_terminal_id: std::env::var("BLACKHOLES_TERMINAL_ID").ok()
+                .and_then(|value| Uuid::parse_str(&value).ok()),
+            source_config_dir,
+        };
+        request.validate()?;
+        let payload = serde_json::to_string(&request)?;
+        blackholes_rust::services::agent_commands::send(&self.paths, &format!("start-task-agents:{payload}"))
+    }
+
     fn notify_task_ready(&self, arguments: &Value) -> Result<Value> {
         let task_id = required_uuid(arguments, "taskId")?;
         let tasks = self.database.all_tasks()?;
@@ -1165,8 +1233,8 @@ fn tool_definitions() -> Vec<Value> {
         ),
         write_tool(
             "create_task",
-            "Create a transactional isolated Git worktree task and optional developer note when the user chooses a task-based workflow. Tasks are optional; direct project work does not require this tool. Returns task metadata and writable worktree paths. Pass `branch` exactly as the branch is spelled on the remote, casing included, when continuing existing work such as a pull request head; it is only normalized when omitted and derived from the title. Pass `baseBranch` to root a new branch in a specific base such as master instead of whatever each repository has checked out. If a global/project agent was asked to create and start/implement the task, immediately call handoff_to_agent with the returned task id and a self-contained implementation brief before starting repository implementation. That request already authorizes delegation; no extra confirmation is needed. If asked only to create it, do not start implementation. The receiving task agent works in the returned worktrees without recreating or redelegating the task. The app automatically adds a task navigation card. The agent completing the task calls notify_task_ready.",
-            json!({"type":"object","properties":{"projectId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"branch":{"type":"string"},"branchSource":{"type":"string","enum":["current","local","remote"]},"baseBranch":{"type":"string","description":"Branch, tag or revision to create the task branch from when it does not exist yet, such as master or origin/release/2026-08. Resolved per repository against origin first, then local refs, then tags and raw revisions; origin is fetched first. A repository where the task branch already exists keeps that branch and ignores this. Omit to branch from whatever each repository has checked out."},"createMissingBranch":{"type":"boolean"},"replaceDivergentLocalBranches":{"type":"boolean"},"existingBranchAction":{"type":"string","enum":["reuse","recreate"]},"repositoryIds":{"type":"array","items":{"type":"string"}},"copyLocalChanges":{"type":"boolean"},"copyEnvironmentFiles":{"type":"boolean"},"setupCommand":{"type":"string"},"developerContext":{"type":"string","maxLength":2000}},"required":["projectId","title"]}),
+            "Create a transactional isolated Git worktree task and optional developer note when the user chooses a task-based workflow. Tasks are optional; direct project work does not require this tool. Returns task metadata and writable worktree paths. Pass `branch` exactly as the branch is spelled on the remote, casing included, when continuing existing work such as a pull request head; it is only normalized when omitted and derived from the title. Pass `baseBranch` to root a new branch in a specific base such as master instead of whatever each repository has checked out. By default, also launch a visible terminal agent with the task brief, the calling provider, and the project permission setting (startAgent:true). agentPrompt carries implementation instructions and user constraints; it defaults to the description/title and task note. Set startAgent:false for planning-only/backlog requests, explicit instructions not to execute, or when preparing all tasks before a single start_task_agents batch. For built-in Black Bots, create with startAgent:false and use handoff_to_agent. Read agentLaunch: task creation can succeed while launching fails; retry the existing task ID with start_task_agents instead of creating it again. An accepted launch needs no second handoff. The receiving agent works in the returned worktrees without recreating or redelegating the task and shows results in its terminal; no completion notification is required. The app automatically adds a task navigation card.",
+            json!({"type":"object","properties":{"projectId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"branch":{"type":"string"},"branchSource":{"type":"string","enum":["current","local","remote"]},"baseBranch":{"type":"string","description":"Branch, tag or revision to create the task branch from when it does not exist yet, such as master or origin/release/2026-08. Resolved per repository against origin first, then local refs, then tags and raw revisions; origin is fetched first. A repository where the task branch already exists keeps that branch and ignores this. Omit to branch from whatever each repository has checked out."},"createMissingBranch":{"type":"boolean"},"replaceDivergentLocalBranches":{"type":"boolean"},"existingBranchAction":{"type":"string","enum":["reuse","recreate"]},"repositoryIds":{"type":"array","items":{"type":"string"}},"copyLocalChanges":{"type":"boolean"},"copyEnvironmentFiles":{"type":"boolean"},"setupCommand":{"type":"string"},"developerContext":{"type":"string","maxLength":2000},"startAgent":{"type":"boolean","default":true,"description":"Launch the task agent immediately. Set false for planning/backlog-only requests or to defer execution for a batch."},"agent":{"type":"string","enum":["codex","claude","gemini","opencode"]},"agentPrompt":{"type":"string","minLength":1,"maxLength":16000}},"required":["projectId","title"]}),
         ),
         write_tool(
             "update_task",
@@ -1215,8 +1283,22 @@ fn tool_definitions() -> Vec<Value> {
         ),
         write_tool(
             "handoff_to_agent",
-            "Transfer implementation ownership to a persistent user-visible Black Bot and start it immediately in the destination project or isolated task. Use this immediately after creation when a global/project agent is asked to create a task and start/implement it; that wording is sufficient authorization and does not require another confirmation. Also use it to start an existing task from a global/project chat, or for global-to-project implementation without creating a task. Honor explicit requests not to delegate. Do not delegate for creation-only or planning-only requests, and do not hand off to yourself when already the receiving task/project agent. Carry over all user constraints, including limits on tests, servers and remote writes. If delivery fails, report that the handoff did not start rather than silently implementing in the sender. Provide exactly one of projectId or taskId. `prompt` must be the self-contained work instruction for the receiving agent, including relevant decisions and acceptance criteria; do not pass the orchestration request (for example, do not tell a task agent to create the task that already exists). The desktop keeps the current chat open and shows a clickable Black Bot toast that opens the receiving agent. This is a true handoff: after it succeeds, do not perform the delegated implementation in the sending session.",
+            "Transfer implementation ownership to a persistent user-visible Black Bot and start it immediately in the destination project or isolated task. For native terminal agents or parallel task execution, use start_task_agents instead. Use this after creation when a global/project agent is explicitly asked to start a built-in Black Bot; that wording is sufficient authorization and does not require another confirmation. Also use it to start an existing task from a global/project chat, or for global-to-project implementation without creating a task. Honor explicit requests not to delegate. Do not delegate for creation-only or planning-only requests, and do not hand off to yourself when already the receiving task/project agent. Carry over all user constraints, including limits on tests, servers and remote writes. If delivery fails, report that the handoff did not start rather than silently implementing in the sender. Provide exactly one of projectId or taskId. `prompt` must be the self-contained work instruction for the receiving agent, including relevant decisions and acceptance criteria; do not pass the orchestration request (for example, do not tell a task agent to create the task that already exists). The desktop keeps the current chat open and shows a clickable Black Bot toast that opens the receiving agent. This is a true handoff: after it succeeds, do not perform the delegated implementation in the sending session.",
             json!({"type":"object","properties":{"projectId":{"type":"string"},"taskId":{"type":"string"},"prompt":{"type":"string","minLength":1,"maxLength":16000},"title":{"type":"string","maxLength":80},"message":{"type":"string","maxLength":200}},"required":["prompt"],"oneOf":[{"required":["projectId"]},{"required":["taskId"]}]}),
+        ),
+        write_tool(
+            "start_task_agents",
+            "Start coding agents in visible native Blackholes terminals for 1–8 existing tasks. Use to launch tasks created with startAgent:false, start existing implementation tasks, or retry a failed launch. For a batch, create all tasks with startAgent:false, then submit them together here. Do not launch tasks that the user explicitly asked to only plan or leave unstarted. Each terminal starts in its task's isolated workspace with an initial implementation prompt and the owning project's terminal permission setting. Agent selection is per-task agent, then batch agent, then the detected calling provider (Codex, Claude, Gemini, OpenCode); other clients must specify one of these providers if detection is unavailable or unsupported. Prompt defaults to the task description/title, with instructions to read its note; include all user constraints in a custom prompt. The terminal remains available for interaction, and the calling chat stays open. Returns per-task started/reused/error results; one failure does not hide successful launches. An existing live terminal for the same task/provider is reused without resubmitting the prompt. started means the terminal was launched, not that authentication/setup or the task has completed. Do not execute delegated tasks yourself or start them again via handoff_to_agent. This tool starts terminal agents; handoff_to_agent starts built-in Black Bots.",
+            json!({"type":"object","additionalProperties":false,"properties":{
+                "agent":{"type":"string","enum":["codex","claude","gemini","opencode"]},
+                "tasks":{"type":"array","minItems":1,"maxItems":8,"items":{
+                    "type":"object","additionalProperties":false,"properties":{
+                        "taskId":{"type":"string","format":"uuid"},
+                        "prompt":{"type":"string","minLength":1,"maxLength":16000},
+                        "agent":{"type":"string","enum":["codex","claude","gemini","opencode"]}
+                    },"required":["taskId"]
+                }}
+            },"required":["tasks"]}),
         ),
         write_tool(
             "open_project",

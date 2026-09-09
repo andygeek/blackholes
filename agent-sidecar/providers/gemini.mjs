@@ -5,7 +5,7 @@ import { JsonRpcProcess } from "../json-rpc.mjs";
 import {
   genericUsage,
   normalizedImages,
-  packageBinary,
+  installedAgentBinary,
   promptWithHistory,
   providerEnvironment,
   requestsBackgroundExecution,
@@ -41,7 +41,7 @@ export const runGemini = async ({ request, emit, signal, setStopper, setControll
     ...(request.skills_plugin_path ? [request.skills_plugin_path] : []),
   ]) args.push("--include-directories", directory);
 
-  const child = spawn(packageBinary("gemini"), args, {
+  const child = spawn(installedAgentBinary("gemini"), args, {
     cwd: request.cwd,
     env: providerEnvironment(request),
     stdio: ["pipe", "pipe", "pipe"],

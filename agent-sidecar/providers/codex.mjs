@@ -6,7 +6,7 @@ import { JsonRpcProcess } from "../json-rpc.mjs";
 import {
   genericUsage,
   normalizedImages,
-  packageBinary,
+  installedAgentBinary,
   promptWithHistory,
   providerEnvironment,
   requestsBackgroundExecution,
@@ -53,7 +53,7 @@ const toolEvent = (item) => {
 
 export const runCodex = async ({ request, emit, signal, setStopper, setController }) => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "blackholes-codex-"));
-  const child = spawn(packageBinary("codex"), ["app-server", "--stdio"], {
+  const child = spawn(installedAgentBinary("codex"), ["app-server", "--stdio"], {
     cwd: request.cwd,
     env: providerEnvironment(request),
     stdio: ["pipe", "pipe", "pipe"],
