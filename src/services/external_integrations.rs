@@ -293,7 +293,7 @@ fn install_skill(skills: &Path) -> Result<bool> {
     write_if_changed(&path, before.as_deref(), SKILL, 0o600)
 }
 
-fn read_file(path: &Path) -> Result<Option<String>> {
+pub(crate) fn read_file(path: &Path) -> Result<Option<String>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
             bail!("{} is not a regular file; it was preserved", path.display());
@@ -312,7 +312,12 @@ fn read_file(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn write_if_changed(path: &Path, before: Option<&str>, after: &str, mode: u32) -> Result<bool> {
+pub(crate) fn write_if_changed(
+    path: &Path,
+    before: Option<&str>,
+    after: &str,
+    mode: u32,
+) -> Result<bool> {
     if before == Some(after) {
         return Ok(false);
     }

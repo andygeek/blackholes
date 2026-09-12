@@ -373,7 +373,8 @@ struct NavigationLinkPayload {
     label: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum AppToastTarget {
     Terminal { terminal_id: Uuid, agent: AgentKind },
     Task { task_id: Uuid },
@@ -1121,6 +1122,8 @@ impl BlackholesApp {
                 }
             };
         let navigation_window = window.window_handle();
+        let notification_window = window.window_handle();
+        let notification_receiver = crate::services::notifications::subscribe();
         let mut app = Self {
             update_state: crate::services::updater::state(),
             external_integrations: Default::default(),
@@ -1219,6 +1222,26 @@ impl BlackholesApp {
                         let _ = this.update(cx, |app, cx| {
                             app.handle_navigation_command(command, window, cx)
                         });
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            while let Ok(payload) = notification_receiver.recv_async().await {
+                if notification_window
+                    .update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |app, cx| {
+                            if let Ok(target) = serde_json::from_str::<AppToastTarget>(&payload) {
+                                app.open_toast_target(target, window, cx);
+                            }
+                        });
+                        // Even an old notice with no surviving target opens the
+                        // app. This never runs when merely receiving a notice.
+                        crate::services::notifications::activate();
                     })
                     .is_err()
                 {
@@ -5156,15 +5179,16 @@ impl BlackholesApp {
         let message = task.title.clone();
         self.app_toasts
             .retain(|toast| toast.target.task_id() != Some(task_id));
-        self.app_toasts.push(AppToast {
+        let notification = AppToast {
             target: AppToastTarget::Agent { scope },
-            title: title.clone(),
-            message: message.clone(),
-        });
+            title,
+            message,
+        };
+        self.app_toasts.push(notification.clone());
         play_agent_attention_sound();
         cx.background_executor()
             .spawn(async move {
-                show_native_agent_notification(&title, &message);
+                show_native_agent_notification(&notification);
             })
             .detach();
     }
@@ -7128,13 +7152,13 @@ impl BlackholesApp {
             {
                 turn.notification_sent = true;
             }
-            if let Some((title, message)) =
+            if let Some(notification) =
                 self.announce_ready_task(payload.task_id, payload.title, payload.message, cx)
             {
                 play_agent_attention_sound();
                 cx.background_executor()
                     .spawn(async move {
-                        show_native_agent_notification(&title, &message);
+                        show_native_agent_notification(&notification);
                     })
                     .detach();
             }
@@ -7234,7 +7258,7 @@ impl BlackholesApp {
 
     /// Show the toast an agent asked for once it finished a task.
     ///
-    /// Returns the strings to repeat as a desktop notification, or `None` when
+    /// Returns the toast and its destination for the desktop notification, or `None` when
     /// there is nothing to announce. The selected task is deliberately left
     /// untouched: the user reaches the task by clicking the toast.
     fn announce_ready_task(
@@ -7243,7 +7267,7 @@ impl BlackholesApp {
         title: Option<String>,
         message: Option<String>,
         cx: &mut Context<Self>,
-    ) -> Option<(String, String)> {
+    ) -> Option<AppToast> {
         let task = self
             .tasks
             .iter()
@@ -7265,13 +7289,14 @@ impl BlackholesApp {
         }
         let title = title.unwrap_or(default_title);
         let message = message.unwrap_or(default_message);
-        self.app_toasts.push(AppToast {
+        let notification = AppToast {
             target: AppToastTarget::Task { task_id },
-            title: title.clone(),
-            message: message.clone(),
-        });
+            title,
+            message,
+        };
+        self.app_toasts.push(notification.clone());
         cx.notify();
-        Some((title, message))
+        Some(notification)
     }
 
     fn task_toast_text(
@@ -12946,11 +12971,11 @@ impl BlackholesApp {
                         .update(cx, |app, cx| app.handle_agent_attention(terminal_id, cx))
                         .ok()
                         .flatten();
-                    if let Some((title, message)) = notification {
+                    if let Some(notification) = notification {
                         play_agent_attention_sound();
                         cx.background_executor()
                             .spawn(async move {
-                                show_native_agent_notification(&title, &message);
+                                show_native_agent_notification(&notification);
                             })
                             .detach();
                     }
@@ -12972,11 +12997,11 @@ impl BlackholesApp {
                         })
                         .ok()
                         .flatten();
-                    if let Some((title, message)) = notification {
+                    if let Some(notification) = notification {
                         play_agent_attention_sound();
                         cx.background_executor()
                             .spawn(async move {
-                                show_native_agent_notification(&title, &message);
+                                show_native_agent_notification(&notification);
                             })
                             .detach();
                     }
@@ -13135,7 +13160,7 @@ impl BlackholesApp {
         terminal_id: Uuid,
         signal: AgentTerminalSignal,
         cx: &mut Context<Self>,
-    ) -> Option<(String, String)> {
+    ) -> Option<AppToast> {
         if let Some(agent) = signal.agent {
             self.set_terminal_agent(terminal_id, agent);
         }
@@ -13243,7 +13268,7 @@ impl BlackholesApp {
         &mut self,
         terminal_id: Uuid,
         cx: &mut Context<Self>,
-    ) -> Option<(String, String)> {
+    ) -> Option<AppToast> {
         let descriptor = self
             .session
             .terminals
@@ -13296,13 +13321,46 @@ impl BlackholesApp {
             ),
         };
 
-        self.app_toasts.push(AppToast {
+        let notification = AppToast {
             target,
-            title: title.clone(),
-            message: message.clone(),
-        });
+            title,
+            message,
+        };
+        self.app_toasts.push(notification.clone());
         cx.notify();
-        Some((title, message))
+        Some(notification)
+    }
+
+    fn open_toast_target(
+        &mut self,
+        target: AppToastTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            AppToastTarget::Terminal { terminal_id, .. } => {
+                let Some(terminal) = self.session.terminals.iter()
+                    .find(|terminal| terminal.id == terminal_id).cloned()
+                else {
+                    return;
+                };
+                if terminal.state != SessionState::Exited {
+                    // A saved terminal is restored through the same path as
+                    // clicking it in the sidebar after reopening the app.
+                    self.focus_terminal(terminal_id, window, cx);
+                } else {
+                    // A stale notification must not restart an exited agent.
+                    self.dismiss_app_toast(target, cx);
+                    if let Some(task_id) = terminal.task_id {
+                        self.open_task_from_chat(task_id, cx);
+                    } else {
+                        self.open_project_from_chat(terminal.workspace_id, cx);
+                    }
+                }
+            }
+            AppToastTarget::Task { task_id } => self.open_task_from_toast(task_id, cx),
+            AppToastTarget::Agent { scope } => self.open_agent_from_toast(scope, cx),
+        }
     }
 
     fn dismiss_app_toast(&mut self, target: AppToastTarget, cx: &mut Context<Self>) {
@@ -16553,15 +16611,7 @@ impl BlackholesApp {
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
-                        let _ = weak_open.update(cx, |app, cx| match target {
-                            AppToastTarget::Terminal { terminal_id, .. } => {
-                                app.focus_terminal(terminal_id, window, cx)
-                            }
-                            AppToastTarget::Task { task_id } => {
-                                app.open_task_from_toast(task_id, cx)
-                            }
-                            AppToastTarget::Agent { scope } => app.open_agent_from_toast(scope, cx),
-                        });
+                        let _ = weak_open.update(cx, |app, cx| app.open_toast_target(target, window, cx));
                     })
                     .child(
                         div()
@@ -18513,29 +18563,20 @@ fn agent_from_terminal_title(title: &str) -> Option<AgentKind> {
     None
 }
 
-fn show_native_agent_notification(title: &str, message: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let is_bundled_app = std::env::current_exe()
-            .ok()
-            .is_some_and(|path| path.to_string_lossy().contains(".app/Contents/MacOS/"));
-        let bundle_identifier = if is_bundled_app {
-            "dev.blackholes.rust"
-        } else {
-            // The legacy macOS backend requires a bundle registered with Launch
-            // Services. Development binaries have no bundle, so use Terminal's
-            // identity instead of letting the dependency look up `use_default`.
-            "com.apple.Terminal"
-        };
-        #[allow(deprecated)]
-        let _ = notify_rust::set_application(bundle_identifier);
-    }
-
-    let _ = notify_rust::Notification::new()
-        .appname("Blackholes Rust")
-        .summary(title)
-        .body(message)
-        .show();
+fn show_native_agent_notification(notification: &AppToast) {
+    let target = match serde_json::to_string(&notification.target) {
+        Ok(target) => target,
+        Err(error) => {
+            tracing::warn!(?error, "Could not encode the notification destination");
+            return;
+        }
+    };
+    crate::services::notifications::show(
+        &notification.target.element_key(),
+        &notification.title,
+        &notification.message,
+        &target,
+    );
 }
 
 fn play_agent_attention_sound() {

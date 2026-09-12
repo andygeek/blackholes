@@ -187,7 +187,7 @@ impl AgentAvatarColor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrchestratorChatScope {
     Global,
     GlobalAgent(Uuid),

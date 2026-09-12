@@ -4,7 +4,7 @@ A macOS desktop workspace for coding agents, Git repositories, isolated tasks, a
 
 > Documentation status: Work in progress.
 
-Version: **0.1.7**. Blackholes' original source code is licensed under
+Version: **0.1.8**. Blackholes' original source code is licensed under
 [MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
 
 ## Installing the desktop app
@@ -87,6 +87,16 @@ prepared on startup. Existing files and conflicting links are never overwritten.
 Terminal rows use the detected provider's icon. They do not show persistent
 loading dots or green presence badges; launching or focusing a CLI alone is not
 treated as submitting an agent turn.
+
+Packaged apps send macOS notifications with Blackholes' own name and icon. The
+first notice requests notification permission if it has not been granted yet.
+Clicking a notice brings Blackholes forward, restores its minimized window, and
+opens the corresponding task, terminal, or Black Bot conversation. The destination
+is kept in the notice so clicks can also be handled after relaunch, using normal
+session restoration. A notice for a removed destination still opens the app.
+Receiving a notice alone never changes the selected workspace. Bare development
+executables retain in-app notices and the attention sound, but do not send macOS
+notifications under Terminal's identity.
 
 The Agents section combines built-in bots and terminal agents. Press and hold a
 card by its icon or title, then drag to reorder the mixed list. The cursor changes

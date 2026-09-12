@@ -43,6 +43,9 @@ fn main() -> Result<()> {
     let database = Database::open(&paths)?;
     let initial_theme = database.load_session().theme;
     let application = Application::new().with_assets(AppAssets);
+    // Register before AppKit finishes launching so notification clicks that
+    // relaunch the app are queued until its window and session are ready.
+    blackholes_rust::services::notifications::initialize();
     let reopen_paths = paths.clone();
     let reopen_database = database.clone();
     application.on_reopen(move |cx| {

@@ -4,6 +4,7 @@ use crate::{
         DEFAULT_TASK_ICON, ProjectTask, Repository, TaskRepository, Workspace, WorkspaceColor,
     },
     services::notes::{ProjectTaskInstructionsService, TaskNoteService},
+    services::workspace_trust,
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
@@ -123,6 +124,7 @@ pub struct RemovedTaskRepository {
 pub struct TaskService {
     managed_root: PathBuf,
     legacy_managed_roots: Vec<PathBuf>,
+    agent_profiles: PathBuf,
 }
 
 impl TaskService {
@@ -143,7 +145,20 @@ impl TaskService {
         Self {
             managed_root: paths.task_workspaces.clone(),
             legacy_managed_roots,
+            agent_profiles: paths.agent_profiles.clone(),
         }
+    }
+
+    /// The directories an agent can be pointed at for this task: its workspace
+    /// and every attached worktree, since trust is matched on the exact path.
+    fn trust_targets(task_root: &Path, repositories: &[TaskRepository]) -> Vec<PathBuf> {
+        let mut targets = vec![task_root.to_path_buf()];
+        targets.extend(
+            repositories
+                .iter()
+                .map(|repository| repository.worktree_path.clone()),
+        );
+        targets
     }
 
     fn assert_managed_task_path(&self, path: &Path) -> Result<()> {
@@ -320,6 +335,13 @@ impl TaskService {
         }
 
         let now = Utc::now();
+        let worktree_root_path = fs::canonicalize(&task_root).unwrap_or(task_root);
+        // No agent has seen this directory before, and each one keys workspace
+        // trust on the exact path. Record it before the task's terminal opens.
+        workspace_trust::grant(
+            &self.agent_profiles,
+            &Self::trust_targets(&worktree_root_path, &task_repositories),
+        );
         Ok(ProjectTask {
             id: task_id,
             workspace_id: workspace.id,
@@ -328,7 +350,7 @@ impl TaskService {
             icon: DEFAULT_TASK_ICON.into(),
             color: workspace.color,
             sort_order: 0,
-            worktree_root_path: fs::canonicalize(&task_root).unwrap_or(task_root),
+            worktree_root_path,
             repositories: task_repositories,
             sessions: vec![],
             created_at: now,
@@ -451,6 +473,10 @@ impl TaskService {
         }
         task.repositories = repositories;
         task.updated_at = Utc::now();
+        workspace_trust::grant(
+            &self.agent_profiles,
+            &Self::trust_targets(&task.worktree_root_path, &task.repositories),
+        );
         Ok(())
     }
 
@@ -513,6 +539,14 @@ impl TaskService {
                 );
             }
         }
+
+        workspace_trust::revoke(
+            &self.agent_profiles,
+            &selected
+                .iter()
+                .map(|repository| repository.worktree_path.clone())
+                .collect::<Vec<_>>(),
+        );
 
         let mut removed = Vec::new();
         for repository in &selected {
@@ -591,6 +625,10 @@ impl TaskService {
                 );
             }
         }
+        workspace_trust::revoke(
+            &self.agent_profiles,
+            &Self::trust_targets(&task.worktree_root_path, &task.repositories),
+        );
         for repository in &task.repositories {
             let source = repository_source_path(&repository.worktree_path)?;
             run_git(
@@ -612,6 +650,12 @@ impl TaskService {
     pub fn remove_permanently(&self, task: &ProjectTask) -> Result<()> {
         self.assert_managed_task_path(&task.worktree_root_path)?;
         assert_task_repository_paths(task)?;
+        // Drop the trust while the paths still resolve; once the directories
+        // are gone a symlinked parent could no longer be matched.
+        workspace_trust::revoke(
+            &self.agent_profiles,
+            &Self::trust_targets(&task.worktree_root_path, &task.repositories),
+        );
 
         let mut repository_sources = Vec::new();
         for repository in &task.repositories {
