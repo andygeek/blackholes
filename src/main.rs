@@ -4,7 +4,7 @@ use blackholes_rust::{
     paths::AppPaths,
     services::{
         claude::run_claude_session_hook, codex::run_codex_session_hook, database::Database,
-        orchestrator::terminate_all_agent_processes,
+        providers::terminate_provider_helpers,
     },
     ui::{BlackholesApp, apply_native_theme},
 };
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
         configure_macos_application(cx);
         apply_native_theme(initial_theme, None, cx);
         cx.on_app_quit(|_| async {
-            terminate_all_agent_processes();
+            terminate_provider_helpers();
         })
         .detach();
         BlackholesApp::init(cx);

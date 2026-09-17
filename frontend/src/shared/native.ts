@@ -26,30 +26,6 @@ declare global {
     blackholesNavigation?: {
       receive(event: unknown): void;
     };
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  }
-
-  interface SpeechRecognitionResultLike {
-    readonly 0: { transcript: string };
-  }
-
-  interface SpeechRecognitionEventLike {
-    readonly results: ArrayLike<SpeechRecognitionResultLike>;
-  }
-
-  interface SpeechRecognitionLike {
-    lang: string;
-    interimResults: boolean;
-    onstart: (() => void) | null;
-    onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-    onend: (() => void) | null;
-    onerror: (() => void) | null;
-    start(): void;
-  }
-
-  interface SpeechRecognitionConstructor {
-    new (): SpeechRecognitionLike;
   }
 }
 

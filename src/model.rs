@@ -207,6 +207,12 @@ pub struct ProjectTask {
     pub workspace_id: Uuid,
     pub title: String,
     pub description: Option<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Option<String>,
+    #[serde(default)]
+    pub pull_request_url: Option<String>,
+    #[serde(default)]
+    pub external_task_url: Option<String>,
     pub icon: String,
     pub color: WorkspaceColor,
     pub sort_order: i64,

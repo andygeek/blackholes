@@ -1,6 +1,6 @@
 pub mod app;
 pub mod navigation_webview;
-pub mod orchestrator_chat;
+pub mod workspace_webview;
 pub mod quick_open_webview;
 pub mod terminal;
 

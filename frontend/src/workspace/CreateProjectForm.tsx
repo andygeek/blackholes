@@ -18,6 +18,7 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
   const [pending, setPending] = useState<"scan" | "create" | null>(null);
   const [error, setError] = useState("");
   const selected = sources.filter(source => source.selected);
+  const creatingRepository = !adding && selected.length === 0;
   const copying = mode === "copy" && selected.some(source => source.kind === "local");
   const downloading = selected.some(source => source.kind === "github");
 
@@ -65,7 +66,8 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
       <p>{copying
         ? tr("Copying files, Git history and dependencies can take several minutes, especially with large repositories.", "Copiar archivos, historial Git y dependencias puede tardar varios minutos, especialmente con repositorios grandes.")
         : downloading ? tr("This may take a few minutes, depending on repository size and your connection.", "Esto puede tardar unos minutos, según el tamaño de los repositorios y tu conexión.")
-          : tr("Preparing your project and its repository links.", "Preparando tu proyecto y los enlaces a sus repositorios.")}</p>
+          : creatingRepository ? tr("Preparing a new Git repository inside your project.", "Preparando un nuevo repositorio Git dentro de tu proyecto.")
+            : tr("Preparing your project and its repository links.", "Preparando tu proyecto y los enlaces a sus repositorios.")}</p>
       <small>{tr("Keep Blackholes open until the operation finishes.", "Mantén Blackholes abierto hasta que termine.")}</small>
     </div>}
     <fieldset disabled={pending !== null} hidden={pending === "create"} className="project-modal-fields">
@@ -109,7 +111,10 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
           </label>
           <button type="button" aria-label={tr("Remove ", "Quitar ") + source.name} onClick={() => setSources(current => current.filter((_, i) => i !== index))}><X size={15} /></button>
         </div>)}
-      </div> : <small className="project-empty-hint">{tr("Choose a repository or a folder with several. You can also add them later.", "Elige un repositorio o una carpeta con varios. También puedes agregarlos después.")}</small>}
+      </div> : null}
+      {!selected.length && <small className="project-empty-hint">{creatingRepository
+        ? tr("A new Git repository will be created inside the project, ready for you to start coding.", "Se creará un nuevo repositorio Git dentro del proyecto, listo para empezar a programar.")
+        : tr("Choose a repository or a folder with several.", "Elige un repositorio o una carpeta con varios.")}</small>}
       {selected.some(source => source.kind === "local") && <div className="project-location-option">
         <label htmlFor="project-repository-mode">{tr("Local repositories", "Repositorios locales")}</label>
         <select id="project-repository-mode" value={mode} onChange={event => setMode(event.target.value as "link" | "copy")}>
@@ -124,7 +129,7 @@ export function CreateProjectForm({ modal, language, onDismiss, onBusyChange }: 
         <summary tabIndex={pending ? -1 : 0} onClick={event => { if (pending) event.preventDefault(); }}>{tr("Location and details", "Ubicación y detalles")}</summary>
         <small>{adding ? tr("Project folder", "Carpeta del proyecto") : tr("Projects folder", "Carpeta de proyectos")}</small>
         <code>{modal.projects_root}</code>
-        <p>{tr("Each project has its own instructions and notes. Local links appear directly in its folder and work without Blackholes. GitHub repositories are downloaded there.", "Cada proyecto tiene sus instrucciones y notas. Los enlaces locales aparecen directamente en su carpeta y funcionan sin Blackholes. Los repositorios de GitHub se descargan allí.")}</p>
+        <p>{tr("Each project has its own instructions. Local links appear directly in its folder and work without Blackholes. GitHub repositories are downloaded there.", "Cada proyecto tiene sus instrucciones. Los enlaces locales aparecen directamente en su carpeta y funcionan sin Blackholes. Los repositorios de GitHub se descargan allí.")}</p>
         {mode === "copy" && <p>{tr("Copies files, Git history and dependencies. Pause running processes first. Large folders take longer; symbolic links may still point outside the copy.", "Copia archivos, historial Git y dependencias. Pausa los procesos antes de copiar. Las carpetas grandes tardan más; los enlaces simbólicos pueden seguir apuntando fuera de la copia.")}</p>}
       </details>
     </fieldset>

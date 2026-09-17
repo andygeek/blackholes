@@ -82,9 +82,7 @@ export function AppModal({ modal, language, onDismiss }: {
               postNative({ type: "confirm_remove_repository", request_id: modal.request_id });
               return;
             }
-            postNative(modal.kind === "remove_agent"
-              ? { type: "confirm_remove_agent", scope: modal.scope }
-              : modal.kind === "close_terminal" ? { type: "confirm_close_terminal", terminal_id: modal.terminal_id }
+            postNative(modal.kind === "close_terminal" ? { type: "confirm_close_terminal", terminal_id: modal.terminal_id }
               : modal.kind === "remove_task" ? { type: "confirm_remove_task", task_id: modal.task_id }
               : { type: "confirm_remove_project", workspace_id: modal.workspace_id });
           }}>{modal.confirm_label}</button>

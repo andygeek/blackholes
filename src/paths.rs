@@ -8,8 +8,6 @@ pub struct AppPaths {
     pub data_dir: PathBuf,
     pub database: PathBuf,
     pub session: PathBuf,
-    pub orchestrator_chat: PathBuf,
-    pub agent_skills_plugin: PathBuf,
     pub agent_profiles: PathBuf,
     pub task_workspaces: PathBuf,
     pub default_projects: PathBuf,
@@ -30,23 +28,6 @@ impl AppPaths {
         let agent_profiles = data_dir.join("agent-profiles");
         fs::create_dir_all(&agent_profiles)?;
 
-        let agent_skills_plugin = data_dir.join("blackholes-skills");
-        fs::create_dir_all(agent_skills_plugin.join("skills"))?;
-        let plugin_manifest_dir = agent_skills_plugin.join(".claude-plugin");
-        fs::create_dir_all(&plugin_manifest_dir)?;
-        let plugin_manifest = plugin_manifest_dir.join("plugin.json");
-        if !plugin_manifest.exists() {
-            fs::write(
-                &plugin_manifest,
-                r#"{
-  "name": "blackholes-skills",
-  "version": "1.0.0",
-  "description": "Skills explicitly imported and managed by Blackholes"
-}
-"#,
-            )?;
-        }
-
         let default_projects = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| data_dir.clone())
@@ -55,8 +36,6 @@ impl AppPaths {
         Ok(Self {
             database: data_dir.join("blackholes-local.db"),
             session: data_dir.join("app-session.json"),
-            orchestrator_chat: data_dir.join("orchestrator-chat.json"),
-            agent_skills_plugin,
             agent_profiles,
             task_workspaces,
             default_projects,

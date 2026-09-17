@@ -12,21 +12,11 @@ use crate::model::AgentKind;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NavigationCommand {
     Ready,
+    ShowHome,
     SetSidebarWidth {
         width: f32,
         #[serde(default)]
         commit: bool,
-    },
-    CreateGlobalAgent,
-    CreateScopedAgent {
-        workspace_id: Uuid,
-        task_id: Option<Uuid>,
-    },
-    OpenAgent {
-        scope: String,
-    },
-    RemoveAgent {
-        scope: String,
     },
     ReorderAgents {
         ids: Vec<String>,
@@ -58,12 +48,6 @@ pub enum NavigationCommand {
     RemoveProject {
         workspace_id: Uuid,
     },
-    AssignProjectAgent {
-        workspace_id: Uuid,
-    },
-    ProjectNotes {
-        workspace_id: Uuid,
-    },
     NewTask {
         workspace_id: Uuid,
     },
@@ -78,13 +62,6 @@ pub enum NavigationCommand {
         task_id: Uuid,
     },
     RemoveTask {
-        task_id: Uuid,
-    },
-    AssignTaskAgent {
-        task_id: Uuid,
-    },
-    TaskNotes {
-        workspace_id: Uuid,
         task_id: Uuid,
     },
     SelectRepository {
@@ -146,10 +123,6 @@ pub fn set_visible(webview: &Entity<WebView>, visible: bool, cx: &mut App) {
 
 fn navigation_html() -> String {
     include_str!("../../assets/navigation/index.html")
-        .replace(
-            "{{AGENT_AVATAR_STYLES}}",
-            include_str!("../../assets/agent-avatar.css"),
-        )
         .replace(
             "{{NAVIGATION_STYLES}}",
             include_str!("../../assets/navigation/styles.css"),

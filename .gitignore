@@ -1,7 +1,7 @@
 # Rust build artifacts
 /target/
 
-# Claude Agent SDK sidecar dependencies
+# Legacy chat dependencies left in existing checkouts
 /agent-sidecar/node_modules/
 
 # React WebView dependencies (production bundles stay versioned in assets/generated)

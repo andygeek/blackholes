@@ -13,8 +13,7 @@ import {
   SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
-import { postNative } from "../shared/native";
-import { AgentAvatar } from "../shared/AgentAvatar";
+import { createId, postNative } from "../shared/native";
 import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
 
 export type QuickOpenItem = {
@@ -23,7 +22,6 @@ export type QuickOpenItem = {
   kind_label: string;
   icon: string;
   color: string;
-  agent_identity?: string | null;
   terminal_provider?: string | null;
 };
 
@@ -60,6 +58,33 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const openIdRef = useRef(state.open_id);
+  const pendingPaste = useRef<{ id: string; query: string; start: number; end: number } | null>(null);
+  const updateQuery = (next: string) => {
+    setQuery(next);
+    setSelected(0);
+    postNative({ type: "quick_open_query_changed", open_id: state.open_id, query: next });
+  };
+
+  useEffect(() => {
+    pendingPaste.current = null;
+    const receive = (event: Event) => {
+      const data = (event as CustomEvent<{ open_id: number; request_id: string; text: string }>).detail;
+      const pending = pendingPaste.current;
+      const input = inputRef.current;
+      if (!pending || !input || data.open_id !== state.open_id || data.request_id !== pending.id) return;
+      pendingPaste.current = null;
+      // Ignore a late clipboard response if the user has already edited the query.
+      if (input.value !== pending.query || !data.text) return;
+      const text = data.text.replace(/\r\n?|\n/g, " ");
+      updateQuery(pending.query.slice(0, pending.start) + text + pending.query.slice(pending.end));
+      requestAnimationFrame(() => {
+        input.focus();
+        input.setSelectionRange(pending.start + text.length, pending.start + text.length);
+      });
+    };
+    window.addEventListener("blackholes:quick-open-paste", receive);
+    return () => window.removeEventListener("blackholes:quick-open-paste", receive);
+  }, [state.open_id]);
   const [layout, setLayout] = useState({ width: 0, offset: 0 });
 
   useLayoutEffect(() => {
@@ -125,13 +150,32 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
             autoComplete="off"
             spellCheck={false}
             onChange={(event) => {
-              const next = event.target.value;
-              setQuery(next);
-              setSelected(0);
-              postNative({ type: "quick_open_query_changed", open_id: state.open_id, query: next });
+              pendingPaste.current = null;
+              updateQuery(event.target.value);
             }}
             onKeyDown={(event) => {
               event.stopPropagation();
+              const key = event.code.startsWith("Key") ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
+              if ((event.metaKey || event.ctrlKey) && !event.altKey && ["a", "c", "v", "x"].includes(key)) {
+                event.preventDefault();
+                const input = event.currentTarget;
+                const start = input.selectionStart ?? 0;
+                const end = input.selectionEnd ?? start;
+                if (key === "a") input.select();
+                else if (key === "v") {
+                  const id = createId();
+                  pendingPaste.current = { id, query: input.value, start, end };
+                  postNative({ type: "quick_open_paste", open_id: state.open_id, request_id: id });
+                } else if (start !== end) {
+                  postNative({ type: "copy_text", text: input.value.slice(start, end) });
+                  if (key === "x") {
+                    pendingPaste.current = null;
+                    updateQuery(input.value.slice(0, start) + input.value.slice(end));
+                    requestAnimationFrame(() => input.setSelectionRange(start, start));
+                  }
+                }
+                return;
+              }
               if (event.key === "Tab") {
                 event.preventDefault();
               } else if (event.key === "ArrowUp") {
@@ -172,8 +216,7 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
                   onClick={() => activate(index)}
                 >
                   <span className="quick-open-row__icon" style={{ color: item.color }}>
-                    {item.agent_identity ? <AgentAvatar identity={item.agent_identity} size={24} />
-                      : item.terminal_provider ? <TerminalProviderIcon provider={item.terminal_provider} /> : <Icon size={17} />}
+                    {item.terminal_provider ? <TerminalProviderIcon provider={item.terminal_provider} /> : <Icon size={17} />}
                   </span>
                   <span className="quick-open-row__title">{item.title}</span>
                   <span className="quick-open-row__subtitle">{item.subtitle}</span>

@@ -31,7 +31,7 @@ struct StoredRichNoteDocument {
     markdown: String,
     blocks: Value,
 }
-const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated Blackholes task workspace containing one or more repository worktrees.
+const LEGACY_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated Blackholes task workspace containing one or more repository worktrees.
 
 ## Required context
 
@@ -54,6 +54,29 @@ const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated
 - Keep notes concise and developer-oriented.
 - Append only durable implementation context, non-obvious constraints, decisions, or essential acceptance checkpoints.
 "#;
+const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated Blackholes task workspace containing one or more repository worktrees.
+
+## Required context
+
+- Before doing any work, read `.blackholes-task-details.md` for the objective, acceptance criteria, PR link and external task link. Read any legacy `.blackholes-note.md` as additional context.
+- Then call the Blackholes MCP `get_current_context` and `get_task` with the task ID above to refresh the task structure and status.
+- Use the task details as local developer context. Preserve user requirements when updating them.
+- Retrieve authoritative ClickUp, Jira, GitHub, or other source details with the available connected tools when needed.
+
+## Filesystem boundaries
+
+- You may inspect the project root and original repository paths returned by Blackholes for context.
+- Never create, edit, move, or delete files in an original repository path.
+- Make changes only inside worktree paths attached to this task and returned by `get_task`.
+- If another project repository is needed, call `add_task_repositories` before changing it.
+- Never create, attach, or copy a worktree manually.
+
+## Task details
+
+- Use MCP `update_task` to update `description`, `acceptanceCriteria`, `pullRequestUrl` and `externalTaskUrl`.
+- Patch only changed fields; omitted fields are preserved and null clears a field. Read `get_task` and pass its `detailsRevision` as `expectedRevision` when editing from a snapshot.
+- Keep the objective and acceptance criteria concise and current. The task details Markdown is generated; do not edit it directly.
+"#;
 const PROJECT_POLICY_START: &str = "<!-- BLACKHOLES PROJECT POLICY START -->";
 const PROJECT_POLICY_END: &str = "<!-- BLACKHOLES PROJECT POLICY END -->";
 const PROJECT_POLICY: &str = r#"# Blackholes project instructions
@@ -70,8 +93,8 @@ When the Blackholes MCP is available:
 
 - When using the Blackholes integration, begin with `get_current_context`. Without that integration, work directly with this project's folders and symbolic links; do not require Blackholes to access repositories.
 - Interpret "create a task" as creating a local Blackholes task. Use the Blackholes MCP for project, task, repository, branch, and worktree orchestration.
-- Global and project Black Bots may inspect, review, edit, build, and test directly in the intended project repositories. Resolve the project and repositories through the MCP and respect the user's request, project instructions, selected permissions, and existing changes. A task or worktree is not a prerequisite.
-- Tasks and isolated worktrees are optional: use them when requested by the user, when working in an existing selected task, or when user-authored project instructions require them. Creating implementation tasks through `create_task` starts visible terminal agents by default (`startAgent:true`) using the calling provider and each project's terminal permission setting. For a batch, create all tasks with `startAgent:false`, then call `start_task_agents` with their IDs and briefs; no extra delegation confirmation is needed. Use `startAgent:false` for planning-only/backlog requests, explicit instructions not to start, or before `handoff_to_agent` for specifically requested built-in Black Bots. Terminal agents show results in their terminals; completion notifications are not required. For project implementation without a task, the global agent normally hands off with `projectId`; the receiving project agent works directly. The agent of the selected task implements in its attached worktrees and must not delegate to itself or create the task again. Explicit requests to work directly or not delegate take precedence. If execution intent or destination is unclear, ask briefly. Preserve all user constraints in the handoff prompt. After a successful handoff, the sender stops implementing and reports the transfer; on failure, report it rather than silently taking over.
+- Agents may inspect, review, edit, build, and test directly in the intended project repositories. Resolve the project and repositories through the MCP and respect the user's request, project instructions, selected permissions, and existing changes. A task or worktree is not a prerequisite.
+- Tasks and isolated worktrees are optional: use them when requested by the user, when working in an existing selected task, or when user-authored project instructions require them. Creating implementation tasks through `create_task` starts visible terminal agents by default (`startAgent:true`) using the calling provider and each project's terminal permission setting. For a batch, create all tasks with `startAgent:false`, then call `start_task_agents` with their IDs and briefs. Use `startAgent:false` for planning-only/backlog requests or explicit instructions not to start. Terminal agents show results in their terminals; completion notifications are not required. For work without a requested task, work directly in the intended project. Inside a task, change only its attached worktrees. Preserve user constraints in the implementation prompt and do not recreate or redelegate an existing task.
 - Do not create a task, issue, comment, branch, pull request, or any other remote resource in ClickUp, Jira, GitHub, GitLab, or another external system. A request to create a Blackholes task is not authorization to mutate those systems.
 - External tools may be used only for read-only discovery needed to understand the task, its linked pull requests, repositories, and branch names.
 - If the work has associated pull requests or branches, read their metadata to identify the correct source. This does not require a Blackholes task. Do not push, comment, or change remote resources without an explicit request.
@@ -218,12 +241,16 @@ impl ProjectTaskInstructionsService {
     pub fn ensure(workspace: &Workspace) -> Result<PathBuf> {
         let root = project_root(workspace)?;
         ensure_project_note_locally_ignored(&root)?;
-        ensure_note(
+        let path = ensure_note(
             &root,
             PROJECT_TASK_INSTRUCTIONS_FILE_NAME,
             "project task instruction",
             DEFAULT_PROJECT_TASK_INSTRUCTIONS,
-        )
+        )?;
+        if fs::read_to_string(&path)?.trim() == LEGACY_PROJECT_TASK_INSTRUCTIONS.trim() {
+            write_note(&root, PROJECT_TASK_INSTRUCTIONS_FILE_NAME, ".blackholes-task-claude", "project task instruction", DEFAULT_PROJECT_TASK_INSTRUCTIONS)?;
+        }
+        Ok(path)
     }
 
     pub fn read(workspace: &Workspace) -> Result<String> {
@@ -354,6 +381,8 @@ fn merge_project_policy(existing: &str) -> Result<String> {
             // customize this block, so replacing it wholesale would lose their rules.
             let mut policy = existing[start..end].to_string();
             let legacy_rules = [
+                ("- Tasks and isolated worktrees are optional: use them when requested by the user, when working in an existing selected task, or when user-authored project instructions require them. Creating implementation tasks through `create_task` starts visible terminal agents by default (`startAgent:true`) using the calling provider and each project's terminal permission setting. For a batch, create all tasks with `startAgent:false`, then call `start_task_agents` with their IDs and briefs; no extra delegation confirmation is needed. Use `startAgent:false` for planning-only/backlog requests, explicit instructions not to start, or before `handoff_to_agent` for specifically requested built-in Black Bots. Terminal agents show results in their terminals; completion notifications are not required. For project implementation without a task, the global agent normally hands off with `projectId`; the receiving project agent works directly. The agent of the selected task implements in its attached worktrees and must not delegate to itself or create the task again. Explicit requests to work directly or not delegate take precedence. If execution intent or destination is unclear, ask briefly. Preserve all user constraints in the handoff prompt. After a successful handoff, the sender stops implementing and reports the transfer; on failure, report it rather than silently taking over.", "- Tasks and isolated worktrees are optional:"),
+                ("- Global and project Black Bots may inspect, review, edit, build, and test directly in the intended project repositories. Resolve the project and repositories through the MCP and respect the user's request, project instructions, selected permissions, and existing changes. A task or worktree is not a prerequisite.", "- Agents may"),
                 (
                     "- Tasks and isolated worktrees are optional: use them when requested by the user, when working in an existing selected task, or when user-authored project instructions require them. A request to create a task and start/implement it already authorizes a global or project agent to create it and immediately call `handoff_to_agent` with its `taskId`, before implementing in the new worktrees; no extra delegation confirmation is needed. Creating a task alone does not authorize starting it. For project implementation without a task, the global agent normally hands off with `projectId`; the receiving project agent works directly. The agent of the selected task implements in its attached worktrees and must not delegate to itself or create the task again. Explicit requests to work directly or not delegate take precedence. If execution intent or destination is unclear, ask briefly. Preserve all user constraints in the handoff prompt. After a successful handoff, the sender stops implementing and reports the transfer; on failure, report it rather than silently taking over.",
                     "- Tasks and isolated worktrees are optional:",
@@ -372,7 +401,7 @@ fn merge_project_policy(existing: &str) -> Result<String> {
                 ),
                 (
                     "- A global or project Black Bot must not inspect, review, edit, build, or test repository files directly. Search the registered projects, resolve the exact project and required repositories, reuse a clearly matching task or create an isolated task, then call `handoff_to_agent` with that task ID.",
-                    "- Global and project Black Bots may",
+                    "- Agents may",
                 ),
                 (
                     "- Only the receiving task Black Bot works inside the task's writable worktrees. After a successful handoff, the sender stops implementing and reports the transfer.",

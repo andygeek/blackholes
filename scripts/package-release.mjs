@@ -6,7 +6,6 @@ import { createHash } from "node:crypto";
 import { closeSync, cpSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { prepareAgentBridge } from "./prepare-agent-bridge.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const run = (command, args, options = {}) => execFileSync(command, args, { cwd: root, stdio: "inherit", ...options });
@@ -22,7 +21,7 @@ if (!identity.startsWith("Developer ID Application:")) throw new Error("Use a De
 const notaryProfile = requireEnv("BLACKHOLES_NOTARY_PROFILE");
 const publicKey = requireEnv("BLACKHOLES_SPARKLE_PUBLIC_KEY");
 if (!/^[A-Za-z0-9+/]{43}=$/.test(publicKey) || Buffer.from(publicKey, "base64").length !== 32) throw new Error("Expected a Sparkle Ed25519 PUBLIC key, not a private key.");
-if (process.env.BLACKHOLES_ACK_RUNTIME_LICENSES !== "1") throw new Error("Review the integration SDK and Node redistribution terms, then set BLACKHOLES_ACK_RUNTIME_LICENSES=1.");
+if (process.env.BLACKHOLES_ACK_RUNTIME_LICENSES !== "1") throw new Error("Review the Node redistribution terms, then set BLACKHOLES_ACK_RUNTIME_LICENSES=1.");
 if (capture("git", ["status", "--porcelain"])) throw new Error("Commit the release source before packaging so its source archive matches the app.");
 
 const version = readFileSync(join(root, "Cargo.toml"), "utf8").match(/^version = "([0-9]+\.[0-9]+\.[0-9]+)"$/m)?.[1];
@@ -54,24 +53,19 @@ for (const file of ["LICENSE", "LICENSING.md", "THIRD_PARTY_NOTICES.md"]) cpSync
 cpSync(join(root, "licenses"), join(resources, "licenses"), { recursive: true });
 cpSync(join(root, "assets/fonts/OFL-Geist.txt"), join(resources, "licenses/OFL-Geist.txt"));
 cpSync(join(sparkle, "LICENSE"), join(resources, "licenses/SPARKLE.txt"));
-// Private JavaScript engine for the bridge; no provider CLIs or developer tools.
+// Private JavaScript engine for account metadata; no provider SDKs or CLIs.
 const bundledNode = join(resources, "node");
 mkdirSync(join(bundledNode, "bin"), { recursive: true });
 cpSync(join(nodeRuntime, "bin/node"), join(bundledNode, "bin/node"));
 cpSync(join(nodeRuntime, "LICENSE"), join(bundledNode, "LICENSE"));
 cpSync(join(nodeRuntime, "LICENSE"), join(resources, "licenses/NODE.txt"));
 
-// Explicit source allow-list avoids copying local .env/.npmrc, logs, and signing material.
-const runtime = join(resources, "agent-sidecar");
-mkdirSync(runtime, { recursive: true });
-for (const entry of readdirSync(join(root, "agent-sidecar"))) {
-  if (entry.endsWith(".mjs") || ["providers", "package.json", "package-lock.json"].includes(entry)) {
-    cpSync(join(root, "agent-sidecar", entry), join(runtime, entry), { recursive: true });
-  }
+// Explicit allow-list: no npm dependencies, provider SDKs, credentials, or local state.
+const providerTools = join(resources, "provider-tools");
+mkdirSync(providerTools, { recursive: true });
+for (const file of ["usage.mjs", "json-rpc.mjs", "environment.mjs"]) {
+  cpSync(join(root, "provider-tools", file), join(providerTools, file));
 }
-// Clean SDK-only dependencies. Native CLI optional dependencies are omitted,
-// and a packaging guard rejects accidental reintroduction of provider copies.
-prepareAgentBridge(runtime);
 run("/usr/bin/ditto", [join(sparkle, "Sparkle.framework"), join(contents, "Frameworks/Sparkle.framework")]);
 
 const plist = {

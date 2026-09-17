@@ -1,7 +1,9 @@
+import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { JsonRpcProcess } from "./json-rpc.mjs";
-import { installedAgentBinary, providerEnvironment } from "./runtime.mjs";
+import { installedAgentBinary, providerEnvironment } from "./environment.mjs";
 
 // Account metadata only: no prompts, threads, tools, or billable generations.
 const request = JSON.parse(readFileSync(0, "utf8"));
@@ -13,16 +15,44 @@ const empty = { subscription_type: null, rate_limits_available: false, windows: 
 const percentage = value => typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : null;
 
 async function claudeUsage() {
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
-  let finishInput;
-  const input = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(resolve => { finishInput = resolve; }) }) };
-  const agent = query({ prompt: input, options: {
-    pathToClaudeCodeExecutable: installedAgentBinary("claude"),
-    env: environment, persistSession: false, settingSources: [], tools: [],
-    mcpServers: {}, strictMcpConfig: true, abortController, stderr: () => {},
-  } });
-  dispose = () => { finishInput?.({ done: true }); agent.close(); };
-  const usage = await agent.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+  // Read the CLI's control protocol without sending a user message or starting a turn.
+  const child = spawn(installedAgentBinary("claude"), [
+    "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+    "--no-session-persistence", "--setting-sources", "", "--tools", "",
+    "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: {} }),
+  ], { env: environment, stdio: ["pipe", "pipe", "pipe"], signal: abortController.signal });
+  const pending = new Map();
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const fail = () => {
+    for (const { reject } of pending.values()) reject(new Error("Usage query unavailable"));
+    pending.clear();
+  };
+  child.on("error", fail);
+  child.stdin.on("error", fail);
+  child.on("exit", fail);
+  child.stderr.resume();
+  lines.on("line", line => {
+    if (line.length > 65536) { fail(); return; }
+    let event;
+    try { event = JSON.parse(line); } catch { return; }
+    if (event.type !== "control_response") return;
+    const response = event.response;
+    const request = pending.get(response?.request_id);
+    if (!request) return;
+    pending.delete(response.request_id);
+    if (response.subtype === "success") request.resolve(response.response);
+    else request.reject(new Error("Usage query unavailable"));
+  });
+  const requestControl = request => new Promise((resolve, reject) => {
+    const request_id = randomUUID();
+    pending.set(request_id, { resolve, reject });
+    child.stdin.write(JSON.stringify({ type: "control_request", request_id, request }) + "\n", error => {
+      if (error) { pending.delete(request_id); reject(error); }
+    });
+  });
+  dispose = () => { fail(); lines.close(); child.stdin.destroy(); child.kill(); };
+  await requestControl({ subtype: "initialize", hooks: {}, sdkMcpServers: [] });
+  const usage = await requestControl({ subtype: "get_usage" });
   const windows = [];
   for (const [key, minutes, label] of [
     ["five_hour", 300, ""], ["seven_day", 10080, ""],
@@ -70,7 +100,7 @@ try {
   ]) : empty;
   process.stdout.write(JSON.stringify(usage));
 } catch {
-  // Do not forward credentials or raw SDK diagnostics.
+  // Do not forward credentials or raw provider diagnostics.
   process.exitCode = 1;
 } finally {
   clearTimeout(timer);

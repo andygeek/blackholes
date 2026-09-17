@@ -129,7 +129,7 @@ impl ProjectService {
         Ok(Some(target))
     }
 
-    /// Prepare only the explicitly selected repositories in a new container.
+    /// Prepare selected repositories, or a new Git repository when none are selected.
     /// Validate every source first; rollback is limited to this new container.
     pub fn create_with_repositories(
         projects_root: &Path,
@@ -137,7 +137,10 @@ impl ProjectService {
         sources: Vec<ProjectRepositorySource>,
         mode: ProjectRepositoryMode,
     ) -> Result<Workspace> {
-        if !sources.is_empty() { require_git_tools()?; }
+        if sources.is_empty() {
+            return Self::create_git_repository(projects_root, name);
+        }
+        require_git_tools()?;
         let mut seen = HashSet::new();
         let mut validated = Vec::new();
         for source in sources {
@@ -246,7 +249,7 @@ impl ProjectService {
         let source = fs::canonicalize(path)?;
         let repositories = discover_repositories(&source)?;
         if repositories.is_empty() {
-            bail!("No Git repositories found. Choose a repository or a folder containing repositories, or create an empty project.");
+            bail!("No Git repositories found. Choose a repository or a folder containing repositories, or create a project without selecting repositories to start a new one.");
         }
         let name = requested_name.filter(|name| !name.trim().is_empty())
             .or_else(|| source.file_name().and_then(OsStr::to_str)).unwrap_or("project");

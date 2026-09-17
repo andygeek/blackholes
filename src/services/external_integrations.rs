@@ -72,7 +72,7 @@ pub fn synchronize(paths: &AppPaths) -> IntegrationStatus {
         write_if_changed(&launcher, before.as_deref(), &launcher_contents, 0o700)?;
         fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700))?;
 
-        for profile in profiles(&home) {
+        for profile in profiles(&home, &paths.agent_profiles) {
             let result = if profile.client == "Codex" {
                 configure_codex(&profile.config, &launcher)
             } else {
@@ -105,7 +105,7 @@ pub fn synchronize(paths: &AppPaths) -> IntegrationStatus {
     status
 }
 
-fn profiles(home: &Path) -> Vec<Profile> {
+fn profiles(home: &Path, isolated_profiles: &Path) -> Vec<Profile> {
     // Prepare default profiles even on a clean machine, before a CLI is first used.
     let mut profiles = vec![
         Profile {
@@ -141,6 +141,20 @@ fn profiles(home: &Path) -> Vec<Profile> {
         (".claude-work", "Claude Code", ".claude.json"),
     ] {
         let root = home.join(directory);
+        if root.is_dir() {
+            profiles.push(Profile {
+                client,
+                config: root.join(file),
+                skills: root.join("skills"),
+            });
+        }
+    }
+    // Accounts connected inside Blackholes are also used by terminal sessions.
+    for (provider, client, file) in [
+        ("codex", "Codex", "config.toml"),
+        ("claude", "Claude Code", ".claude.json"),
+    ] {
+        let root = isolated_profiles.join(provider);
         if root.is_dir() {
             profiles.push(Profile {
                 client,

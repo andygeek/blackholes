@@ -128,6 +128,11 @@ impl TerminalService {
                 AgentKind::Codex => command.env("CODEX_HOME", config_dir),
                 AgentKind::Claude => command.env("CLAUDE_CONFIG_DIR", config_dir),
                 AgentKind::Gemini => command.env("GEMINI_CLI_HOME", config_dir),
+                AgentKind::OpenCode => {
+                    command.env("XDG_DATA_HOME", config_dir.join("data"));
+                    command.env("XDG_CONFIG_HOME", config_dir.join("config"));
+                    command.env("XDG_CACHE_HOME", config_dir.join("cache"));
+                },
                 _ => {},
             }
         }

@@ -5,10 +5,10 @@ import { build } from "vite";
 const frontendRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outputDirectory = resolve(frontendRoot, "../assets/generated");
 const entries = [
-  ["chat", "src/chat/main.tsx", "BlackholesChat"],
+  ["workspace", "src/workspace/main.tsx", "BlackholesWorkspace"],
   ["navigation", "src/navigation/main.tsx", "BlackholesNavigation"],
   ["quick-open", "src/quick-open/main.tsx", "BlackholesQuickOpen"],
-  ["editor", "src/chat/editor-runtime.ts", "BlackholesEditor"],
+  ["editor", "src/workspace/editor-runtime.ts", "BlackholesEditor"],
 ];
 
 for (const [name, entry, globalName] of entries) {
@@ -37,7 +37,7 @@ for (const [name, entry, globalName] of entries) {
     build: {
       target: "safari16",
       outDir: outputDirectory,
-      emptyOutDir: name === "chat",
+      emptyOutDir: name === "workspace",
       minify: true,
       sourcemap: false,
       lib: {

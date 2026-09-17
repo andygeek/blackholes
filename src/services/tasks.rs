@@ -1,7 +1,7 @@
 use crate::paths::AppPaths;
 use crate::{
     model::{
-        DEFAULT_TASK_ICON, ProjectTask, Repository, TaskRepository, Workspace, WorkspaceColor,
+        DEFAULT_TASK_ICON, ProjectTask, Repository, TaskRepository, Workspace,
     },
     services::notes::{ProjectTaskInstructionsService, TaskNoteService},
     services::workspace_trust,
@@ -74,6 +74,9 @@ pub struct BranchAvailability {
 pub struct CreateTaskRequest {
     pub title: String,
     pub description: Option<String>,
+    pub acceptance_criteria: Option<String>,
+    pub pull_request_url: Option<String>,
+    pub external_task_url: Option<String>,
     pub branch_name: Option<String>,
     pub branch_source: TaskBranchSource,
     /// Branch, tag or revision a task branch that does not exist yet is
@@ -235,14 +238,17 @@ impl TaskService {
             workspace,
             &task.title,
             &task.repositories,
+            Some(task),
         )
     }
 
     pub fn create(&self, workspace: &Workspace, request: CreateTaskRequest) -> Result<ProjectTask> {
-        let title = request.title.trim();
-        if title.is_empty() {
-            bail!("Enter a task title");
-        }
+        let title = super::task_details::text(Some(request.title.clone()), 500, "Title")?.context("Enter a task title")?;
+        let title = title.as_str();
+        let description = super::task_details::text(request.description.clone(), 100_000, "Description")?;
+        let acceptance_criteria = super::task_details::text(request.acceptance_criteria.clone(), 100_000, "Acceptance criteria")?;
+        let pull_request_url = super::task_details::link(request.pull_request_url.clone(), "Pull request link")?;
+        let external_task_url = super::task_details::link(request.external_task_url.clone(), "External task link")?;
         let unique_ids: HashSet<_> = request.repository_ids.iter().copied().collect();
         if unique_ids.is_empty() {
             bail!("Choose at least one repository for the task");
@@ -324,7 +330,7 @@ impl TaskService {
                 task_repositories.push(worktree.task_repository.clone());
                 created.push(worktree);
             }
-            write_task_files(&task_root, task_id, workspace, title, &task_repositories)?;
+            write_task_files(&task_root, task_id, workspace, title, &task_repositories, None)?;
             Ok::<_, anyhow::Error>(())
         })();
 
@@ -336,17 +342,14 @@ impl TaskService {
 
         let now = Utc::now();
         let worktree_root_path = fs::canonicalize(&task_root).unwrap_or(task_root);
-        // No agent has seen this directory before, and each one keys workspace
-        // trust on the exact path. Record it before the task's terminal opens.
-        workspace_trust::grant(
-            &self.agent_profiles,
-            &Self::trust_targets(&worktree_root_path, &task_repositories),
-        );
-        Ok(ProjectTask {
+        let task = ProjectTask {
             id: task_id,
             workspace_id: workspace.id,
             title: title.into(),
-            description: request.description.and_then(non_empty),
+            description,
+            acceptance_criteria,
+            pull_request_url,
+            external_task_url,
             icon: DEFAULT_TASK_ICON.into(),
             color: workspace.color,
             sort_order: 0,
@@ -355,36 +358,17 @@ impl TaskService {
             sessions: vec![],
             created_at: now,
             updated_at: now,
-        })
+        };
+        if let Err(error) = self.repair_task_files(workspace, &task) {
+            rollback_worktrees(&created);
+            let _ = fs::remove_dir_all(&task.worktree_root_path);
+            return Err(error);
+        }
+        // Context is ready before any agent can open this workspace.
+        workspace_trust::grant(&self.agent_profiles, &Self::trust_targets(&task.worktree_root_path, &task.repositories));
+        Ok(task)
     }
 
-    pub fn update(
-        &self,
-        workspace: &Workspace,
-        task: &mut ProjectTask,
-        title: String,
-        description: Option<String>,
-        color: WorkspaceColor,
-    ) -> Result<()> {
-        let title = title.trim();
-        if title.is_empty() {
-            bail!("Task title cannot be empty");
-        }
-        let mut updated = task.clone();
-        updated.title = title.into();
-        updated.description = description.and_then(non_empty);
-        updated.color = color;
-        updated.updated_at = Utc::now();
-        write_task_files(
-            &updated.worktree_root_path,
-            updated.id,
-            workspace,
-            &updated.title,
-            &updated.repositories,
-        )?;
-        *task = updated;
-        Ok(())
-    }
 
     pub fn add_repositories(
         &self,
@@ -460,6 +444,7 @@ impl TaskService {
             workspace,
             &task.title,
             &repositories,
+            Some(task),
         ) {
             rollback_worktrees(&created);
             let _ = write_task_files(
@@ -468,6 +453,7 @@ impl TaskService {
                 workspace,
                 &task.title,
                 &task.repositories,
+                Some(task),
             );
             return Err(error);
         }
@@ -597,6 +583,7 @@ impl TaskService {
             workspace,
             &task.title,
             &repositories,
+            Some(task),
         )?;
         task.repositories = repositories;
         task.updated_at = Utc::now();
@@ -1164,6 +1151,10 @@ struct TaskManifest<'a> {
     workspace_id: Uuid,
     title: &'a str,
     repositories: &'a [TaskRepository],
+    description: Option<&'a str>,
+    acceptance_criteria: Option<&'a str>,
+    pull_request_url: Option<&'a str>,
+    external_task_url: Option<&'a str>,
 }
 
 fn write_task_files(
@@ -1172,10 +1163,15 @@ fn write_task_files(
     workspace: &Workspace,
     title: &str,
     repositories: &[TaskRepository],
+    details: Option<&ProjectTask>,
 ) -> Result<()> {
     let task_instructions = ProjectTaskInstructionsService::read(workspace)?;
     let manifest = TaskManifest {
-        version: 1,
+        version: 2,
+        description: details.and_then(|task| task.description.as_deref()),
+        acceptance_criteria: details.and_then(|task| task.acceptance_criteria.as_deref()),
+        pull_request_url: details.and_then(|task| task.pull_request_url.as_deref()),
+        external_task_url: details.and_then(|task| task.external_task_url.as_deref()),
         task_id,
         workspace_id: workspace.id,
         title,
@@ -1186,6 +1182,9 @@ fn write_task_files(
         &serde_json::to_vec_pretty(&manifest)?,
     )?;
 
+    if let Some(task) = details {
+        write_private_file(&task_root.join(super::task_details::DETAILS_FILE_NAME), super::task_details::markdown(task).as_bytes())?;
+    }
     let mut context = format!(
         "<!-- Generated by Blackholes. Do not edit this task-specific header. -->\n# Blackholes task context\n\n- Task: `{}`\n- Task ID: `{}`\n- Project: `{}`\n- Project ID: `{}`\n",
         markdown_inline(title),
@@ -1193,6 +1192,7 @@ fn write_task_files(
         markdown_inline(workspace.label()),
         workspace.id,
     );
+    context.push_str("\nRead `.blackholes-task-details.md` for the objective, acceptance criteria and links. Use Blackholes MCP `get_task` for the latest values and `update_task` to change them. Read any legacy `.blackholes-note.md` as additional context.\n");
     if !task_instructions.trim().is_empty() {
         context.push('\n');
         context.push_str(task_instructions.trim_end());
@@ -1632,6 +1632,7 @@ fn git_success<'a>(directory: &Path, arguments: impl IntoIterator<Item = &'a str
 fn path_text(path: &Path) -> Result<&str> {
     path.to_str().context("A Git path is not valid UTF-8")
 }
+
 
 fn non_empty(value: String) -> Option<String> {
     let value = value.trim().to_string();

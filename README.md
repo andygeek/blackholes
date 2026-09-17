@@ -1,11 +1,40 @@
-# Blackholes
+<p align="center">
+  <img src="assets/app-logo-transparent.png" width="112" alt="Blackholes app logo" />
+</p>
+<h1 align="center">Blackholes</h1>
+<p align="center"><strong>Your workspace for coding agents, terminals, and Git worktrees.</strong></p>
+<p align="center">Run your installed agent CLIs side by side. Organize sessions by project and task, keep repositories together, and give every task its own working context.</p>
 
-A macOS desktop workspace for coding agents, Git repositories, isolated tasks, and native terminals.
+<p align="center">
+  <a href="https://github.com/andygeek/blackholes/stargazers"><img src="https://img.shields.io/github/stars/andygeek/blackholes?style=flat" alt="GitHub stars" /></a>
+  <a href="https://github.com/andygeek/blackholes/releases"><img src="https://img.shields.io/github/downloads/andygeek/blackholes/total?style=flat" alt="GitHub release downloads" /></a>
+  <a href="https://github.com/andygeek/blackholes/releases/latest"><img src="https://img.shields.io/github/v/release/andygeek/blackholes?style=flat" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MPL--2.0-blue" alt="License: MPL-2.0" /></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-black" alt="macOS 13 or newer" />
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-999999" alt="Apple Silicon arm64" />
+</p>
 
-> Documentation status: Work in progress.
+<h2 align="center"><a href="https://github.com/andygeek/blackholes/releases/latest">Download Blackholes for macOS</a></h2>
+<p align="center">Choose the <code>arm64.dmg</code> asset from the latest release. <a href="https://blackholes.dev/">Website</a> · <a href="docs/RELEASING.md">Release guide</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
-Version: **0.1.8**. Blackholes' original source code is licensed under
-[MPL-2.0](LICENSE); dependencies and third-party assets retain their own licenses.
+[![Blackholes demo: creating tasks and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
+
+[Watch the full demo with video controls](https://blackholes.dev/videos/blackholes-demo.mp4).
+The recordings come from the website and show an earlier interface; the current task details and menus are described below.
+
+## Features
+
+| | |
+| --- | --- |
+| **Agent sessions in one workspace**<br><br>Run coding agents in visible native terminals, switch between sessions, and organize them by project or task. Launch existing tasks through the Blackholes MCP.<br><br>[Watch the demo →](https://blackholes.dev/videos/blackholes-demo.mp4) | [![Task agent sessions](docs/media/task-sessions.gif)](https://blackholes.dev/videos/blackholes-demo.mp4) |
+| **Projects with multiple repositories**<br><br>Keep related repositories together. Link existing checkouts or copy them into a project, then create isolated worktrees for the repositories a task needs.<br><br>[Watch the repository tour →](https://blackholes.dev/videos/blackholes-repositories.mp4) | [![Project repositories and task navigation](docs/media/project-repositories.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4) |
+
+- **Task details:** click a task title to edit its objective, acceptance criteria, PR link, and external task link. Agents can update the same fields through MCP.
+- **Native terminals:** tabs, splits, scrollback, and supported session restoration.
+- **Files and Git changes:** browse and edit files, inspect diffs, and jump between projects, tasks, and terminals with `Cmd+O`.
+- **Your provider accounts:** use system or isolated profiles for installed agent CLIs.
+
+Blackholes' original code is licensed under [MPL-2.0](LICENSE). Dependencies and third-party assets retain their own licenses. Documentation is evolving with the application.
 
 ## Installing the desktop app
 
@@ -13,12 +42,13 @@ Blackholes uses the agent CLIs installed on your computer: `codex`, `claude`,
 `gemini`, `opencode`, and `agy` (Antigravity terminals). Install and update the
 providers you use with their own tools; no provider CLI is included in the app.
 Missing providers do not prevent the app or other providers from working.
-Connect your own provider account in Settings → Accounts. Models, MCPs, and Usage follow that selection;
-plan limits are queried for the selected account, while local token/cost totals
-are grouped by provider. Unsupported plan-limit queries are shown as unavailable.
+Connect your own provider account in Settings → Accounts. New terminal sessions
+use the selected system or isolated profile for their provider. Existing sessions
+keep their profile. Usage queries plan limits for the selected account; unsupported
+queries are shown as unavailable.
 
-Terminals resolve commands after your interactive login shell starts. Black Bots,
-authentication, model discovery, and usage queries resolve the installed executable
+Terminals resolve commands after your interactive login shell starts. Provider
+authentication and usage queries resolve the installed executable
 using that shell's PATH, including shell-configured Homebrew and version managers.
 Conventional user installation directories are fallback search locations. The
 lookup runs off the UI thread and is bounded; shell functions and aliases remain
@@ -26,11 +56,11 @@ terminal features. A missing CLI produces an installation message, without
 downloading a replacement. Updating a CLI takes effect on its next launch;
 already-running sessions keep their current executable.
 
-Packaged apps retain a private Node.js engine and integration SDK libraries for
-the Black Bot bridge. They do not add these to your terminal PATH. Claude's SDK
-is explicitly pointed at your installed `claude`; its optional native binaries
-are omitted. Black Bot protocol compatibility still depends on the installed CLI;
-provider protocol changes may require a Blackholes integration update.
+Packaged apps retain a private Node.js engine for provider account usage queries.
+It is not added to your terminal PATH. These helpers read metadata through the
+installed Claude and Codex CLIs without submitting prompts. Blackholes does not
+bundle an agent SDK or run its own chat engine; conversation execution and history
+belong to the provider CLI in each terminal.
 
 On first launch and after updates, Blackholes also prepares its MCP connection
 and routing skill in the user's Codex and Claude Code profiles. This runs inside
@@ -45,7 +75,7 @@ does not silently modify the system. Project-specific dependencies such as Docke
 language toolchains, or build SDKs remain requirements of the user's repositories.
 
 New projects live under `~/Blackholes_projects` by default. Each project is a
-container for repositories, project skills, `CLAUDE.md`, `AGENTS.md`, and notes.
+container for repositories, project skills, `CLAUDE.md`, `AGENTS.md`, and shared instructions.
 Project creation offers two modes for local repositories:
 
 - **Link existing (default):** create symbolic links directly in the project
@@ -77,8 +107,10 @@ preserved; changing the default is not a migration of previous workspaces.
 Create a project by naming it and selecting the repositories to include. Add a
 local repository or a folder containing repositories, review the detected list,
 and repeat to add sources from other locations. GitHub URLs can be added one at
-a time to the same list. Only selected repositories are added; an empty
-selection creates an empty project container. The same project form is used
+a time to the same list. Selected repositories are linked, copied, or cloned as
+requested. If none are selected, Blackholes creates a new Git repository inside
+the project container, using the container's name and an initial commit so it is
+ready for coding and task worktrees. The same project form is used
 over native terminals and other workspace views without closing terminal sessions.
 The compact form reveals GitHub input on demand and keeps location details
 collapsed. Existing database-only links are materialized when project context is
@@ -91,15 +123,15 @@ treated as submitting an agent turn.
 Packaged apps send macOS notifications with Blackholes' own name and icon. The
 first notice requests notification permission if it has not been granted yet.
 Clicking a notice brings Blackholes forward, restores its minimized window, and
-opens the corresponding task, terminal, or Black Bot conversation. The destination
+opens the corresponding task or terminal. The destination
 is kept in the notice so clicks can also be handled after relaunch, using normal
 session restoration. A notice for a removed destination still opens the app.
 Receiving a notice alone never changes the selected workspace. Bare development
 executables retain in-app notices and the attention sound, but do not send macOS
 notifications under Terminal's identity.
 
-The Agents section combines built-in bots and terminal agents. Press and hold a
-card by its icon or title, then drag to reorder the mixed list. The cursor changes
+The Agents section lists terminal agent sessions. Press and hold a card by its
+icon or title, then drag to reorder the list. The cursor changes
 only once the hold activates reordering; the insertion marker and edge
 scrolling help with long lists. Keyboard users can focus a card and use
 `Option+Up` / `Option+Down`. The order survives app restarts and does not change
@@ -108,18 +140,20 @@ project/task ownership or the project tree.
 Closing a terminal agent from Agents, the project tree or its terminal pane
 requires confirmation. It stops the terminal and removes it from session
 restoration, without deleting repository files or provider-saved conversations.
-Removing a built-in bot confirms deletion of its Blackholes conversation history.
-Both confirmations use the shared modal with the sidebar visible beneath its
+Agent close confirmations use the shared modal with the sidebar visible beneath its
 dimmed, blurred backdrop, including when a native terminal is active.
 Editing a project's visible name, icon and color uses that same shared modal,
 preserving the sidebar and current workspace beneath the backdrop. Appearance
 changes are saved only on confirmation; repository and folder names stay unchanged.
 
-`Cmd+O` searches projects, tasks, built-in agents and terminal sessions (including
-plain shells). Search by agent/provider name, terminal title, project, task or
-repository context. Agent and terminal results open the existing session rather
-than creating a duplicate; project and task results still open their notes.
+`Cmd+O` searches projects, tasks and terminal sessions (including plain shells). Search by agent/provider name, terminal title, project, task or
+repository context. Terminal results open the existing session rather than creating a duplicate; project results open the session overview and task results open task details.
 The palette accounts for the sidebar when centering and adapts to narrow windows.
+Its search input supports `Cmd+A`, `Cmd+C`, `Cmd+X`, and `Cmd+V` through the native clipboard.
+
+Use the `+` on a task or repository to open **Blank Terminal**, **Claude**, or
+**Codex**. A task’s `…` menu contains **Edit task** and **Delete task**. The double
+up-chevron above the project tree collapses all project and task accordions.
 
 ## Build and run
 
@@ -130,14 +164,13 @@ Requires macOS 13+, Node.js 20.19+, Git, and the stable Rust toolchain configure
 ./target/release/blackholes-rust
 ```
 
-The build script generates the React bundles for the three WebViews and the lazy-loaded editor, prepares frontend and integration SDK dependencies, and compiles the release binaries. It removes stale provider packages from the bridge when its dependency lock changes and rejects bundled CLIs. It does not launch the application. Use this script for release builds so Rust embeds the current frontend assets.
+The build script prepares frontend dependencies, generates the React bundles for the three WebViews and the lazy-loaded editor, and compiles the release binaries. It does not launch the application. Use this script for release builds so Rust embeds the current frontend assets.
 
 On macOS it also downloads the pinned, checksum-verified Sparkle framework into
 `target/` for the native updater bridge. Bare development executables cannot
 self-update. Signed `.app` releases show a title-bar update button and use GitHub
 Release assets; see [Releasing and updates](docs/RELEASING.md) for packaging,
-signing, notarization, and publishing prerequisites. Public downloads are not
-available until the maintainer publishes them.
+signing, notarization, and publishing prerequisites. Published macOS builds are available from [GitHub Releases](https://github.com/andygeek/blackholes/releases/latest).
 
 On macOS, the red window button hides Blackholes without discarding its live
 agents, terminals, or unsaved window state. Click the Dock icon to show the same
@@ -147,13 +180,33 @@ window again. Quitting the application is separate from hiding its window.
 
 - Organize projects with one or more Git repositories.
 - Create tasks with separate branches and worktrees for selected repositories.
-- Chat with persistent global, project, or task agents using Claude, Codex, Gemini, or OpenCode.
-- Configure agent providers, authentication, permissions, skills, and MCP servers.
+- Launch, organize, and restore coding-agent sessions in visible terminals.
+- Configure provider accounts, project terminal permissions, and agent instructions.
+- Connect external agents to project and task management through the Blackholes MCP.
 - Browse and edit files, inspect Git diffs, and search with `Cmd+O` and `Cmd+P`.
-- Write project/task notes with BlockNote, synchronized to Markdown for agents.
+- Keep a task objective, acceptance criteria, PR link, and external task link synchronized with agents through MCP.
 - Run native terminals with tabs, splits, scrollback, and session restoration.
 
 Worktrees separate working files and branches. They are not containers or security sandboxes. The file workspace provides focused editing and diffs, not a full IDE or language-server environment.
+
+### Task details and links
+
+Click a task's title or choose **Edit task** to open its details. Keep the objective
+in **Objective and description**, define completion conditions in **Acceptance
+criteria**, and add optional **Pull request** and **External task** links. The
+external link can point to ClickUp, Jira, GitHub Issues, or another HTTP(S) page;
+Blackholes stores the URL without fetching or synchronizing its contents.
+
+Use **Save changes** or `Cmd+S` while editing. Drafts survive navigation within
+the current app session. If an agent changes the same task while you are editing,
+the app preserves your draft and asks you to reconcile it with the latest values.
+The details page also lists sessions and attached repositories.
+
+There are no separate project/task notes rows. Project titles open a session
+overview. Existing task notes appear under **Previous notes**; project notes and
+all previous note files remain on disk. Keep project-wide context in project
+instructions. See [Task details and MCP](docs/TASK-DETAILS.md) for fields, update
+semantics, and legacy compatibility.
 
 ### Terminal agent permissions
 
@@ -173,7 +226,7 @@ Claude/Codex session IDs and profiles are preserved.
 
 Use only with trusted projects: this allows file changes and commands without
 confirmation. Codex also disables its sandbox; OpenCode preserves explicit deny
-rules. This does not change running agents, built-in bots, manually typed commands,
+rules. This does not change running agents, manually typed commands,
 or provider configuration files. Turning it off stops Blackholes from adding
 bypass flags on subsequent launches; the provider's own settings still apply.
 It does not add new session-resume support to providers.
@@ -201,7 +254,7 @@ then calls `start_task_agents` once with their IDs:
 The tool launches 1–8 visible native terminals in their respective task
 workspaces, with the implementation brief already submitted. They run
 concurrently and appear beneath their tasks; the coordinating chat keeps focus.
-Each agent is told to read the task note and repository instructions, work only
+Each agent is told to read task details, any preserved legacy notes, and repository instructions, work only
 in the attached worktrees, and show its progress and result in its terminal.
 No completion notification is required.
 
@@ -212,7 +265,7 @@ specify one of these providers explicitly. The launcher reuses provider profile 
 when supplied by the caller (Codex, Claude, and Gemini), without copying credentials.
 Task terminals run the installed CLI through the same interactive login shell
 as manually opened terminals. Missing commands and provider startup errors are
-visible in that terminal. `handoff_to_agent` remains available for built-in Black Bots.
+visible in that terminal.
 The initial launch injects the Blackholes MCP connection through invocation
 settings for Codex/Claude/OpenCode and workspace settings in the managed task
 container for Gemini. It does not require an MCP registration in the inherited profile.
@@ -240,11 +293,11 @@ Rust owns application state, local operations, and processes. React renders the 
 ```mermaid
 flowchart TD
     UI["React / WebKit: navigation, workspace, quick open"] <-->|JSON commands and events| App["Rust / GPUI application"]
-    App --> Services["Rust services: projects, tasks, files, notes, settings"]
+    App --> Services["Rust services: projects, task details, files, settings"]
     Services --> Data["SQLite, JSON files, Git worktrees"]
     App --> Terminal["Native terminal: GPUI + Alacritty + PTY"]
-    App <-->|STDIO / JSONL| Node["Node process: provider adapters"]
-    Node --> Providers["Claude, Codex, Gemini, OpenCode"]
+    Terminal --> Providers["Installed agent CLIs"]
+    App --> Usage["Provider account and usage helpers"]
     Providers <-->|STDIO| MCP["Blackholes MCP"]
     MCP --> Services
     MCP -->|Local event socket| App
@@ -252,38 +305,31 @@ flowchart TD
 
 - **UI:** three independent React roots handle navigation, the central workspace, and quick open. HTML and production bundles are embedded in the application; the UI needs no web server.
 - **Terminal:** `portable-pty` runs the shell, `alacritty_terminal` interprets terminal output, and GPUI draws it. Terminal bytes never pass through React or xterm.js.
-- **Agents:** Rust starts and controls a local Node process. Provider adapters return streaming text, tool activity, process status, and results.
-- **MCP:** the same Rust executable runs as a STDIO MCP server with the `mcp` argument. It exposes project/task management, notes, navigation, agent handoffs, and completion notifications.
+- **Sessions:** provider CLIs run in visible native terminals. Blackholes manages their placement, profile, process lifecycle, and supported session restoration.
+- **Accounts:** small helpers authenticate providers and query plan limits. They do not run chat turns or retain conversation history.
+- **MCP:** the same Rust executable runs as a STDIO MCP server with the `mcp` argument. It exposes project/task details, legacy note compatibility, navigation, terminal agent launches, and completion notifications.
 
-The UI has no localhost server. OpenCode's runtime is an exception elsewhere in the application: its SDK starts a local HTTP server for agent execution.
+The UI has no localhost server. Agent models, tools, skills, and custom MCPs are
+configured through the provider CLI. Authentication can use the system profile or
+an isolated Blackholes profile per provider.
 
-### Agent providers
-
-| Provider | Integration |
-|---|---|
-| Claude | Claude Agent SDK |
-| Codex | Codex `app-server --stdio` over JSON-RPC |
-| Gemini | Gemini CLI with ACP over STDIO |
-| OpenCode | OpenCode SDK with a local server and event stream |
-
-Mercury, Earthy, and Saturny are agent identities, independent of the selected provider. Persistence means the conversation and provider session references are saved; it does not mean an agent process runs forever.
-
-Agents check the Blackholes MCP and resolve the intended project before working. Global and project agents can inspect and change repositories directly: tasks and worktrees are optional. Isolation is used when the user chooses it, selects a task, or their project instructions require it. Task work stays in the attached worktrees. Optional delegation uses `handoff_to_agent` with a project or task ID. Internal provider subagents and invisible background commands are discouraged by shared instructions, with provider-specific enforcement. Long-lived processes belong in visible terminals.
-
-Authentication can use the system profile or an isolated Blackholes profile per provider. Runtime capabilities differ: the chat's immediate message-redirection path currently applies to Claude; other providers use the app's pending-message queue.
+Agents resolve the intended project through the Blackholes MCP before working.
+Tasks and worktrees are optional, unless the user or project instructions require
+them. Task agents work in their attached worktrees and show progress in their
+terminals. Long-lived processes also belong in visible terminals.
 
 ### Source map
 
 | Location | Responsibility |
 |---|---|
 | `src/main.rs`, `src/ui/app.rs` | Application startup, state, navigation, and UI coordination |
-| `src/services/` | Projects, Git tasks, files, notes, persistence, agents, skills, and MCP settings |
+| `src/services/` | Projects, Git tasks and details, files, legacy notes, persistence, terminals, provider accounts, and MCP integration |
 | `src/ui/terminal.rs` | Native terminal input and rendering |
 | `frontend/src/` | React navigation, workspace, quick open, and shared components |
-| `agent-sidecar/` | Node entry point and provider adapters |
+| `provider-tools/` | Installed CLI metadata queries for plan usage |
 | `src/bin/blackholes-mcp.rs` | Local MCP server |
 
-The application coordinator is large, and some native rendering code remains alongside React surfaces. Workflow instructions live in the shared runtime prompt, MCP guidance, and generated project context; keep these aligned when changing agent behavior. Startup updates known legacy task-only rules in managed project instruction blocks while preserving custom text.
+The application coordinator is large, and some native rendering code remains alongside React surfaces. Workflow instructions live in MCP guidance and generated project context; keep these aligned when changing agent behavior. Startup updates known legacy task-only rules in managed project instruction blocks while preserving custom text.
 
 ## Local data
 
@@ -293,17 +339,19 @@ Application data lives in the macOS Application Support directory resolved by `s
 |---|---|
 | `blackholes-local.db` | SQLite WAL database for projects, tasks, settings, and events |
 | `app-session.json` | Saved UI layout and terminal session metadata |
-| `orchestrator-chat.json` | Agent identities, conversations, and session references |
 | `task-workspaces/` | Task worktrees |
-| `agent-profiles/`, `blackholes-skills/` | Isolated provider profiles and managed skills |
+| `agent-profiles/` | Isolated provider profiles |
 
-Project/task notes use Markdown with a rich-block JSON sidecar. Terminal output is not stored in SQLite.
+Task details are stored with task records in SQLite and exported to `.blackholes-task-details.md` and `.blackholes-task.json` inside each managed task workspace. Previous Markdown notes and rich-block sidecars are preserved. Terminal output is not stored in SQLite.
+Legacy built-in bot history, if present, is left on disk but is no longer read or
+modified. Existing provider conversation files remain managed by their CLIs.
 
 ## Connect external AI clients
 
-The in-app agents receive the built-in MCP automatically. The desktop also
-configures external Codex and Claude Code on startup, including after updates.
-Default profiles, `CODEX_HOME` / `CLAUDE_CONFIG_DIR`, existing `-work` profiles,
+The desktop configures the Blackholes MCP in Codex and Claude Code profiles on
+startup, including after updates. Task-agent launches also receive the connection
+through their launch settings.
+Default profiles, connected Blackholes profiles, `CODEX_HOME` / `CLAUDE_CONFIG_DIR`, existing `-work` profiles,
 and the legacy Claude script profile are supported. Configuring one client does
 not require the other client to exist, and a profile failure does not block the app
 or the remaining profiles.
@@ -337,6 +385,7 @@ Restart the external client session after installation. The installer supports `
 
 ## Further reading
 
+- [Task details and MCP](docs/TASK-DETAILS.md)
 - [Frontend and native bridge](docs/FRONTEND.md)
 - [Performance design and targets](docs/PERFORMANCE.md)
 - [Manual performance checks](docs/MANUAL-BENCHMARK.md)

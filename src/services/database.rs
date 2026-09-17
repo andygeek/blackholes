@@ -193,9 +193,26 @@ impl Database {
     }
 
     pub fn upsert_task(&self, task: &ProjectTask) -> Result<()> {
-        let payload = serde_json::to_string(task)?;
         let mut connection = self.connection.lock();
-        let transaction = connection.transaction()?;
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut saved = task.clone();
+        // Session and worktree updates may carry an older metadata snapshot.
+        // Metadata edits go through edit_task_metadata and must survive them.
+        let existing: Option<String> = transaction.query_row(
+            "SELECT payload FROM project_tasks WHERE id = ?1", [task.id.to_string()], |row| row.get(0),
+        ).optional()?;
+        if let Some(existing) = existing {
+            let current: ProjectTask = serde_json::from_str(&existing)?;
+            saved.title = current.title;
+            saved.color = current.color;
+            saved.description = current.description;
+            saved.acceptance_criteria = current.acceptance_criteria;
+            saved.pull_request_url = current.pull_request_url;
+            saved.external_task_url = current.external_task_url;
+            saved.updated_at = saved.updated_at.max(current.updated_at);
+        }
+        let task = &saved;
+        let payload = serde_json::to_string(task)?;
         transaction.execute(
             "INSERT INTO project_tasks(id, workspace_id, sort_order, payload, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
@@ -220,6 +237,28 @@ impl Database {
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Serialize metadata edits from the desktop and MCP against the current task.
+    pub fn edit_task_metadata(
+        &self,
+        task_id: Uuid,
+        edit: impl FnOnce(&mut ProjectTask) -> Result<()>,
+    ) -> Result<ProjectTask> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let payload: String = transaction.query_row(
+            "SELECT payload FROM project_tasks WHERE id = ?1", [task_id.to_string()], |row| row.get(0),
+        ).context("The task is no longer available")?;
+        let mut task: ProjectTask = serde_json::from_str(&payload)?;
+        edit(&mut task)?;
+        transaction.execute(
+            "UPDATE project_tasks SET payload = ?1, updated_at = ?2 WHERE id = ?3",
+            params![serde_json::to_string(&task)?, task.updated_at.to_rfc3339(), task_id.to_string()],
+        )?;
+        insert_event(&transaction, "task.upserted", task_id, &serde_json::json!({ "task": task }))?;
+        transaction.commit()?;
+        Ok(task)
     }
 
     pub fn remove_task(&self, task_id: Uuid) -> Result<()> {
@@ -485,6 +524,9 @@ fn read_legacy_tasks(connection: &Connection) -> Result<Vec<ProjectTask>> {
                 workspace_id: parse_uuid(row.get::<_, String>(1)?),
                 title: row.get(2)?,
                 description: row.get(3)?,
+                acceptance_criteria: None,
+                pull_request_url: None,
+                external_task_url: None,
                 icon: row
                     .get::<_, Option<String>>(4)?
                     .unwrap_or_else(|| DEFAULT_TASK_ICON.into()),

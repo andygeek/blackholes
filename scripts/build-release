@@ -4,7 +4,6 @@ set -euo pipefail
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
-sidecar_root="$repo_root/agent-sidecar"
 
 if [[ "$(uname -s)" == Darwin ]]; then
   export BLACKHOLES_SPARKLE_DIR
@@ -12,7 +11,5 @@ if [[ "$(uname -s)" == Darwin ]]; then
 fi
 
 "$script_dir/build-frontend"
-
-node "$script_dir/prepare-agent-bridge.mjs" "$sidecar_root"
 
 cargo build --release --bins --manifest-path "$repo_root/Cargo.toml"

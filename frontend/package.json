@@ -10,11 +10,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@blocknote/core": "0.54.0",
-    "@blocknote/mantine": "0.54.0",
-    "@blocknote/react": "0.54.0",
-    "@mantine/core": "9.5.2",
-    "@mantine/hooks": "9.5.2",
     "lucide-react": "1.40.0",
     "monaco-editor": "0.56.0",
     "react": "19.2.8",

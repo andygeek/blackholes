@@ -150,8 +150,7 @@ button:focus-visible {
   padding: 8px 16px 8px 8px;
 }
 
-.agent-card,
-.tree-agent {
+.agent-card {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -187,7 +186,6 @@ button:focus-visible {
 .agent-card:hover .remove-button, .agent-card:focus-within .remove-button { opacity: 1; }
 
 .agent-card:hover,
-.tree-agent:hover,
 .tree-row:hover,
 .tree-leaf:hover {
   background: var(--surface-hover);
@@ -197,57 +195,11 @@ button:focus-visible {
   background: var(--surface-selected);
 }
 
-.agent-card.is-arriving {
-  transform-origin: left center;
-  animation: agent-card-arrival 820ms cubic-bezier(.2, .82, .24, 1) both;
-}
-
-.agent-card.is-arriving .agent-avatar-wrap {
-  animation: agent-avatar-hop 820ms cubic-bezier(.2, .82, .24, 1) both;
-}
-
-@keyframes agent-card-arrival {
-  0% { opacity: 0; transform: translateX(-64px) scale(.9); }
-  44% { opacity: 1; transform: translateX(9px) translateY(-7px) scale(1.02); }
-  64% { transform: translateX(-4px) translateY(0) scale(.99); }
-  82% { transform: translateX(2px) translateY(-2px) scale(1.01); }
-  100% { opacity: 1; transform: translateX(0) translateY(0) scale(1); }
-}
-
-@keyframes agent-avatar-hop {
-  0% { transform: rotate(-16deg) scale(.72); }
-  44% { transform: rotate(9deg) scale(1.12); }
-  64% { transform: rotate(-4deg) scale(.96); }
-  82% { transform: rotate(2deg) scale(1.04); }
-  100% { transform: rotate(0) scale(1); }
-}
-
-.agent-avatar-wrap,
 .agent-kind-icon-wrap {
   position: relative;
   display: grid;
   flex: none;
   place-items: center;
-}
-
-.active-badge {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 8px;
-  height: 8px;
-  border: 2px solid var(--surface);
-  border-radius: 50%;
-  background: var(--active);
-  box-shadow: 0 0 0 1px rgba(102, 202, 145, .12);
-}
-
-.tree-agent.is-selected .active-badge {
-  border-color: var(--surface-selected);
-}
-
-.agent-card.is-selected .active-badge {
-  border-color: #2d3139;
 }
 
 .agent-copy {
@@ -277,34 +229,6 @@ button:focus-visible {
   white-space: nowrap;
 }
 
-.agent-context-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  max-width: 68%;
-  flex: 0 1 auto;
-  overflow: hidden;
-  padding: 3px 6px;
-  border: 0;
-  border-radius: 5px;
-  color: #becbf0;
-  background: #293247;
-  font-size: 9px;
-  font-weight: 500;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-context-chip svg { flex: none; opacity: .8; }
-.agent-context-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-
-.agent-context-chip.is-task {
-  border-color: #4b6259;
-  color: #b9ddcf;
-  background: #24352f;
-}
-
 .agent-preview {
   display: block;
   width: 100%;
@@ -317,35 +241,21 @@ button:focus-visible {
   white-space: nowrap;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .agent-card.is-arriving,
-  .agent-card.is-arriving .agent-avatar-wrap {
-    animation: none;
-  }
-}
-
 :root[data-theme="light"] button:focus-visible { outline-color: #5574ba; }
 :root[data-theme="light"] .icon-button,
 :root[data-theme="light"] .chevron { color: #667287; }
 :root[data-theme="light"] .icon-button:hover { color: #111827; background: #e8ecf3; }
 :root[data-theme="light"] .agent-card,
-:root[data-theme="light"] .tree-agent,
 :root[data-theme="light"] .settings-button { color: #465266; }
 :root[data-theme="light"] .agent-card.is-selected { background: #e2e8f2; }
-:root[data-theme="light"] .agent-card.is-selected .active-badge { border-color: #e2e8f2; }
 :root[data-theme="light"] .agent-name { color: #101828; }
-:root[data-theme="light"] .agent-context-chip { color: #526689; background: #e9edf5; }
-:root[data-theme="light"] .agent-context-chip.is-task { color: #467362; background: #e7efeb; }
 :root[data-theme="light"] .agent-preview { color: #707b8c; }
-:root[data-theme="light"] .working-dots { color: #7258d2; }
 :root[data-theme="light"] .remove-button { color: #697386; }
 :root[data-theme="light"] .remove-button:hover { color: #c74751; background: #fdebec; }
 :root[data-theme="light"] .tree-row,
-:root[data-theme="light"] .tree-leaf,
-:root[data-theme="light"] .tree-agent { color: var(--row-color, #465266); }
+:root[data-theme="light"] .tree-leaf { color: var(--row-color, #465266); }
 :root[data-theme="light"] .tree-row.is-selected,
 :root[data-theme="light"] .tree-leaf.is-selected,
-:root[data-theme="light"] .tree-agent.is-selected,
 :root[data-theme="light"] .settings-button:hover,
 :root[data-theme="light"] .settings-button.is-selected { color: #203968; }
 :root[data-theme="light"] .tree-meta { color: #7a8697; }
@@ -358,35 +268,6 @@ button:focus-visible {
 :root[data-theme="light"] .menu-item.is-danger { color: #c74751; }
 :root[data-theme="light"] .menu-separator { background: #e1e5ec; }
 :root[data-theme="light"] ::-webkit-scrollbar-thumb { background: #b8c0cd; }
-
-.working-dots {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 2px;
-  color: #a997ef;
-}
-
-.working-dots > i {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: working-dot 1.05s infinite ease-in-out;
-}
-
-.working-dots > i:nth-child(2) {
-  animation-delay: .14s;
-}
-
-.working-dots > i:nth-child(3) {
-  animation-delay: .28s;
-}
-
-@keyframes working-dot {
-  0%, 65%, 100% { opacity: .28; transform: translateY(0); }
-  32% { opacity: 1; transform: translateY(-2px); }
-}
 
 .remove-button {
   display: grid;
@@ -413,7 +294,7 @@ button:focus-visible {
 }
 .agents-shell { border-bottom: 1px solid var(--border); }
 
-.tree-row.is-revealed, .tree-agent.is-revealed, .tree-leaf.is-revealed { background: var(--surface-selected); box-shadow: inset 3px 0 0 #8197d5; }
+.tree-row.is-revealed, .tree-leaf.is-revealed { background: var(--surface-selected); box-shadow: inset 3px 0 0 #8197d5; }
 .tree-row[id] { scroll-margin-block: 48px; }
 
 .section-header {
@@ -449,7 +330,7 @@ button:focus-visible {
   margin-top: 2px;
 }
 
-.project-block > :is(.tree-row, .tree-leaf, .tree-agent) + :is(.tree-row, .tree-leaf, .tree-agent) {
+.project-block > :is(.tree-row, .tree-leaf) + :is(.tree-row, .tree-leaf) {
   margin-top: 2px;
 }
 
@@ -473,8 +354,7 @@ button:focus-visible {
 :root[data-theme="light"] .terminal-provider--codex { color: #202622; }
 
 .tree-row,
-.tree-leaf,
-.tree-agent {
+.tree-leaf {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -489,8 +369,7 @@ button:focus-visible {
 }
 
 .tree-row.is-selected,
-.tree-leaf.is-selected,
-.tree-agent.is-selected {
+.tree-leaf.is-selected {
   color: #dde8ff;
   background: var(--surface-selected);
 }
@@ -718,3 +597,5 @@ button:focus-visible {
     transition-duration: .001ms !important;
   }
 }
+
+.agents-empty { margin: 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }

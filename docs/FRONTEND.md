@@ -9,10 +9,10 @@ Blackholes uses React and TypeScript inside three system-WebKit views. Rust owns
 | React entry | Content | Rust bridge |
 |---|---|---|
 | `frontend/src/navigation/main.tsx` | Sidebar, projects, tasks, agents, and menus | `src/ui/navigation_webview.rs` |
-| `frontend/src/chat/main.tsx` | Chat, settings, notes, explorer, editor, and diffs | `src/ui/orchestrator_chat.rs` |
+| `frontend/src/workspace/main.tsx` | Home, project overview, task details, settings, explorer, editor, diffs, and shared overlays | `src/ui/workspace_webview.rs` |
 | `frontend/src/quick-open/main.tsx` | Project/task and file search overlays | `src/ui/quick_open_webview.rs` |
 
-Shared helpers and avatars live in `frontend/src/shared/`. Settings and file views live in `chat/WorkspaceSurface.tsx`; notes use `chat/NotionNoteEditor.tsx`.
+Shared helpers and provider icons live in `frontend/src/shared/`. Settings and file views live in `workspace/WorkspaceSurface.tsx`; task details and the project session overview use `workspace/TaskDetails.tsx`.
 
 When a terminal is selected, the central WebView is hidden and GPUI renders the native terminal. Navigation remains a separate surface. Terminal output never passes through React.
 
@@ -29,13 +29,22 @@ React sends JSON commands through `window.ipc.postMessage(...)`, using the `post
 - `window.blackholesNavigation.receive(event)` — navigation.
 - `window.blackholesQuickOpen.receive(event)` — quick open.
 
-The Rust command enums define accepted payloads. Central events include `hydrate` for conversations and `workspace_surface` for settings, notes, and files. Agent text arrives incrementally through chat events.
+The Rust command enums define accepted payloads. Central events include `workspace_surface` for home, settings, project overview, task details, and files, plus `app_modal` and `quick_open` for overlays. The quick-open input sends clipboard requests through the native bridge, using the open ID and request ID to reject stale paste responses.
 
-These views load embedded HTML, not HTTP pages. The Node agent process does not serve the UI.
+These views load embedded HTML, not HTTP pages. Provider usage helpers do not serve the UI or execute chat turns.
 
-## Notes and files
+## Task details and files
 
-BlockNote provides rich note editing. Changes are debounced for 650 ms and sent to Rust as blocks plus Markdown. Rust saves a rich JSON sidecar and an agent-readable Markdown file; external Markdown edits invalidate stale rich data.
+Task metadata uses plain text fields and explicit saves. `save_task_details` sends
+a patch and the metadata revision; `task_details_saved` acknowledges the request
+with canonical values or an error. The desktop and MCP use the same validation
+and database edit path. React keeps unsaved drafts across navigation, preserves
+them on conflicts, and tracks unsaved state for the updater guard. Neither side
+replaces the task's sessions or repository membership when editing metadata.
+
+Legacy task Markdown is displayed read-only when present. The rich note editor
+and its BlockNote/Mantine dependencies have been removed. Existing Markdown and
+sidecar files remain available for compatibility. See [Task details](TASK-DETAILS.md).
 
 The explorer loads directories on demand through Rust and receives filesystem updates. File reads, size limits, and atomic saves stay in Rust. React handles editing and the virtualized Git diff view.
 
@@ -55,11 +64,11 @@ release binaries. For frontend bundles only:
 
 Vite targets Safari 16 and emits self-contained IIFE bundles:
 
-- `assets/generated/chat.js` and `chat.css`
+- `assets/generated/workspace.js`
 - `assets/generated/navigation.js`
 - `assets/generated/quick-open.js`
 - `assets/generated/editor.js` and `editor.css` (lazy-loaded Monaco runtime)
 
-Rust embeds these files with `include_str!`. Keep generated bundles committed and regenerate them after frontend changes. Handwritten styles live under `assets/chat/`, `assets/navigation/`, `assets/quick-open/`, and `assets/agent-avatar.css`.
+Rust embeds these files with `include_str!`. Keep generated bundles committed and regenerate them after frontend changes. Handwritten styles live under `assets/workspace/`, `assets/navigation/`, `assets/quick-open/`.
 
-Use `lucide-react` for interface icons and give icon-only buttons accessible labels. Agent artwork belongs in the shared `AgentAvatar` component.
+Use `lucide-react` for interface icons and give icon-only buttons accessible labels. Provider logos belong in the shared `TerminalProviderIcon` component.

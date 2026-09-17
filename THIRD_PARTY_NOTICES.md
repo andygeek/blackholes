@@ -41,18 +41,11 @@ Their inclusion does not imply affiliation or endorsement.
 
 ## React and Lucide icons
 
-The embedded WebKit navigation and chat bundles include React and React DOM,
+The embedded WebKit navigation and workspace bundles include React and React DOM,
 licensed under the MIT License, and Lucide icons through `lucide-react`,
 licensed under the ISC License. Their source packages and complete license
 texts are available from their respective npm distributions.
 
-## BlockNote and Mantine
-
-The React note workspace includes BlockNote (`@blocknote/core`,
-`@blocknote/react`, and `@blocknote/mantine`) under the Mozilla Public License
-2.0. BlockNote's Mantine integration uses `@mantine/core` and `@mantine/hooks`,
-which are licensed under the MIT License. Complete license texts and source
-metadata are included in their npm distributions.
 
 ## Unicode character data
 
@@ -69,19 +62,11 @@ The vendored GPUI Component library retains its Apache-2.0 license at
 under Apache-2.0. Other dependencies retain the licenses and notices supplied
 in their respective source distributions. `Cargo.lock` records their versions.
 
-## Agent runtimes
+## Node runtime
 
-Packaged macOS apps include the official Node.js 22.23.2 engine for the integration bridge.
+Packaged macOS apps include the official Node.js 22.23.2 engine for provider account metadata queries.
 Its license and third-party notices are copied from the verified upstream
 distribution to `Contents/Resources/node/LICENSE` and `licenses/NODE.txt` in the app.
 The archive version and SHA-256 values are pinned in `scripts/fetch-node`.
 
-The Claude Agent SDK adapter is an Anthropic component, governed by the legal
-agreements referenced in its distributed notices and
-[Anthropic's legal documentation](https://code.claude.com/docs/en/legal-and-compliance).
-It is not covered by the license chosen for Blackholes' own source code.
-The integration SDKs retain their package licenses; exact versions are recorded
-in `agent-sidecar/package-lock.json`. Provider CLIs and Claude's optional platform
-binaries are not distributed. Optional binary packages can appear in the npm
-lockfile as dependency metadata, but build and packaging omit their installation
-and reject any accidentally included CLI copies.
+Provider CLIs and agent SDKs are not distributed with Blackholes.

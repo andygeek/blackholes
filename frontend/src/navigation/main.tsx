@@ -1,7 +1,6 @@
 import { StrictMode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Bot,
   ChevronRight,
   CircleDot,
   Code2,
@@ -15,7 +14,7 @@ import {
   ListTodo,
   MoreHorizontal,
   NotebookPen,
-  PanelLeftClose,
+  ChevronsUp,
   Plus,
   RefreshCw,
   Rocket,
@@ -26,7 +25,6 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { AgentAvatar } from "../shared/AgentAvatar";
 import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
 import { SidebarResizeHandle } from "../shared/SidebarResizeHandle";
 import { SidebarScrollArea } from "./SidebarScrollArea";
@@ -40,18 +38,15 @@ interface Copy {
   settings: string;
   working: string;
   terminal: string;
+  blankTerminal: string;
   tasks: string;
   task: string;
-  notes: string;
   new: string;
   toggle: string;
   options: string;
-  removeAgent: string;
   closeTerminal: string;
   newTerminal: string;
   newTask: string;
-  addAgent: string;
-  assignAgent: string;
   refreshProject: string;
   addToProject: string;
   addRepository: string;
@@ -61,21 +56,6 @@ interface Copy {
   removeProject: string;
   editTask: string;
   removeTask: string;
-}
-
-interface AgentItem {
-  scope: string;
-  name: string;
-  preview: string;
-  selected: boolean;
-  busy: boolean;
-  identity: string;
-  removable: boolean;
-  arriving?: boolean;
-  context?: {
-    kind: "project" | "task";
-    label: string;
-  } | null;
 }
 
 interface TerminalItem {
@@ -106,9 +86,6 @@ interface TaskItem {
   expanded: boolean;
   selected: boolean;
   unseen: boolean;
-  notes_selected: boolean;
-  agents?: AgentItem[];
-  agent?: AgentItem;
   terminals: TerminalItem[];
   repositories: RepositoryItem[];
 }
@@ -120,9 +97,6 @@ interface ProjectItem {
   color: string;
   expanded: boolean;
   selected: boolean;
-  notes_selected: boolean;
-  agents?: AgentItem[];
-  agent?: AgentItem;
   terminals: TerminalItem[];
   repositories: RepositoryItem[];
   tasks: TaskItem[];
@@ -135,7 +109,6 @@ interface NavigationState {
   copy: Copy;
   settings_selected: boolean;
   sidebar_width: number;
-  global_agents: AgentItem[];
   terminal_agents: TerminalItem[];
   agent_order?: string[];
   projects: ProjectItem[];
@@ -144,6 +117,7 @@ interface NavigationState {
 interface MenuItem {
   label: string;
   icon: LucideIcon;
+  provider?: string;
   danger?: boolean;
   command: NativeCommand;
 }
@@ -159,18 +133,15 @@ const fallbackCopy: Copy = {
   settings: "Configuración",
   working: "Trabajando",
   terminal: "Terminal",
+  blankTerminal: "Terminal vacía",
   tasks: "Tareas",
   task: "Tarea",
-  notes: "Notas",
   new: "Nuevo",
   toggle: "Expandir o contraer",
   options: "Opciones",
-  removeAgent: "Eliminar Black Bot",
   closeTerminal: "Cerrar terminal",
   newTerminal: "Nueva terminal",
   newTask: "Agregar tarea",
-  addAgent: "Agregar bot",
-  assignAgent: "Asignar Black Bot",
   refreshProject: "Buscar repositorios nuevos",
   addToProject: "Agregar al proyecto",
   addRepository: "Agregar repositorio…",
@@ -195,75 +166,11 @@ const iconFor = (value?: string): LucideIcon => ({
   "square-terminal": SquareTerminal,
   branch: GitBranch,
   "git-branch": GitBranch,
-  notes: NotebookPen,
   claude: Sparkles,
   codex: CircleDot,
   gemini: Gem,
   shell: SquareTerminal,
 }[value || ""] || Layers3);
-
-function WorkingDots({ label }: { label: string }) {
-  return (
-    <span className="working-dots" aria-label={label}>
-      <i /><i /><i />
-    </span>
-  );
-}
-
-function Avatar({ agent, size }: { agent: AgentItem; size: number }) {
-  return (
-    <span className="agent-avatar-wrap">
-      <AgentAvatar identity={agent.identity} size={size} busy={agent.busy} />
-      {agent.busy && <span className="active-badge" />}
-    </span>
-  );
-}
-
-function AgentName({ agent, copy, showContext = false }: { agent: AgentItem; copy: Copy; showContext?: boolean }) {
-  return (
-    <span className="agent-name-line">
-      <span className="agent-name">{agent.name}</span>
-      {showContext && agent.context && (
-        <span className={`agent-context-chip is-${agent.context.kind}`} title={`${agent.context.kind === "task" ? copy.task : copy.project}: ${agent.context.label}`}>
-          {agent.context.kind === "task" ? <ListTodo size={10} aria-hidden="true" /> : <Folder size={10} aria-hidden="true" />}
-          <span>{agent.context.label}</span>
-        </span>
-      )}
-      {agent.busy && <WorkingDots label={copy.working} />}
-    </span>
-  );
-}
-
-function GlobalAgentRow({ agent, copy, onOpen }: { agent: AgentItem; copy: Copy; onOpen(agent: AgentItem): void }) {
-  return (
-    <div
-      className={`agent-card${agent.selected ? " is-selected" : ""}${agent.arriving ? " is-arriving" : ""}`}
-    >
-      <button type="button" className="agent-open" aria-current={agent.selected ? "true" : undefined}
-        aria-label={[agent.name, agent.context?.label].filter(Boolean).join(" · ")}
-        onClick={() => onOpen(agent)}>
-        <Avatar agent={agent} size={32} />
-        <span className="agent-copy">
-          <AgentName agent={agent} copy={copy} showContext />
-          <span className="agent-preview">{agent.preview}</span>
-        </span>
-      </button>
-      {agent.removable && (
-        <button
-          type="button"
-          className="remove-button"
-          aria-label={copy.removeAgent}
-          onClick={(event) => {
-            event.stopPropagation();
-            postNative({ type: "remove_agent", scope: agent.scope });
-          }}
-        >
-          <X size={14} />
-        </button>
-      )}
-    </div>
-  );
-}
 
 function TerminalAgentRow({ terminal, copy, onOpen }: { terminal: TerminalItem; copy: Copy; onOpen(terminal: TerminalItem): void }) {
   const preview = terminal.label === terminal.provider_label
@@ -291,32 +198,6 @@ function TerminalAgentRow({ terminal, copy, onOpen }: { terminal: TerminalItem; 
         <X size={14} />
       </button>
     </div>
-  );
-}
-
-function TreeAgent({ agent, copy, indentation }: { agent: AgentItem; copy: Copy; indentation: number }) {
-  return (
-    <button
-      type="button"
-      className={`tree-agent tree-indent-${indentation}${agent.selected ? " is-selected" : ""}`}
-      id={`nav-agent-${agent.scope}`}
-      aria-label={agent.name}
-      onClick={() => postNative({ type: "open_agent", scope: agent.scope })}
-    >
-      <Avatar agent={agent} size={18} />
-      <span className="tree-label"><AgentName agent={agent} copy={copy} /></span>
-      <button
-        type="button"
-        className="remove-button"
-        aria-label={copy.removeAgent}
-        onClick={(event) => {
-          event.stopPropagation();
-          postNative({ type: "remove_agent", scope: agent.scope });
-        }}
-      >
-        <X size={13} />
-      </button>
-    </button>
   );
 }
 
@@ -395,26 +276,13 @@ function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; 
   );
 }
 
-function NotesRow({ workspaceId, taskId, selected, copy, indentation }: {
-  workspaceId: string;
-  taskId?: string;
-  selected: boolean;
-  copy: Copy;
-  indentation: number;
-}) {
-  return (
-    <button
-      type="button"
-      className={`tree-leaf tree-indent-${indentation}${selected ? " is-selected" : ""}`}
-      aria-label={copy.notes}
-      onClick={() => postNative(taskId
-        ? { type: "task_notes", workspace_id: workspaceId, task_id: taskId }
-        : { type: "project_notes", workspace_id: workspaceId })}
-    >
-      <span className="row-icon"><NotebookPen size={13} /></span>
-      <span className="tree-label">{copy.notes}</span>
-    </button>
-  );
+function terminalLaunchItems(workspaceId: string, taskId: string | null | undefined, repositoryId: string | null, copy: Copy): MenuItem[] {
+  return [
+    ["shell", copy.blankTerminal], ["claude", "Claude"], ["codex", "Codex"],
+  ].map(([agent, label]) => ({
+    label, icon: SquareTerminal, provider: agent === "shell" ? undefined : agent,
+    command: { type: "new_terminal", workspace_id: workspaceId, task_id: taskId || null, repository_id: repositoryId, agent },
+  }));
 }
 
 function RepositoryRow({ repository, workspaceId, taskId, copy, indentation, openMenu }: {
@@ -425,24 +293,6 @@ function RepositoryRow({ repository, workspaceId, taskId, copy, indentation, ope
   indentation: number;
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
-  const launchItems = (): MenuItem[] => [
-    {
-      label: copy.addAgent,
-      icon: Bot,
-      command: { type: "create_scoped_agent", workspace_id: workspaceId, task_id: taskId || null },
-    },
-    {
-      label: copy.terminal,
-      icon: SquareTerminal,
-      command: {
-        type: "new_terminal",
-        workspace_id: workspaceId,
-        task_id: taskId || null,
-        repository_id: repository.id,
-        agent: "shell",
-      },
-    },
-  ];
   return (
     <>
       <button
@@ -464,7 +314,7 @@ function RepositoryRow({ repository, workspaceId, taskId, copy, indentation, ope
           <RowAction
             label={copy.newTerminal}
             icon={Plus}
-            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), launchItems())}
+            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), terminalLaunchItems(workspaceId, taskId, repository.id, copy))}
           />
           {!taskId && <RowAction label={copy.options} icon={MoreHorizontal}
             onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), [
@@ -485,7 +335,6 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
   copy: Copy;
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
-  const agents = task.agents || (task.agent ? [task.agent] : []);
   return (
     <>
       <button
@@ -504,18 +353,7 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
           <RowAction
             label={copy.newTerminal}
             icon={Plus}
-            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), [
-              {
-                label: copy.addAgent,
-                icon: Bot,
-                command: { type: "create_scoped_agent", workspace_id: workspaceId, task_id: task.id },
-              },
-              {
-                label: copy.terminal,
-                icon: SquareTerminal,
-                command: { type: "new_terminal", workspace_id: workspaceId, task_id: task.id, repository_id: null, agent: "shell" },
-              },
-            ])}
+            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), terminalLaunchItems(workspaceId, task.id, null, copy))}
           />
           <RowAction
             label={copy.options}
@@ -525,9 +363,6 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
                 { label: copy.editTask, icon: FilePenLine, command: { type: "edit_task", task_id: task.id } },
                 { label: copy.removeTask, icon: Trash2, danger: true, command: { type: "remove_task", task_id: task.id } },
               ];
-              if (agents.length === 0) {
-                items.splice(1, 0, { label: copy.assignAgent, icon: Bot, command: { type: "assign_task_agent", task_id: task.id } });
-              }
               openMenu(event.currentTarget.getBoundingClientRect(), items);
             }}
           />
@@ -535,8 +370,6 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
       </button>
       {task.expanded && (
         <>
-          {agents.map((agent) => <TreeAgent key={agent.scope} agent={agent} copy={copy} indentation={2} />)}
-          <NotesRow workspaceId={workspaceId} taskId={task.id} selected={task.notes_selected} copy={copy} indentation={2} />
           {task.terminals.map((terminal) => <TerminalRow key={terminal.id} terminal={terminal} copy={copy} indentation={2} />)}
           {task.repositories.map((repository) => (
             <RepositoryRow
@@ -560,7 +393,6 @@ function ProjectBlock({ project, copy, openMenu }: {
   copy: Copy;
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
-  const agents = project.agents || (project.agent ? [project.agent] : []);
   const Icon = iconFor(project.icon);
   return (
     <section className="project-block">
@@ -585,9 +417,8 @@ function ProjectBlock({ project, copy, openMenu }: {
             label={copy.addToProject}
             icon={Plus}
             onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), [
-              { label: copy.addAgent, icon: Bot, command: { type: "create_scoped_agent", workspace_id: project.id, task_id: null } },
+              ...terminalLaunchItems(project.id, null, null, copy),
               { label: copy.addRepository, icon: Plus, command: { type: "add_project_repository", workspace_id: project.id } },
-              { label: copy.newTerminal, icon: SquareTerminal, command: { type: "new_terminal", workspace_id: project.id, task_id: null, repository_id: null, agent: "shell" } },
               { label: copy.newTask, icon: ListTodo, command: { type: "new_task", workspace_id: project.id } },
             ])}
           />
@@ -604,8 +435,6 @@ function ProjectBlock({ project, copy, openMenu }: {
       </button>
       {project.expanded && (
         <>
-          {agents.map((agent) => <TreeAgent key={agent.scope} agent={agent} copy={copy} indentation={1} />)}
-          <NotesRow workspaceId={project.id} selected={project.notes_selected} copy={copy} indentation={1} />
           {project.terminals.map((terminal) => <TerminalRow key={terminal.id} terminal={terminal} copy={copy} indentation={1} />)}
           {project.repositories.map((repository) => (
             <RepositoryRow
@@ -654,7 +483,7 @@ function ContextMenu({ menu, close }: { menu: MenuState; close(): void }) {
               postNative(item.command);
             }}
           >
-            <span className="menu-item__icon"><Icon size={14} /></span>
+            <span className="menu-item__icon">{item.provider ? <TerminalProviderIcon provider={item.provider} /> : <Icon size={14} />}</span>
             <span className="menu-item__label">{item.label}</span>
           </button>
         );
@@ -709,10 +538,6 @@ function NavigationApp() {
           const target = event as { workspace_id: string; task_id?: string | null };
           setMenu(null);
           setRevealTarget({ id: target.task_id ? `nav-task-${target.task_id}` : `nav-project-${target.workspace_id}` });
-        } else if ((event as { type?: string }).type === "reveal_agent") {
-          const target = event as { row_id: string };
-          setMenu(null);
-          setRevealTarget({ id: target.row_id });
         } else if ((event as { type?: string }).type === "hydrate") {
           const next = event as NavigationState;
           document.documentElement.lang = next.language || "es";
@@ -741,21 +566,12 @@ function NavigationApp() {
   }, []);
 
   const openMenu = (anchor: DOMRect, items: MenuItem[]) => setMenu({ anchor, items });
-  const openAgent = (agent: AgentItem) => {
-    // Global bots have no project location. Scoped bots already live in the tree.
-    setRevealTarget(agent.context ? { id: `nav-agent-${agent.scope}` } : null);
-    postNative({ type: "open_agent", scope: agent.scope });
-  };
   const openTerminalAgent = (terminal: TerminalItem) => {
     setRevealTarget({ id: `nav-terminal-${terminal.id}` });
     postNative({ type: "focus_terminal", terminal_id: terminal.id });
   };
   const agentRanks = new Map((state?.agent_order || []).map((id, index) => [id, index]));
   const agentItems = [
-    ...(state?.global_agents || []).map(agent => ({
-      id: `agent:${agent.scope}`, label: agent.name,
-      content: <GlobalAgentRow agent={agent} copy={copy} onOpen={openAgent} />,
-    })),
     ...(state?.terminal_agents || []).map(terminal => ({
       id: `terminal:${terminal.id}`, label: `${terminal.context} · ${terminal.provider_label}`,
       content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} />,
@@ -766,7 +582,7 @@ function NavigationApp() {
     <aside className="sidebar" aria-label="Blackholes">
       <SidebarResizeHandle width={state?.sidebar_width ?? 280} right={-1} hitWidth={4} label={state?.language === "en" ? "Resize sidebar" : "Cambiar ancho del menú lateral"} />
       <header className="brand" inert={modalVisible}>
-        <button className="brand__name" type="button" onClick={() => postNative({ type: "open_agent", scope: "global" })}>
+        <button className="brand__name" type="button" onClick={() => postNative({ type: "show_home" })}>
           BLACKHOLES
         </button>
       </header>
@@ -774,13 +590,11 @@ function NavigationApp() {
         <section className="agents-shell" aria-label={state?.language === "en" ? "Agents" : "Agentes"}>
           <header className="section-header">
             <span>{state?.language === "en" ? "Agents" : "Agentes"}</span>
-            <span className="section-header__actions">
-              <button className="icon-button" type="button" aria-label={copy.addAgent} title={copy.addAgent} onClick={() => postNative({ type: "create_global_agent" })}>
-                <Plus size={17} />
-              </button>
-            </span>
           </header>
           <SidebarScrollArea label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
+          {agentItems.length === 0 && <p className="agents-empty">{state?.language === "en"
+            ? "Start an agent from a project or task’s + menu."
+            : "Inicia un agente desde el menú + de un proyecto o tarea."}</p>}
           <SortableAgentList items={agentItems} disabled={modalVisible} language={state?.language || "es"}
             onReorder={ids => {
               setState(previous => previous ? { ...previous, agent_order: ids } : previous);
@@ -792,8 +606,8 @@ function NavigationApp() {
           <header className="section-header">
             <span>{copy.projects}</span>
             <span className="section-header__actions">
-              <button className="icon-button" type="button" aria-label="Contraer todo" title="Contraer todo" onClick={() => postNative({ type: "collapse_all" })}>
-                <PanelLeftClose size={15} />
+              <button className="icon-button" type="button" aria-label={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} title={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} onClick={() => postNative({ type: "collapse_all" })}>
+                <ChevronsUp size={15} />
               </button>
               <button className="icon-button" type="button" aria-label="Nuevo proyecto" title="Nuevo proyecto" onClick={() => postNative({ type: "new_project" })}>
                 <Plus size={17} />

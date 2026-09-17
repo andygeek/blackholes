@@ -8,57 +8,19 @@ use wry::WebViewBuilder;
 
 use crate::{
     model::{AppTheme, WorkspaceColor},
-    services::orchestrator::{
-        AgentAuthMode, AgentAvatarColor, AgentProvider, OrchestratorChatAttachment,
-    },
+    services::providers::{AgentAuthMode, AgentProvider},
 };
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum OrchestratorChatCommand {
+pub enum WorkspaceCommand {
     Ready,
-    RefreshModelCatalog { #[serde(default)] force: bool },
-    RequestPaste,
-    ChooseAttachments,
     CopyText {
         text: String,
     },
     OpenUrl {
         url: String,
     },
-    OpenAgent {
-        scope: String,
-        project_id: Option<uuid::Uuid>,
-        task_id: Option<uuid::Uuid>,
-    },
-    OpenTarget {
-        scope: String,
-        project_id: Option<uuid::Uuid>,
-        task_id: Option<uuid::Uuid>,
-    },
-    SetAgentIdentity {
-        identity: AgentAvatarColor,
-    },
-    SendMessage {
-        id: String,
-        message: String,
-        created_at: String,
-        #[serde(default)]
-        attachments: Vec<OrchestratorChatAttachment>,
-    },
-    EditMessage {
-        message_id: uuid::Uuid,
-        id: String,
-        message: String,
-        created_at: String,
-        #[serde(default)]
-        attachments: Vec<OrchestratorChatAttachment>,
-    },
-    SwitchBranch {
-        branch_id: uuid::Uuid,
-    },
-    StopAgent,
-    NewChat,
     SetLanguage {
         language: String,
     },
@@ -72,10 +34,6 @@ pub enum OrchestratorChatCommand {
         commit: bool,
     },
     RefreshPlanUsage,
-    RevealAgentContext {
-        #[serde(default)]
-        project_only: bool,
-    },
     SetAgentProvider {
         provider: AgentProvider,
     },
@@ -87,15 +45,6 @@ pub enum OrchestratorChatCommand {
         value: String,
     },
     CancelAgentAuth,
-    SetAgentModel {
-        model: String,
-    },
-    SetAgentEffort {
-        effort: String,
-    },
-    SetAgentsFullAccess {
-        enabled: bool,
-    },
     DismissAppModal,
     CreateTaskModal {
         request_id: uuid::Uuid,
@@ -134,9 +83,6 @@ pub enum OrchestratorChatCommand {
     ConfirmRemoveRepository {
         request_id: uuid::Uuid,
     },
-    ConfirmRemoveAgent {
-        scope: String,
-    },
     ConfirmCloseTerminal {
         terminal_id: uuid::Uuid,
     },
@@ -148,54 +94,9 @@ pub enum OrchestratorChatCommand {
     InstallGitTools,
     RefreshRuntimeStatus,
     RefreshExternalIntegrations,
-    RevealAgentSkills,
-    ImportAgentSkills,
-    SetAgentSkillEnabled {
-        name: String,
-        enabled: bool,
-    },
-    SetAgentMcpEnabled {
-        name: String,
-        enabled: bool,
-    },
-    SetProjectAgentSkillEnabled {
-        workspace_id: uuid::Uuid,
-        name: String,
-        enabled: bool,
-    },
     SetProjectTerminalSkipPermissions {
         workspace_id: uuid::Uuid,
         enabled: bool,
-    },
-    SetProjectAgentMcpEnabled {
-        workspace_id: uuid::Uuid,
-        name: String,
-        enabled: bool,
-    },
-    AuthenticateProjectAgentMcp {
-        workspace_id: uuid::Uuid,
-        name: String,
-    },
-    CancelProjectAgentMcpAuthentication {
-        workspace_id: uuid::Uuid,
-        name: String,
-    },
-    InstallProjectAgentMcp {
-        workspace_id: uuid::Uuid,
-        name: String,
-        transport: String,
-        url: Option<String>,
-        oauth_client_id: Option<String>,
-        oauth_callback_port: Option<u16>,
-        command: Option<String>,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
-    },
-    RemoveProjectAgentMcp {
-        workspace_id: uuid::Uuid,
-        name: String,
     },
     UpdateProjectInstructions {
         workspace_id: uuid::Uuid,
@@ -205,26 +106,13 @@ pub enum OrchestratorChatCommand {
         workspace_id: uuid::Uuid,
         content: String,
     },
-    UpdateNote {
-        owner: String,
-        id: uuid::Uuid,
-        content: String,
-        blocks: Value,
-    },
-    ToggleNotePreview {
-        owner: String,
-        id: uuid::Uuid,
-    },
-    ReloadNote {
-        owner: String,
-        id: uuid::Uuid,
-    },
-    SetNoteAppearance {
-        owner: String,
-        id: uuid::Uuid,
-        icon: Option<String>,
-        color: Option<WorkspaceColor>,
-    },
+    SaveTaskDetails { task_id: uuid::Uuid, request_id: String, patch: crate::services::task_details::TaskDetailsPatch },
+    TaskDetailsDirty { task_id: uuid::Uuid, dirty: bool },
+    AddTaskRepositories { task_id: uuid::Uuid },
+    RemoveTaskRepositories { task_id: uuid::Uuid },
+    FocusTerminal { terminal_id: uuid::Uuid },
+    OpenTaskDetails { workspace_id: uuid::Uuid, task_id: uuid::Uuid },
+    OpenProjectRepository { workspace_id: uuid::Uuid, repository_id: uuid::Uuid },
     RefreshFileExplorer,
     CloseFileExplorer,
     SetFileExplorerMode {
@@ -251,6 +139,10 @@ pub enum OrchestratorChatCommand {
     OpenProjectTaskInstructions {
         workspace_id: uuid::Uuid,
     },
+    QuickOpenPaste {
+        open_id: u64,
+        request_id: String,
+    },
     QuickOpenQueryChanged {
         open_id: u64,
         query: String,
@@ -270,7 +162,7 @@ pub fn create(
     cx: &mut App,
     command_sender: flume::Sender<String>,
 ) -> Result<Entity<WebView>> {
-    let html = chat_html();
+    let html = workspace_html();
     let raw = WebViewBuilder::new()
         .with_html(html)
         .with_transparent(true)
@@ -280,7 +172,7 @@ pub fn create(
             let _ = command_sender.send(request.body().clone());
         })
         .build_as_child(window)
-        .context("Unable to create the orchestrator WebView")?;
+        .context("Unable to create the workspace WebView")?;
     Ok(cx.new(|cx| WebView::new(raw, window, cx)))
 }
 
@@ -290,7 +182,7 @@ pub fn dispatch(webview: &Entity<WebView>, event: Value, cx: &mut App) -> Result
         webview
             .raw()
             .evaluate_script(&format!("window.blackholesNative?.receive({payload});"))
-            .context("Unable to dispatch an event to the orchestrator WebView")
+            .context("Unable to dispatch an event to the workspace WebView")
     })
 }
 
@@ -304,31 +196,29 @@ pub fn set_visible(webview: &Entity<WebView>, visible: bool, cx: &mut App) {
     });
 }
 
-fn chat_html() -> String {
+fn workspace_html() -> String {
     let logo = STANDARD.encode(include_bytes!("../../assets/app-logo-transparent.png"));
-    include_str!("../../assets/chat/index.html")
+    include_str!("../../assets/workspace/index.html")
         .replace(
-            "{{AGENT_AVATAR_STYLES}}",
-            include_str!("../../assets/agent-avatar.css"),
-        )
-        .replace(
-            "{{CHAT_STYLES}}",
-            include_str!("../../assets/chat/styles.css"),
+            "{{WORKSPACE_BASE_STYLES}}",
+            include_str!("../../assets/workspace/styles.css"),
         )
         .replace(
             "{{WORKSPACE_STYLES}}",
-            include_str!("../../assets/chat/workspace.css"),
+            include_str!("../../assets/workspace/workspace.css"),
         )
         .replace(
-            "{{CHAT_BUNDLE_STYLES}}",
-            include_str!("../../assets/generated/chat.css"),
+            "{{WORKSPACE_REACT_BUNDLE}}",
+            include_str!("../../assets/generated/workspace.js"),
         )
         .replace(
-            "{{CHAT_REACT_BUNDLE}}",
-            include_str!("../../assets/generated/chat.js"),
+            "{{EDITOR_BUNDLE_STYLES}}",
+            include_str!("../../assets/generated/editor.css"),
         )
-        .replace("{{EDITOR_BUNDLE_STYLES}}", include_str!("../../assets/generated/editor.css"))
-        .replace("{{EDITOR_BUNDLE_BASE64}}", &STANDARD.encode(include_bytes!("../../assets/generated/editor.js")))
+        .replace(
+            "{{EDITOR_BUNDLE_BASE64}}",
+            &STANDARD.encode(include_bytes!("../../assets/generated/editor.js")),
+        )
         .replace(
             "{{APP_LOGO_DATA_URL}}",
             &format!("data:image/png;base64,{logo}"),
