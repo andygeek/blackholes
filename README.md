@@ -15,6 +15,7 @@
 </p>
 
 <h2 align="center"><a href="https://github.com/andygeek/blackholes/releases/latest">Download Blackholes for macOS</a></h2>
+<p align="center">Current version: <a href="docs/releases/0.1.9.md">0.1.9</a></p>
 <p align="center">Choose the <code>arm64.dmg</code> asset from the latest release. <a href="https://blackholes.dev/">Website</a> · <a href="docs/RELEASING.md">Release guide</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 [![Blackholes demo: creating tasks and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
