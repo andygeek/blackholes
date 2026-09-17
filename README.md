@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-999999" alt="Apple Silicon arm64" />
 </p>
 
-<h2 align="center"><a href="https://github.com/andygeek/blackholes/releases/latest">Download Blackholes for macOS</a></h2>
+<h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
 <p align="center">Current version: <a href="docs/releases/0.1.9.md">0.1.9</a></p>
 <p align="center">Choose the <code>arm64.dmg</code> asset from the latest release. <a href="https://blackholes.dev/">Website</a> · <a href="docs/RELEASING.md">Release guide</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
