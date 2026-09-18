@@ -3,6 +3,7 @@ pub mod navigation_webview;
 pub mod workspace_webview;
 pub mod quick_open_webview;
 pub mod terminal;
+mod usage_bar;
 
 pub use app::BlackholesApp;
 

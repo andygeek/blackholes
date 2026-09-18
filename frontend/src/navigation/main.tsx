@@ -109,6 +109,8 @@ interface NavigationState {
   copy: Copy;
   settings_selected: boolean;
   sidebar_width: number;
+  agents_section_collapsed: boolean;
+  projects_section_collapsed: boolean;
   terminal_agents: TerminalItem[];
   agent_order?: string[];
   projects: ProjectItem[];
@@ -500,9 +502,18 @@ function NavigationApp() {
   const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealedRow = useRef<HTMLElement | null>(null);
   const copy = state?.copy || fallbackCopy;
+  const agentsCollapsed = state?.agents_section_collapsed ?? false;
+  const projectsCollapsed = state?.projects_section_collapsed ?? false;
+  const agentsLabel = state?.language === "en" ? "Agents" : "Agentes";
+
+  const setSectionCollapsed = (section: "agents" | "projects", collapsed: boolean) => {
+    setMenu(null);
+    setState(previous => previous ? { ...previous, [`${section}_section_collapsed`]: collapsed } : previous);
+    postNative({ type: "set_sidebar_section_collapsed", section, collapsed });
+  };
 
   useLayoutEffect(() => {
-    if (!revealTarget) return;
+    if (!revealTarget || projectsCollapsed) return;
     const row = document.getElementById(revealTarget.id);
     if (!row) return; // A hydrate may still be expanding the parent sections.
     if (revealTimer.current) clearTimeout(revealTimer.current);
@@ -520,7 +531,7 @@ function NavigationApp() {
     revealedRow.current = row;
     revealTimer.current = setTimeout(() => row.classList.remove("is-revealed"), 1800);
     setRevealTarget(null);
-  }, [state, revealTarget]);
+  }, [state, revealTarget, projectsCollapsed]);
 
   useEffect(() => () => {
     if (revealTimer.current) clearTimeout(revealTimer.current);
@@ -586,12 +597,18 @@ function NavigationApp() {
           BLACKHOLES
         </button>
       </header>
-      <div className="sidebar-sections" inert={modalVisible}>
-        <section className="agents-shell" aria-label={state?.language === "en" ? "Agents" : "Agentes"}>
+      <div className="sidebar-sections" inert={modalVisible}
+        data-agents-collapsed={agentsCollapsed} data-projects-collapsed={projectsCollapsed}>
+        <section className="agents-shell" aria-label={agentsLabel}>
           <header className="section-header">
-            <span>{state?.language === "en" ? "Agents" : "Agentes"}</span>
+            <button className="section-toggle" type="button" aria-expanded={!agentsCollapsed}
+              aria-controls="sidebar-agents-content" onClick={() => setSectionCollapsed("agents", !agentsCollapsed)}>
+              <ChevronRight size={14} aria-hidden="true" />
+              <span>{agentsLabel}</span>
+            </button>
           </header>
-          <SidebarScrollArea label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
+          <SidebarScrollArea id="sidebar-agents-content" hidden={agentsCollapsed}
+            label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
           {agentItems.length === 0 && <p className="agents-empty">{state?.language === "en"
             ? "Start an agent from a project or task’s + menu."
             : "Inicia un agente desde el menú + de un proyecto o tarea."}</p>}
@@ -602,19 +619,30 @@ function NavigationApp() {
             }} />
           </SidebarScrollArea>
         </section>
-        <section className="projects-shell">
+        <section className="projects-shell" aria-label={copy.projects}>
           <header className="section-header">
-            <span>{copy.projects}</span>
+            <button className="section-toggle" type="button" aria-expanded={!projectsCollapsed}
+              aria-controls="sidebar-projects-content" onClick={() => setSectionCollapsed("projects", !projectsCollapsed)}>
+              <ChevronRight size={14} aria-hidden="true" />
+              <span>{copy.projects}</span>
+            </button>
             <span className="section-header__actions">
               <button className="icon-button" type="button" aria-label={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} title={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} onClick={() => postNative({ type: "collapse_all" })}>
                 <ChevronsUp size={15} />
               </button>
-              <button className="icon-button" type="button" aria-label="Nuevo proyecto" title="Nuevo proyecto" onClick={() => postNative({ type: "new_project" })}>
+              <button className="icon-button" type="button"
+                aria-label={state?.language === "en" ? "New project" : "Nuevo proyecto"}
+                title={state?.language === "en" ? "New project" : "Nuevo proyecto"}
+                onClick={() => {
+                  if (projectsCollapsed) setSectionCollapsed("projects", false);
+                  postNative({ type: "new_project" });
+                }}>
                 <Plus size={17} />
               </button>
             </span>
           </header>
-          <SidebarScrollArea label={state?.language === "en" ? "Scroll projects" : "Desplazar proyectos"}>
+          <SidebarScrollArea id="sidebar-projects-content" hidden={projectsCollapsed}
+            label={state?.language === "en" ? "Scroll projects" : "Desplazar proyectos"}>
           <nav className="projects" aria-label={copy.projects}>
             {(state?.projects || []).map((project) => (
               <ProjectBlock

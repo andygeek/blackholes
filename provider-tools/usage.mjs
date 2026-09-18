@@ -78,11 +78,13 @@ async function codexUsage() {
   if (account?.type !== "chatgpt") return { ...empty, subscription_type: account?.type === "apiKey" ? "API" : null };
   const report = await rpc.request("account/rateLimits/read", {});
   const buckets = report.rateLimitsByLimitId && Object.keys(report.rateLimitsByLimitId).length
-    ? Object.values(report.rateLimitsByLimitId) : [report.rateLimits].filter(Boolean);
+    ? Object.entries(report.rateLimitsByLimitId).map(([limitId, bucket]) => ({ ...bucket, limitId: bucket.limitId ?? limitId }))
+    : [report.rateLimits].filter(Boolean);
   const windows = buckets.flatMap(bucket => [bucket.primary, bucket.secondary].filter(Boolean).map(window => {
     const reset = typeof window.resetsAt === "number" ? new Date(window.resetsAt * 1000) : null;
     return {
       label: bucket.limitName || (bucket.limitId === "codex" ? "" : bucket.limitId) || "",
+      limit_id: bucket.limitId ?? "codex",
       minutes: window.windowDurationMins ?? null,
       utilization: percentage(window.usedPercent),
       resets_at: reset && Number.isFinite(reset.getTime()) ? reset.toISOString() : null,

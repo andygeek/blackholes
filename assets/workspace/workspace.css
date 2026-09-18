@@ -455,6 +455,8 @@
 .workbench-welcome > span { display: grid; width: 48px; height: 48px; margin-bottom: 3px; place-items: center; border: 1px solid #303642; border-radius: 12px; background: #15181e; color: #8c9cc7; }
 .workbench-welcome strong { color: #cdd3dd; font-size: 13px; }
 .workbench-welcome p { max-width: 340px; margin: 0; color: #788294; font-size: 11px; }
+.home-welcome { gap: 16px; padding: 24px; }
+.home-welcome-logo { display: block; width: 112px; height: 112px; flex: none; object-fit: contain; }
 .diff-head,
 .diff-row { display: flex; width: 100%; min-width: 0; }
 .diff-head { height: 28px; flex: none; border-bottom: 1px solid #343b47; background: #181d24; color: #8e97aa; font-size: 10px; font-weight: 650; }

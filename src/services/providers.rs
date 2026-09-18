@@ -142,6 +142,7 @@ pub struct ProviderPlanUsage {
 #[serde(default)]
 pub struct PlanUsageWindow {
     pub label: String,
+    pub limit_id: Option<String>,
     pub minutes: Option<u64>,
     pub utilization: Option<f64>,
     pub resets_at: Option<String>,

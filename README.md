@@ -15,7 +15,7 @@
 </p>
 
 <h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
-<p align="center">Current version: <a href="docs/releases/0.1.9.md">0.1.9</a></p>
+<p align="center">Current version: <a href="docs/releases/0.1.10.md">0.1.10</a></p>
 <p align="center">macOS 13+ · Apple Silicon · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 [![Blackholes demo: creating tasks and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
@@ -31,6 +31,7 @@
 
 - Task objectives, acceptance criteria, PR links, and external task links.
 - Terminal sessions, file browsing, editing, and Git diffs.
+- Local Codex and Claude usage in the bottom bar, with one-click refresh.
 - MCP tools to create tasks and launch agents from your existing clients.
 
 ## Supported agents

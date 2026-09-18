@@ -327,6 +327,10 @@ pub struct AppSession {
     #[serde(default)]
     pub theme: AppTheme,
     pub sidebar_width: f32,
+    #[serde(default)]
+    pub agents_section_collapsed: bool,
+    #[serde(default)]
+    pub projects_section_collapsed: bool,
 }
 
 impl Default for AppSession {
@@ -345,6 +349,8 @@ impl Default for AppSession {
             language: Language::English,
             theme: AppTheme::Dark,
             sidebar_width: 260.0,
+            agents_section_collapsed: false,
+            projects_section_collapsed: false,
         }
     }
 }

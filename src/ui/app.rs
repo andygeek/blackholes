@@ -1,8 +1,9 @@
 use super::{
     apply_native_theme,
-    navigation_webview::{self, NavigationCommand},
+    navigation_webview::{self, NavigationCommand, SidebarSection},
     workspace_webview::{self, WorkspaceCommand},
     terminal::{AgentTerminalSignal, AgentTerminalSignalKind, FastTerminalView},
+    usage_bar::{self, ComputerPlanUsage},
 };
 use crate::{
     assets::AppIcon,
@@ -620,6 +621,9 @@ pub struct BlackholesApp {
     active_plan_usage: Option<ProviderPlanUsage>,
     plan_usage_updated_at: Option<chrono::DateTime<Utc>>,
     plan_usage_generation: u64,
+    computer_plan_usage: [ComputerPlanUsage; 2],
+    usage_details_window: Option<gpui::WindowHandle<usage_bar::UsagePopover>>,
+    resident_memory_bytes: Option<u64>,
     project_settings_workspace_id: Option<Uuid>,
     app_toasts: Vec<AppToast>,
     status: Option<(String, bool)>,
@@ -645,7 +649,7 @@ impl BlackholesApp {
     pub fn register_global_actions(view: &Entity<Self>, cx: &mut App) {
         let navigation_view = view.downgrade();
         cx.on_action(move |_: &OpenNavigationPalette, cx| {
-            let Some(window_handle) = cx.active_window() else {
+            let Some(window_handle) = cx.windows().into_iter().find(|window| window.downcast::<Root>().is_some()) else {
                 return;
             };
             let navigation_view = navigation_view.clone();
@@ -657,7 +661,7 @@ impl BlackholesApp {
 
         let file_view = view.downgrade();
         cx.on_action(move |_: &OpenFilePalette, cx| {
-            let Some(window_handle) = cx.active_window() else {
+            let Some(window_handle) = cx.windows().into_iter().find(|window| window.downcast::<Root>().is_some()) else {
                 return;
             };
             let file_view = file_view.clone();
@@ -687,6 +691,26 @@ impl BlackholesApp {
 
             if application_modifier && matches!(key.as_str(), "o" | "p") {
                 cx.stop_propagation();
+                // A usage panel has its own native window; application shortcuts
+                // still target the workspace, never the small floating panel.
+                if window.window_handle().downcast::<usage_bar::UsagePopover>().is_some() {
+                    window.remove_window();
+                    let main = cx.windows().into_iter().find(|window| window.downcast::<Root>().is_some());
+                    let view = shortcut_view.clone();
+                    cx.defer(move |cx| {
+                        if let Some(main) = main {
+                            let _ = main.update(cx, |_, window, cx| {
+                                window.activate_window();
+                                let _ = view.update(cx, |app, cx| match key.as_str() {
+                                    "o" => app.open_navigation_palette(window, cx),
+                                    "p" => app.open_file_palette(window, cx),
+                                    _ => {}
+                                });
+                            });
+                        }
+                    });
+                    return;
+                }
                 let _ = shortcut_view.update(cx, |app, cx| match key.as_str() {
                     "o" => app.open_navigation_palette(window, cx),
                     "p" => app.open_file_palette(window, cx),
@@ -899,6 +923,9 @@ impl BlackholesApp {
             active_plan_usage: None,
             plan_usage_updated_at: None,
             plan_usage_generation: 0,
+            computer_plan_usage: [ComputerPlanUsage::new(AgentProvider::Claude), ComputerPlanUsage::new(AgentProvider::Codex)],
+            usage_details_window: None,
+            resident_memory_bytes: None,
             project_settings_workspace_id: None,
             app_toasts: Vec::new(),
             status,
@@ -963,7 +990,32 @@ impl BlackholesApp {
         })
         .detach();
         app.refresh_external_integrations(cx);
+        app.refresh_computer_plan_usage(cx);
+        let mut usage_anchor_geometry = (window.bounds(), window.display(cx).map(|display| display.id()));
+        cx.observe_window_bounds(window, move |app, window, cx| {
+            let geometry = (window.bounds(), window.display(cx).map(|display| display.id()));
+            // GPUI also notifies bounds observers on activation changes. Opening
+            // the usage panel transfers focus without moving the main window;
+            // that notification must not immediately dismiss the new panel.
+            if geometry != usage_anchor_geometry {
+                usage_anchor_geometry = geometry;
+                app.close_usage_details(cx);
+            }
+        }).detach();
         cx.spawn(async move |this, cx| {
+            loop {
+                let memory = usage_bar::resident_memory_bytes();
+                if this.update(cx, |app, cx| {
+                    if app.resident_memory_bytes != memory {
+                        app.resident_memory_bytes = memory;
+                        cx.notify();
+                    }
+                }).is_err() { break; }
+                Timer::after(Duration::from_secs(5)).await;
+            }
+        }).detach();
+        cx.spawn(async move |this, cx| {
+            let mut usage_minute = Utc::now().timestamp() / 60;
             loop {
                 Timer::after(Duration::from_secs(2)).await;
                 if this.update(cx, |app, cx| {
@@ -971,6 +1023,12 @@ impl BlackholesApp {
                     let next = crate::services::updater::state();
                     if next != app.update_state {
                         app.update_state = next;
+                        cx.notify();
+                    }
+                    let next_minute = Utc::now().timestamp() / 60;
+                    if usage_minute != next_minute {
+                        usage_minute = next_minute;
+                        app.sync_usage_details(cx);
                         cx.notify();
                     }
                 }).is_err() { break; }
@@ -1399,6 +1457,15 @@ impl BlackholesApp {
             NavigationCommand::Ready => self.hydrate_navigation(cx),
             NavigationCommand::ShowHome => self.show_home(cx),
             NavigationCommand::SetSidebarWidth { width, commit } => self.set_sidebar_width(width, commit, cx),
+            NavigationCommand::SetSidebarSectionCollapsed { section, collapsed } => {
+                match section {
+                    SidebarSection::Agents => self.session.agents_section_collapsed = collapsed,
+                    SidebarSection::Projects => self.session.projects_section_collapsed = collapsed,
+                }
+                self.persist_session();
+                self.hydrate_navigation(cx);
+                cx.notify();
+            }
             NavigationCommand::CollapseAll => self.collapse_all_navigation(cx),
             NavigationCommand::NewProject => self.open_create_project(window, cx),
             NavigationCommand::AddProjectRepository { workspace_id } => {
@@ -1730,7 +1797,8 @@ impl BlackholesApp {
                 "copy": copy,
                 "settings_selected": self.show_settings,
                 "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
-
+                "agents_section_collapsed": self.session.agents_section_collapsed,
+                "projects_section_collapsed": self.session.projects_section_collapsed,
                 "agent_order": self.session.agent_order,
                 "terminal_agents": self.session.terminals.iter()
                     .filter(|terminal| terminal.agent != AgentKind::Shell)
@@ -2129,7 +2197,6 @@ impl BlackholesApp {
             "language": if self.session.language == Language::English { "en" } else { "es" },
             "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
             "data": {
-                "title": self.tr("Your agent workspace", "Tu espacio de trabajo para agentes"),
                 "description": self.tr(
                     "Open a project or task and use its + menu to start a terminal or coding agent.",
                     "Abre un proyecto o una tarea y usa su menú + para iniciar una terminal o un agente de código."),
@@ -7540,6 +7607,7 @@ impl BlackholesApp {
             return;
         }
         self.mark_task_seen(task_id, cx);
+        self.session.projects_section_collapsed = false;
         self.session.selected_workspace_id = Some(workspace_id);
         self.session.selected_task_id = Some(task_id);
         self.session.selected_repository_id = None;
@@ -8524,6 +8592,62 @@ impl BlackholesApp {
         self.hydrate_navigation(cx);
 
         self.hydrate_active_workspace_surface(cx);
+        cx.notify();
+    }
+
+    fn close_usage_details(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.usage_details_window.take() {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
+    fn open_usage_details(&mut self, provider: AgentProvider, bounds: gpui::Bounds<gpui::Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_usage_details(cx);
+        let Some(state) = self.computer_plan_usage.iter().find(|state| state.provider == provider) else { return; };
+        match usage_bar::open_details(state.clone(), self.session.language, self.session.theme, bounds, window, cx) {
+            Ok(handle) => self.usage_details_window = Some(handle),
+            Err(error) => self.set_status(format!("Could not open usage details: {error:#}"), true, cx),
+        }
+    }
+
+    fn sync_usage_details(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.usage_details_window {
+            if handle.update(cx, |panel, _, cx| {
+                if let Some(state) = self.computer_plan_usage.iter().find(|state| state.provider == panel.state.provider) {
+                    panel.state = state.clone();
+                    cx.notify();
+                }
+            }).is_err() {
+                self.usage_details_window = None;
+            }
+        }
+    }
+
+    fn refresh_computer_plan_usage(&mut self, cx: &mut Context<Self>) {
+        if self.computer_plan_usage.iter().any(|state| state.refreshing) { return; }
+        for index in 0..self.computer_plan_usage.len() {
+            let state = &mut self.computer_plan_usage[index];
+            state.refreshing = true;
+            state.failed = false;
+            let provider = state.provider;
+            let profile = self.paths.agent_profiles.join(provider.id());
+            let background = cx.background_executor().spawn(async move {
+                refresh_agent_plan_usage(provider, AgentAuthMode::System, profile)
+            });
+            cx.spawn(async move |this, cx| {
+                let result = background.await;
+                let _ = this.update(cx, |app, cx| {
+                    let state = &mut app.computer_plan_usage[index];
+                    state.refreshing = false;
+                    match result {
+                        Ok(usage) => { state.usage = Some(usage); state.updated_at = Some(Utc::now()); }
+                        Err(_) => state.failed = true,
+                    }
+                    app.sync_usage_details(cx);
+                    cx.notify();
+                });
+            }).detach();
+        }
         cx.notify();
     }
 
@@ -10091,13 +10215,12 @@ impl BlackholesApp {
         let Some(terminal_id) = self.selected_terminal_id() else {
             return self.render_empty_state(cx);
         };
-        self.render_terminal_panel(terminal_id, terminal_id, cx)
+        self.render_terminal_panel(terminal_id, cx)
     }
 
     fn render_terminal_panel(
         &self,
         terminal_id: Uuid,
-        active_terminal_id: Uuid,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let weak = cx.weak_entity();
@@ -10106,11 +10229,10 @@ impl BlackholesApp {
             .terminals
             .iter()
             .find(|terminal| terminal.id == terminal_id);
-        let active = terminal_id == active_terminal_id;
         let closed_terminal_label = self.tr("Closed terminal", "Terminal cerrada");
-        let (panel_border, panel_header, panel_muted) = match self.session.theme {
-            AppTheme::Dark => (rgb(0x252a33), rgb(0x15181e), rgb(0x9ba3b4)),
-            AppTheme::Light => (rgb(0xd9dee8), rgb(0xf0f2f6), rgb(0x657084)),
+        let (panel_header, panel_muted) = match self.session.theme {
+            AppTheme::Dark => (rgb(0x15181e), rgb(0x9ba3b4)),
+            AppTheme::Light => (rgb(0xf0f2f6), rgb(0x657084)),
         };
         let weak_focus = weak.clone();
         let weak_close = weak.clone();
@@ -10119,8 +10241,6 @@ impl BlackholesApp {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .border_1()
-            .border_color(if active { rgb(0x5c7cfa) } else { panel_border })
             .on_click(move |_, window, cx| {
                 let _ =
                     weak_focus.update(cx, |app, cx| app.focus_terminal(terminal_id, window, cx));
@@ -10759,7 +10879,13 @@ impl Render for BlackholesApp {
                                 } else { format!("Blackholes {}", self.update_state.available) })
                                 .on_click(cx.listener(|app, _, _, cx| app.check_app_update(cx))))
                     ))
-                    .child(div().flex_1().min_h_0().w_full().child(workspace_layout)),
+                    .child(div().flex_1().min_h_0().w_full().child(workspace_layout))
+                    .child(usage_bar::render(&self.computer_plan_usage, self.session.language, self.session.theme,
+                        self.terminals.len(), self.resident_memory_bytes,
+                        { let app = cx.weak_entity(); move |provider, bounds, window, cx| {
+                            let _ = app.update(cx, |app, cx| app.open_usage_details(provider, bounds, window, cx));
+                        } },
+                        cx.listener(|app, _, _, cx| app.refresh_computer_plan_usage(cx)))),
             )
             .child(self.render_app_toasts(cx))
             .children(Root::render_dialog_layer(window, cx))

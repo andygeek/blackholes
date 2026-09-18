@@ -82,7 +82,7 @@ fn main() -> Result<()> {
 fn show_main_window(paths: &AppPaths, database: &Database, cx: &mut App) -> Result<()> {
     // Reuse the live window, including its WebViews, agents and terminal sessions.
     // Checking synchronously also prevents repeated Dock events from creating duplicates.
-    if let Some(window) = cx.windows().first().copied() {
+    if let Some(window) = cx.windows().into_iter().find(|window| window.downcast::<gpui_component::Root>().is_some()) {
         window.update(cx, |_, window, _| window.activate_window())?;
     } else {
         let paths = paths.clone();

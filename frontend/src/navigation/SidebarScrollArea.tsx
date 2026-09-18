@@ -1,7 +1,9 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /** An overlaid thumb keeps section borders full-width instead of reserving a gutter. */
-export function SidebarScrollArea({ children, label }: { children: ReactNode; label: string }) {
+export function SidebarScrollArea({ children, label, id, hidden = false }: {
+  children: ReactNode; label: string; id?: string; hidden?: boolean;
+}) {
   const viewportId = useId();
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -31,7 +33,7 @@ export function SidebarScrollArea({ children, label }: { children: ReactNode; la
   const thumbHeight = Math.min(metrics.height, Math.max(28, metrics.height * metrics.height / Math.max(1, metrics.total)));
   const travel = metrics.height - thumbHeight;
   const thumbTop = maxScroll > 0 ? Math.max(0, Math.min(travel, metrics.top / maxScroll * travel)) : 0;
-  return <div className="sidebar-scroll-region">
+  return <div className="sidebar-scroll-region" id={id} hidden={hidden}>
     <div className="sidebar-scroll" id={viewportId} ref={viewport} role="region" aria-label={label} tabIndex={0}>
       <div ref={content}>{children}</div>
     </div>

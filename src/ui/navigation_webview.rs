@@ -8,6 +8,13 @@ use wry::WebViewBuilder;
 
 use crate::model::AgentKind;
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarSection {
+    Agents,
+    Projects,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NavigationCommand {
@@ -20,6 +27,10 @@ pub enum NavigationCommand {
     },
     ReorderAgents {
         ids: Vec<String>,
+    },
+    SetSidebarSectionCollapsed {
+        section: SidebarSection,
+        collapsed: bool,
     },
     CollapseAll,
     NewProject,

@@ -125,7 +125,11 @@ button:focus-visible {
 }
 
 .sidebar-scroll-region { position: relative; flex: 1; min-height: 0; }
-.sidebar-sections { display: grid; grid-template-rows: minmax(0, 2fr) minmax(0, 3fr); flex: 1; min-height: 0; }
+.sidebar-scroll-region[hidden] { display: none; }
+.sidebar-sections { display: grid; grid-template-rows: minmax(33px, 2fr) minmax(32px, 3fr); flex: 1; min-height: 0; }
+.sidebar-sections[data-agents-collapsed="true"] { grid-template-rows: 33px minmax(32px, 1fr); }
+.sidebar-sections[data-projects-collapsed="true"] { grid-template-rows: minmax(33px, 1fr) 32px; }
+.sidebar-sections[data-agents-collapsed="true"][data-projects-collapsed="true"] { grid-template-rows: 33px 32px minmax(0, 1fr); }
 .sidebar-scroll {
   min-height: 0;
   height: 100%;
@@ -302,21 +306,33 @@ button:focus-visible {
   z-index: 5;
   top: 0;
   display: flex;
-  min-height: 40px;
+  height: 32px;
   flex: none;
   align-items: center;
-  gap: 6px;
-  padding: 6px 16px 6px 12px;
+  gap: 4px;
+  padding: 0 12px 0 8px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   background: var(--background);
   font-weight: 650;
 }
 
-.section-header > span:first-child {
+.section-toggle {
+  display: flex;
   min-width: 0;
+  height: 100%;
   flex: 1;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  text-align: left;
 }
+.section-toggle:hover { color: var(--foreground); }
+.section-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.section-toggle svg { flex: none; transition: transform 120ms ease; }
+.section-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.section-header .icon-button { width: 24px; height: 24px; }
+@media (prefers-reduced-motion: reduce) { .section-toggle svg { transition: none; } }
 
 .section-header__actions {
   display: flex;
@@ -484,14 +500,14 @@ button:focus-visible {
 
 .sidebar-footer {
   flex: none;
-  padding: 8px;
+  padding: 3px 8px;
   border-top: 1px solid var(--border);
 }
 
 .settings-button {
   display: flex;
   width: 100%;
-  height: 30px;
+  height: 28px;
   align-items: center;
   gap: 8px;
   padding: 0 8px;

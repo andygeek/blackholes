@@ -16,10 +16,35 @@ Shared helpers and provider icons live in `frontend/src/shared/`. Settings and f
 
 When a terminal is selected, the central WebView is hidden and GPUI renders the native terminal. Navigation remains a separate surface. Terminal output never passes through React.
 
+Agents and Projects have independent section toggles. Their collapsed state is
+stored in `AppSession` through `set_sidebar_section_collapsed` and included in
+navigation hydration; older sessions default to expanded. Hidden content stays
+mounted, and the grid reallocates its space to the remaining open section.
+The toggle buttons expose `aria-expanded` and `aria-controls`; section folding
+does not change the expanded project/task IDs or stop terminal sessions.
+
 The GPUI title bar shows the installed version and the update action outside all
 WebViews, including settings. `src/services/updater.rs` connects to the native
 Sparkle delegate in `native/updater.m`; React never downloads or installs an
 executable. See [Releasing and updates](RELEASING.md).
+
+The native bottom bar (`src/ui/usage_bar.rs`) is also outside the WebViews.
+It displays local Claude/Codex account limits through independent background
+queries at startup and on manual refresh. Reset countdowns update locally each
+minute. Its height is reserved by the root layout, so it does not cover terminal
+rows or React content. The inline value prefers a valid general five-hour limit,
+then weekly, then another reported limit, always using its actual label.
+The native popup above each provider includes only limits with valid usage
+percentages and sizes itself to those sections. The refresh button supplies
+its own arrow as the loading icon so it stays visible while rotating. A separate
+window keeps the panel above WKWebViews without hiding the workspace. It closes
+on focus loss, Escape, or actual parent window
+geometry changes. GPUI bounds notifications caused only by transferring focus
+to the panel are ignored. App shortcuts and Dock reopening continue to target
+the main window.
+The right side displays open terminal handles and current-process resident
+memory from macOS libproc, sampled every five seconds. It excludes subprocesses.
+The terminal container has no focus-colored outline.
 
 ## Communication
 

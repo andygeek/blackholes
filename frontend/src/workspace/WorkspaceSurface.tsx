@@ -36,7 +36,6 @@ import { TaskDetails, ProjectOverview, type TaskDetailsData, type ProjectOvervie
 export type SurfaceKind = "settings" | "project-settings" | "task-details" | "project-overview" | "workbench" | "home";
 
 interface HomeData {
-  title: string;
   description: string;
 }
 
@@ -777,9 +776,8 @@ function WorkbenchView({ data }: { data: WorkbenchData }) {
 export function WorkspaceSurface({ event }: { event: WorkspaceSurfaceEvent }) {
   if (event.surface === "home") {
     const data = event.data as HomeData;
-    return <main className="workbench-page"><div className="workbench-content"><div className="workspace-empty workbench-welcome">
-      <span><FolderOpen size={22} /></span>
-      <strong>{data.title}</strong>
+    return <main className="workbench-page"><div className="workbench-content"><div className="workspace-empty workbench-welcome home-welcome">
+      <img className="home-welcome-logo" src={document.getElementById("root")?.dataset.appLogo} alt="Blackholes" width={112} height={112} draggable={false} />
       <p>{data.description}</p>
     </div></div></main>;
   }

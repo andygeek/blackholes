@@ -86,6 +86,12 @@ Terminal rows use the detected provider's icon. They do not show persistent
 loading dots or green presence badges; launching or focusing a CLI alone is not
 treated as submitting an agent turn.
 
+Click the arrow or title of **Agents** or **Projects** to collapse that sidebar
+section independently. The other section uses the freed space. These choices
+persist across restarts, while project and task expansion remains unchanged.
+The separate collapse-all button still folds the individual projects and tasks.
+Section headers and the Settings footer use compact rows.
+
 Packaged apps send macOS notifications with Blackholes' own name and icon. The
 first notice requests notification permission if it has not been granted yet.
 Clicking a notice brings Blackholes forward, restores its minimized window, and
@@ -190,3 +196,38 @@ Application data lives in the macOS Application Support directory resolved by `s
 Task details are stored with task records in SQLite and exported to `.blackholes-task-details.md` and `.blackholes-task.json` inside each managed task workspace. Previous Markdown notes and rich-block sidecars are preserved. Terminal output is not stored in SQLite.
 Legacy built-in bot history, if present, is left on disk but is no longer read or
 modified. Existing provider conversation files remain managed by their CLIs.
+
+## Computer account usage bar
+
+The bottom bar stays visible across terminals, project/task details, files, and
+settings. It shows Claude and Codex plan usage from the computer's local CLI
+accounts, honoring their normal profile environment. It is independent of the
+provider and any isolated Blackholes profile selected in Settings.
+
+Both providers load on app startup. The refresh button queries both again in
+parallel and remains disabled while a refresh is running. These metadata queries
+do not submit prompts or generate model responses. No periodic provider requests
+are made; reset countdowns update locally each minute.
+
+The bottom bar prefers the general **5-hour** allowance, then the **weekly**
+allowance, then another available limit. Its label always identifies the actual
+window; a weekly allowance is never labeled as five hours. Invalid or missing
+percentages are skipped when selecting a limit.
+Click Claude or Codex to open a panel above the bar with the available limits,
+reset countdowns, exact local reset times, and the last update. Unreported
+windows are omitted, and the panel opens at a size based on its visible limits.
+Escape, the close button, clicking outside, or moving/resizing the main window
+dismisses it.
+The refresh button sits immediately after the two providers. Its arrow icon
+stays visible and rotates while either query is running; repeated clicks are
+disabled until both finish.
+
+A passed reset deadline asks for a refresh; it does not assume usage is zero.
+Missing CLIs, authentication failures, and accounts without reported limits show
+**Unavailable**. Failed refreshes retain the last report, marked with an asterisk
+in the bar and an explanation in the panel.
+
+The right side shows the number of open terminal panes and the resident memory
+of the Blackholes process in MB, sampled every five seconds through macOS
+libproc. It excludes agent, shell, and WebKit subprocesses; the tooltip explains
+that scope. An unavailable reading is shown as a dash, never as zero.
