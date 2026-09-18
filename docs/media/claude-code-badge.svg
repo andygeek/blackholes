@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="136" height="28" viewBox="0 0 136 28" role="img" aria-label="Claude Code">
+  <title>Claude Code</title>
+  <rect x="0.5" y="0.5" width="135" height="27" rx="6" fill="#252a33" stroke="#414754"/>
+  <svg x="8" y="6" width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="#d97757">
+  <path d="M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z"/>
+</svg>
+  <text x="32" y="18.5" fill="#e5e9f0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">Claude Code</text>
+</svg>

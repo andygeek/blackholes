@@ -9,7 +9,7 @@ stop if a command or validation fails.
 ## Tooling and local configuration
 
 The build machine needs macOS, Xcode command-line tools, the Rust toolchain
-specified in `rust-toolchain.toml`, Node.js/npm as specified in `README.md`, Git,
+specified in `rust-toolchain.toml`, Node.js/npm as specified in [Building](BUILDING.md), Git,
 and GitHub CLI (`gh`) authenticated for the release repository.
 
 Packaging uses the current Node process architecture: `arm64`, or `x64` mapped
@@ -378,7 +378,7 @@ worktrees, and signing keys out of build cleanup.
 
 | Source | Responsibility |
 | --- | --- |
-| `Cargo.toml`, `Cargo.lock`, `README.md` | Version and build requirements |
+| `Cargo.toml`, `Cargo.lock`, `README.md`, `docs/BUILDING.md` | Version and build requirements |
 | `scripts/build-release`, `scripts/build-frontend` | Compilation and embedded frontend assets |
 | `scripts/package-release.mjs` | Packaging, signing, app notarization, ZIP, appcast, source, and initial checksums |
 | `scripts/fetch-node`, `scripts/fetch-sparkle` | Pinned distributions and checksum verification |

@@ -14,3 +14,9 @@ The README links to those MP4 files for playback controls and full resolution.
 The recordings predate the task-details page and simplified menus. Refresh these
 previews when new public product recordings are available. Do not add recordings
 containing credentials, private conversations, or customer data.
+
+## Agent badges
+
+`codex-badge.svg` and `claude-code-badge.svg` use the same provider symbols as
+`assets/icons/`, inside compact labels for the README. They identify supported
+third-party CLIs and do not imply endorsement.
