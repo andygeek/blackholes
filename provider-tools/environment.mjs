@@ -1,30 +1,12 @@
-import { accessSync, constants, mkdirSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { accessSync, constants } from "node:fs";
+import { isAbsolute } from "node:path";
 
-export const providerEnvironment = (request) => {
-  const environment = Object.fromEntries(
+export const providerEnvironment = () => {
+  // Inherit the computer account, including custom CLI profile variables.
+  // Rust supplies the user's login-shell PATH; keep its Node/Bun and CLI selection.
+  return Object.fromEntries(
     Object.entries(process.env).filter(([, value]) => typeof value === "string"),
   );
-  // Rust supplies the user's login-shell PATH. Keep its Node/Bun and CLI
-  // selection; the app's private JavaScript engine is only for this bridge.
-  if (request.auth_mode !== "isolated") return environment;
-
-  const profile = request.auth_profile_dir;
-  mkdirSync(profile, { recursive: true });
-  switch (request.provider) {
-    case "claude": environment.CLAUDE_CONFIG_DIR = profile; break;
-    case "codex": environment.CODEX_HOME = profile; break;
-    case "gemini": environment.GEMINI_CLI_HOME = profile; break;
-    case "opencode":
-      environment.XDG_DATA_HOME = join(profile, "data");
-      environment.XDG_CONFIG_HOME = join(profile, "config");
-      environment.XDG_CACHE_HOME = join(profile, "cache");
-      for (const directory of [environment.XDG_DATA_HOME, environment.XDG_CONFIG_HOME, environment.XDG_CACHE_HOME]) {
-        mkdirSync(directory, { recursive: true });
-      }
-      break;
-  }
-  return environment;
 };
 
 export const installedAgentBinary = (name) => {

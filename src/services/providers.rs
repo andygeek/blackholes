@@ -1,6 +1,5 @@
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, anyhow};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     collections::HashSet,
     fs,
@@ -37,7 +36,7 @@ impl Drop for ActiveProviderHelper {
     }
 }
 
-/// Stop authentication and metadata helpers, including their child CLIs, on shutdown.
+/// Stop usage metadata helpers, including their child CLIs, on shutdown.
 pub fn terminate_provider_helpers() {
     let process_ids = active_provider_helpers()
         .lock()
@@ -96,38 +95,6 @@ impl AgentProvider {
         }
     }
 
-    pub fn from_setting(value: Option<String>) -> Self {
-        match value.as_deref() {
-            Some("codex") => Self::Codex,
-            Some("gemini") => Self::Gemini,
-            Some("opencode") => Self::OpenCode,
-            _ => Self::Claude,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AgentAuthMode {
-    #[default]
-    System,
-    Isolated,
-}
-
-impl AgentAuthMode {
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::Isolated => "isolated",
-        }
-    }
-
-    pub fn from_setting(value: Option<String>) -> Self {
-        match value.as_deref() {
-            Some("isolated") => Self::Isolated,
-            _ => Self::System,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -185,11 +152,7 @@ fn terminate_helper_process(process_id: u32) {
 
 /// Fetch plan metadata without a conversation, prompt, tools, or token usage.
 /// Runs on a background executor; the deadline also covers provider startup/cleanup.
-pub fn refresh_agent_plan_usage(
-    provider: AgentProvider,
-    auth_mode: AgentAuthMode,
-    profile: PathBuf,
-) -> Result<ProviderPlanUsage> {
+pub fn refresh_agent_plan_usage(provider: AgentProvider) -> Result<ProviderPlanUsage> {
     let script = locate_usage_script()?;
     let cwd = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -211,7 +174,7 @@ pub fn refresh_agent_plan_usage(
     let process_id = child.id();
     let _active_helper = ActiveProviderHelper::register(process_id);
     let payload = serde_json::to_vec(&serde_json::json!({
-        "provider": provider.id(), "auth_mode": auth_mode.id(), "auth_profile_dir": profile,
+        "provider": provider.id(),
     }))?;
     let write_result = child
         .stdin
@@ -336,217 +299,4 @@ pub(crate) fn locate_node_binary() -> PathBuf {
     }
 
     PathBuf::from("node")
-}
-
-#[derive(Debug)]
-pub enum AgentAuthEvent {
-    Output { text: String },
-    OpenUrl { url: String },
-    Completed,
-    Error { message: String },
-}
-
-pub struct AgentAuthStream {
-    pub events: flume::Receiver<AgentAuthEvent>,
-    pub input: flume::Sender<String>,
-    pub cancel: flume::Sender<()>,
-}
-
-pub fn start_agent_authentication(
-    provider: AgentProvider,
-    profiles_root: &Path,
-) -> Result<AgentAuthStream> {
-    let profile_dir = profiles_root.join(provider.id());
-    fs::create_dir_all(&profile_dir)
-        .with_context(|| format!("Unable to create {}", profile_dir.display()))?;
-    if provider == AgentProvider::Gemini {
-        prepare_gemini_oauth_profile(&profile_dir)?;
-    }
-
-    let (event_sender, events) = flume::unbounded();
-    let (input, input_receiver) = flume::unbounded::<String>();
-    let (cancel, cancel_receiver) = flume::bounded(1);
-    // Authenticate is explicit consent to Gemini's non-TTY browser sign-in.
-    if provider == AgentProvider::Gemini {
-        input.send("y".into())?;
-    }
-    std::thread::Builder::new()
-        .name(format!("blackholes-{}-auth", provider.id()))
-        .spawn(move || {
-            if let Err(error) = run_agent_authentication(
-                provider,
-                profile_dir,
-                event_sender.clone(),
-                input_receiver,
-                cancel_receiver,
-            ) {
-                let _ = event_sender.send(AgentAuthEvent::Error {
-                    message: format!("{error:#}"),
-                });
-            }
-        })?;
-    Ok(AgentAuthStream {
-        events,
-        input,
-        cancel,
-    })
-}
-
-fn run_agent_authentication(
-    provider: AgentProvider,
-    profile_dir: PathBuf,
-    event_sender: flume::Sender<AgentAuthEvent>,
-    input_receiver: flume::Receiver<String>,
-    cancel_receiver: flume::Receiver<()>,
-) -> Result<()> {
-    let (program, args) = authentication_command(provider);
-    let agent = super::installed_agents::InstalledAgent::resolve(program, &profile_dir)?;
-    if cancel_receiver.try_recv() != Err(flume::TryRecvError::Empty) {
-        return Ok(());
-    }
-    let mut command = agent.command();
-    command
-        .args(&args)
-        .current_dir(&profile_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    match provider {
-        AgentProvider::Claude => {
-            command.env("CLAUDE_CONFIG_DIR", &profile_dir);
-        }
-        AgentProvider::Codex => {
-            command.env("CODEX_HOME", &profile_dir);
-        }
-        AgentProvider::Gemini => {
-            command
-                .env("GEMINI_CLI_HOME", &profile_dir)
-                .env("GEMINI_DEFAULT_AUTH_TYPE", "oauth-personal");
-        }
-        AgentProvider::OpenCode => {
-            command
-                .env("XDG_DATA_HOME", profile_dir.join("data"))
-                .env("XDG_CONFIG_HOME", profile_dir.join("config"))
-                .env("XDG_CACHE_HOME", profile_dir.join("cache"));
-        }
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Unable to start {} authentication", provider.display_name()))?;
-    let process_id = child.id();
-    let active_process = ActiveProviderHelper::register(process_id);
-    let stdin = child
-        .stdin
-        .take()
-        .context("Authentication stdin is unavailable")?;
-    let stdout = child
-        .stdout
-        .take()
-        .context("Authentication stdout is unavailable")?;
-    let stderr = child
-        .stderr
-        .take()
-        .context("Authentication stderr is unavailable")?;
-    for (name, reader) in [
-        ("stdout", Box::new(stdout) as Box<dyn Read + Send>),
-        ("stderr", Box::new(stderr) as Box<dyn Read + Send>),
-    ] {
-        let sender = event_sender.clone();
-        std::thread::Builder::new()
-            .name(format!("blackholes-auth-{name}"))
-            .spawn(move || stream_auth_output(reader, sender))?;
-    }
-    std::thread::Builder::new()
-        .name("blackholes-auth-input".into())
-        .spawn(move || write_auth_input(stdin, input_receiver))?;
-    std::thread::Builder::new()
-        .name("blackholes-auth-cancel".into())
-        .spawn(move || {
-            if cancel_receiver.recv().is_ok() {
-                terminate_helper_process(process_id);
-            }
-        })?;
-    let _active_process = active_process;
-    let status = child.wait().context("Authentication process failed")?;
-    if !status.success() {
-        bail!(
-            "{} authentication exited with {status}",
-            provider.display_name()
-        );
-    }
-    let _ = event_sender.send(AgentAuthEvent::Completed);
-    Ok(())
-}
-
-fn authentication_command(provider: AgentProvider) -> (&'static str, Vec<&'static str>) {
-    match provider {
-        AgentProvider::Claude => ("claude", vec!["auth", "login"]),
-        AgentProvider::Codex => ("codex", vec!["login"]),
-        AgentProvider::Gemini => ("gemini", vec!["--list-sessions"]),
-        AgentProvider::OpenCode => ("opencode", vec!["auth", "login", "--provider", "opencode"]),
-    }
-}
-
-fn prepare_gemini_oauth_profile(profile_dir: &Path) -> Result<()> {
-    // Gemini treats GEMINI_CLI_HOME as the home root and keeps its user
-    // configuration and OAuth credentials in the .gemini directory below it.
-    let settings_dir = profile_dir.join(".gemini");
-    fs::create_dir_all(&settings_dir)?;
-    let settings_path = settings_dir.join("settings.json");
-    let mut settings = fs::read_to_string(&settings_path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    settings["security"]["auth"]["selectedType"] = Value::String("oauth-personal".into());
-    fs::write(&settings_path, serde_json::to_vec_pretty(&settings)?)?;
-    Ok(())
-}
-
-fn write_auth_input(mut stdin: impl Write, input: flume::Receiver<String>) {
-    while let Ok(value) = input.recv() {
-        if stdin.write_all(value.as_bytes()).is_err()
-            || stdin.write_all(b"\n").is_err()
-            || stdin.flush().is_err()
-        {
-            break;
-        }
-    }
-}
-
-fn stream_auth_output(mut reader: Box<dyn Read + Send>, sender: flume::Sender<AgentAuthEvent>) {
-    let url_pattern = regex::Regex::new(r#"https?://[^\s\x1b<>\"']+"#)
-        .expect("the authentication URL pattern must be valid");
-    let ansi_pattern = regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]")
-        .expect("the ANSI escape pattern must be valid");
-    let mut buffer = [0_u8; 4096];
-    let mut rolling = String::new();
-    loop {
-        let Ok(read) = reader.read(&mut buffer) else {
-            break;
-        };
-        if read == 0 {
-            break;
-        }
-        let raw = String::from_utf8_lossy(&buffer[..read]);
-        let clean = ansi_pattern.replace_all(&raw, "").replace('\r', "\n");
-        rolling.push_str(&clean);
-        for found in url_pattern.find_iter(&rolling) {
-            let url = found
-                .as_str()
-                .trim_end_matches([')', ']', '}', '.', ','])
-                .to_string();
-            let _ = sender.send(AgentAuthEvent::OpenUrl { url });
-        }
-        if rolling.len() > 16_384 {
-            rolling = rolling.split_off(rolling.len() - 8_192);
-        }
-        if sender.send(AgentAuthEvent::Output { text: clean }).is_err() {
-            break;
-        }
-    }
 }

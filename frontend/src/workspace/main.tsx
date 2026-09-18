@@ -1,3 +1,4 @@
+import { receiveSourceControlResult } from "./SourceChanges";
 import { receiveTaskDetailsSave } from "./TaskDetails";
 import { StrictMode, useEffect, useLayoutEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -55,6 +56,9 @@ function WorkspaceApp() {
           }
           break;
         }
+        case "source_control_result":
+          receiveSourceControlResult(raw as Parameters<typeof receiveSourceControlResult>[0]);
+          break;
         case "task_details_saved":
           receiveTaskDetailsSave(raw as Parameters<typeof receiveTaskDetailsSave>[0]);
           break;

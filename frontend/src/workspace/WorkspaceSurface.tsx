@@ -1,12 +1,12 @@
+import type { IndexInfo } from "./SourceChanges";
+import type { SearchData } from "./RepositorySearch";
+import { CommitOverview, type HistoryData } from "./GitHistory";
 import {
   ArrowLeft,
-  Bot,
   Cable,
   ChevronDown,
   ChevronRight,
   Code2,
-  Database,
-  ExternalLink,
   File,
   FileCode2,
   Folder,
@@ -53,28 +53,11 @@ interface Choice {
   icon?: LucideIcon;
 }
 
-interface AuthenticationState {
-  status: "connecting" | "needs-input" | "connected" | "error";
-  detail: string;
-  opened_url?: string | null;
-}
-
-interface UsageCard {
-  label: string;
-  value: string;
-  detail: string;
-  utilization?: number | null;
-}
-
 export interface SettingsData {
   language: "en" | "es";
   theme: AppTheme;
   projects_root: string;
   git_available: boolean;
-  provider: string;
-  provider_label: string;
-  auth_mode: string;
-  authentication?: AuthenticationState | null;
   external_integrations?: {
     running: boolean;
     install_required: boolean;
@@ -88,11 +71,7 @@ export interface SettingsData {
       skill_warning?: string | null;
     }>;
   };
-  usage_cards: UsageCard[];
-  usage_updated: string;
   sidebar_width: number;
-  usage_refreshing: boolean;
-  usage_refresh_error: boolean;
 }
 
 export interface ProjectSettingsData {
@@ -123,13 +102,19 @@ export interface ChangeRow {
   previous_relative_path?: string | null;
   kind: "added" | "deleted" | "modified" | "renamed" | "untracked" | "conflicted";
   selected: boolean;
+  selected_staged: boolean;
+  staged_kind: ChangeRow["kind"] | null;
+  unstaged_kind: ChangeRow["kind"] | null;
 }
 
 export interface ExplorerData {
+  history?: HistoryData;
+  index?: IndexInfo | null;
+  search?: SearchData;
   open: boolean;
   root_label: string;
   root_path: string;
-  mode: "files" | "changes";
+  mode: "files" | "changes" | "search";
   rows: ExplorerRow[];
   changes: ChangeRow[];
   changes_state: "idle" | "loading" | "ready" | "error";
@@ -137,6 +122,7 @@ export interface ExplorerData {
 }
 
 interface EditorData {
+  reveal?: { id: string; line: number; column: number; end_column: number } | null;
   request_id: number;
   state: "loading" | "ready" | "error";
   error?: string | null;
@@ -163,6 +149,8 @@ interface DiffRow {
 }
 
 interface DiffData {
+  original_label?: string | null;
+  modified_label?: string | null;
   original?: string | null;
   modified?: string | null;
   request_id: number;
@@ -283,7 +271,7 @@ function SettingsTabs<T extends string>({ tabs, value, onChange, label }: {
   );
 }
 
-type PreferencePage = "general" | "accounts" | "usage" | "mcps";
+type PreferencePage = "general" | "mcps";
 
 function PreferenceGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="preference-group"><h2>{title}</h2><div className="preference-box">{children}</div></section>;
@@ -315,23 +303,16 @@ function PreferenceSelect({ label, choices, value, onChange }: {
 
 function SettingsView({ data }: { data: SettingsData }) {
   const language = data.language;
-  const [authCode, setAuthCode] = useState("");
   const [activePage, setActivePage] = useState<PreferencePage>("general");
   const [query, setQuery] = useState("");
   const contentRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (contentRef.current) contentRef.current.scrollTop = 0; }, [activePage, query]);
-  useEffect(() => setAuthCode(""), [data.provider, data.auth_mode]);
-  useEffect(() => {
-    if (activePage === "usage") postNative({ type: "refresh_plan_usage" });
-  }, [activePage, data.provider, data.auth_mode]);
-  const providers: Choice[] = [
-    { value: "claude", label: "Claude" }, { value: "codex", label: "Codex" },
-    { value: "gemini", label: "Gemini" }, { value: "opencode", label: "OpenCode · Generic" },
-  ];
-  const providerControl = <PreferenceSelect label={t(language, "Agent provider", "Proveedor del agente")}
-    choices={providers} value={data.provider} onChange={(provider) => postNative({ type: "set_agent_provider", provider })} />;
-  const providerRow = <PreferenceRow title={t(language, "Agent provider", "Proveedor del agente")}
-    description={t(language, "Uses the CLI installed on your computer. Install and update your chosen agent with its own tools.", "Usa el CLI instalado en tu computadora. Instala y actualiza el agente elegido con sus propias herramientas.")}>{providerControl}</PreferenceRow>;
+  const integrationProfiles = data.external_integrations?.profiles ?? [];
+  const integrationGroups = Array.from(new Set(integrationProfiles.map((profile) => profile.client)))
+    .map((client) => ({
+      client,
+      profiles: integrationProfiles.filter((profile) => profile.client === client),
+    }));
 
   const pages: Array<{ id: PreferencePage; label: string; description: string; icon: LucideIcon; keywords: string; badge?: number; content: React.ReactNode }> = [
     {
@@ -371,92 +352,14 @@ function SettingsView({ data }: { data: SettingsData }) {
       </>,
     },
     {
-      id: "accounts", label: t(language, "Accounts", "Cuentas"), icon: Bot,
-      description: t(language, "Choose an agent provider and connect your account.", "Elige un proveedor de agentes y conecta tu cuenta."),
-      keywords: "runtime motor proveedor provider Claude Codex Gemini OpenCode auth authentication autenticar conexión cuenta account",
-      content: <>
-        <PreferenceGroup title={t(language, "Provider and account", "Proveedor y cuenta")}>
-          {providerRow}
-          <PreferenceRow title={t(language, "Account source", "Origen de la cuenta")} description={t(language, "Choose the account profile for new terminal sessions. Existing sessions keep their profile.", "Elige el perfil de cuenta para las nuevas sesiones de terminal. Las sesiones existentes conservan su perfil.")}>
-            <PreferenceSelect label={t(language, "Account source", "Origen de la cuenta")} choices={[
-              { value: "system", label: t(language, "Computer", "Computadora") },
-              { value: "isolated", label: "Blackholes" },
-            ]} value={data.auth_mode} onChange={(auth_mode) => postNative({ type: "set_agent_auth_mode", auth_mode })} />
-          </PreferenceRow>
-          <PreferenceRow title={t(language, "Authentication", "Autenticación")} description={t(language, "Connect or change the account for ", "Conecta o cambia la cuenta de ") + data.provider_label + "."}>
-            <button className="workspace-button" type="button" onClick={() => postNative({ type: "authenticate_agent_provider" })}>{t(language, "Connect / change account", "Conectar / cambiar cuenta")}</button>
-          </PreferenceRow>
-        </PreferenceGroup>
-        {data.authentication && (
-                <div className={`auth-card is-${data.authentication.status}`}>
-                  <strong>{({
-                    connecting: t(language, "Connecting account…", "Conectando cuenta…"),
-                    "needs-input": t(language, "Authorization required", "Autorización requerida"),
-                    connected: t(language, "Account connected", "Cuenta conectada"),
-                    error: t(language, "Could not connect", "No se pudo conectar"),
-                  })[data.authentication.status]}</strong>
-                  <p>{data.authentication.detail}</p>
-                  {data.authentication.status === "needs-input" && (
-                    <form onSubmit={(event) => {
-                      event.preventDefault();
-                      if (!authCode.trim()) return;
-                      postNative({ type: "submit_agent_auth", value: authCode.trim() });
-                      setAuthCode("");
-                    }}>
-                      <input value={authCode} onChange={(event) => setAuthCode(event.target.value)} autoFocus aria-label={t(language, "Authorization code", "Código de autorización")} placeholder={t(language, "Authorization code", "Código de autorización")} />
-                      <button className="workspace-button" type="submit">{t(language, "Continue", "Continuar")}</button>
-                    </form>
-                  )}
-                  <div className="inline-actions">
-                    {data.authentication.opened_url && data.authentication.status !== "connected" && (
-                      <button className="workspace-button" type="button" onClick={() => postNative({ type: "open_url", url: data.authentication?.opened_url })}>
-                        <ExternalLink size={13} /> {t(language, "Open browser again", "Abrir navegador de nuevo")}
-                      </button>
-                    )}
-                    <button className="workspace-button" type="button" onClick={() => postNative({ type: "cancel_agent_auth" })}>
-                      {t(language, "Close", "Cerrar")}
-                    </button>
-                  </div>
-                </div>
-              )}
-      </>,
-    },
-    {
-      id: "usage", label: t(language, "Usage", "Consumo"), icon: Database,
-      description: t(language, "Plan limits reported by your provider.", "Límites del plan reportados por tu proveedor."),
-      keywords: "billing facturación costo cost usage consumo tokens límites limits plan balance weekly semanal hours horas",
-      content: <>
-        <div className="preference-toolbar">
-          <span>{data.provider_label} · {data.auth_mode === "isolated" ? "Blackholes" : t(language, "Computer account", "Cuenta de la computadora")}</span>
-          <button type="button" className="workspace-button" disabled={data.usage_refreshing} onClick={() => postNative({ type: "refresh_plan_usage" })}>
-            <RefreshCw size={14} />{data.usage_refreshing ? t(language, "Updating…", "Actualizando…") : t(language, "Refresh limits", "Actualizar límites")}
-          </button>
-        </div>
-        <p className="preference-footnote" role="status">{data.usage_refresh_error
-          ? t(language, "Could not refresh limits. Showing the last report; you can retry.", "No se pudieron actualizar los límites. Se muestra el último reporte; puedes reintentar.")
-          : t(language, "Limits belong to the selected provider account.", "Los límites corresponden a la cuenta seleccionada del proveedor.")}</p>
-        <PreferenceGroup title={t(language, "Plan and limits", "Plan y límites")}>
-          {data.usage_cards.length === 0 && <p className="preference-empty">{t(language, "No usage reported yet.", "Todavía no hay consumo reportado.")}</p>}
-          {data.usage_cards.map((card, index) => <PreferenceRow key={`${index}-${card.label}`} title={card.label} description={card.detail}>
-            <div className="preference-usage">
-              <strong>{card.value}</strong>
-              {typeof card.utilization === "number" && Number.isFinite(card.utilization) && <progress max={100} value={Math.min(100, Math.max(0, card.utilization))} aria-label={card.label} aria-valuetext={card.value + ". " + card.detail} />}
-            </div>
-          </PreferenceRow>)}
-        </PreferenceGroup>
-        <div className="preference-footnote">{data.usage_updated && <p>{data.usage_updated}</p>}</div>
-      </>,
-    },
-    {
       id: "mcps", label: t(language, "MCP servers", "Servidores MCP"), icon: Cable,
       description: t(language, "Connect Blackholes to your terminal agents.", "Conecta Blackholes a tus agentes de terminal."),
       keywords: "mcp servers servidores conexiones integrations integraciones",
       content: <>
-        <div className="preference-toolbar"><span>{data.provider_label}</span><button className="workspace-button" type="button" onClick={() => setActivePage("accounts")}>{t(language, "Manage account", "Administrar cuenta")}</button></div>
         <PreferenceGroup title={t(language, "Blackholes in your terminal agents", "Blackholes en tus agentes de terminal")}>
           <PreferenceRow title={t(language, "Automatic connection", "Conexión automática")} description={t(language,
-            "Blackholes prepares its MCP connection for Codex and Claude Code when the app opens, including after updates. It can prepare the connection before you install either CLI. Open a new agent session to use it.",
-            "Blackholes prepara su conexión MCP para Codex y Claude Code al abrir la app, también después de actualizar. Puede preparar la conexión antes de que instales los CLI. Abre una nueva sesión del agente para usarla.")}>
+            "Let Codex and Claude Code manage projects and tasks in Blackholes. The connection is prepared automatically when the app opens. Start a new agent session to use it.",
+            "Permite que Codex y Claude Code gestionen proyectos y tareas en Blackholes. La conexión se prepara automáticamente al abrir la app. Inicia una nueva sesión del agente para usarla.")}>
             <button type="button" className="workspace-button" disabled={data.external_integrations?.running}
               onClick={() => postNative({ type: "refresh_external_integrations" })}>
               <RefreshCw size={14} />{data.external_integrations?.running ? t(language, "Preparing…", "Preparando…") : t(language, "Refresh connection", "Actualizar conexión")}
@@ -466,12 +369,20 @@ function SettingsView({ data }: { data: SettingsData }) {
             "Move Blackholes to Applications and open it there to finish connecting your terminal agents.",
             "Mueve Blackholes a Aplicaciones y ábrelo desde allí para terminar de conectar tus agentes de terminal.")}</p>}
           {data.external_integrations?.error && <p className="preference-footnote" role="status">{data.external_integrations.error}</p>}
-          {data.external_integrations?.profiles.map((profile) => <PreferenceRow key={profile.config_path} title={profile.client}
-            description={<>
-              {(profile.error || profile.skill_warning) && <span>{profile.error || profile.skill_warning}</span>}
-              <details className="preference-item-details"><summary>{t(language, "Configuration location", "Ubicación de la configuración")}</summary><code>{profile.config_path}</code></details>
-            </>}>
-            <span className="preference-value">{profile.configured ? t(language, "Configured", "Configurado") : t(language, "Needs attention", "Requiere atención")}</span>
+          {integrationGroups.map(({ client, profiles }) => <PreferenceRow key={client} title={client}
+            description={<details className="preference-item-details">
+              <summary>{t(language, "Configuration details", "Detalles de configuración")} · {profiles.length}</summary>
+              <ul className="preference-profile-list">
+                {profiles.map((profile) => <li key={profile.config_path}>
+                  <code>{profile.config_path}</code>
+                  <span>{profile.configured ? t(language, "Configured", "Configurado") : t(language, "Needs attention", "Requiere atención")}</span>
+                  {profile.error && <span>{profile.error}</span>}
+                  {profile.skill_warning && <span>{profile.skill_warning}</span>}
+                </li>)}
+              </ul>
+            </details>}>
+            <span className="preference-value">{profiles.every((profile) => profile.configured && !profile.error && !profile.skill_warning)
+              ? t(language, "Configured", "Configurado") : t(language, "Needs attention", "Requiere atención")}</span>
           </PreferenceRow>)}
         </PreferenceGroup>
       </>,
@@ -496,8 +407,8 @@ function SettingsView({ data }: { data: SettingsData }) {
         <input type="search" aria-label={t(language, "Search settings", "Buscar ajustes")} placeholder={t(language, "Search settings…", "Buscar ajustes…")} value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
       <nav aria-label={t(language, "Settings sections", "Secciones de configuración")}>
-        {pages.map((page, index) => <div key={page.id}>
-          {(index === 0 || index === 1 || page.id === "mcps") && <span className="preferences-nav-label">{index === 0 ? t(language, "Application", "Aplicación") : index === 1 ? t(language, "Agents", "Agentes") : t(language, "Integrations", "Integraciones")}</span>}
+        {pages.map((page) => <div key={page.id}>
+          <span className="preferences-nav-label">{page.id === "general" ? t(language, "Application", "Aplicación") : t(language, "Integrations", "Integraciones")}</span>
           <button type="button" className={!terms.length && activePage === page.id ? "is-selected" : ""}
             aria-current={!terms.length && activePage === page.id ? "page" : undefined}
             onClick={() => { setActivePage(page.id); setQuery(""); }}>
@@ -514,7 +425,7 @@ function SettingsView({ data }: { data: SettingsData }) {
           <h1>{terms.length ? t(language, "Search results", "Resultados de búsqueda") : active.label}</h1>
           <p>{terms.length ? t(language, "Settings matching your search.", "Ajustes que coinciden con tu búsqueda.") : active.description}</p>
         </header>
-        {visiblePages.length === 0 && <div className="preference-empty"><Search size={24} /><p>{t(language, "No matching settings. Try “account”, “language”, or “MCP”.", "No hay coincidencias. Prueba con «cuenta», «idioma» o «MCP».")}</p></div>}
+        {visiblePages.length === 0 && <div className="preference-empty"><Search size={24} /><p>{t(language, "No matching settings. Try “theme”, “language”, or “MCP”.", "No hay coincidencias. Prueba con «tema», «idioma» o «MCP».")}</p></div>}
         {visiblePages.map((page) => <section className="preferences-page-content" key={page.id} aria-label={page.label}>
           {terms.length > 0 && <h2 className="preference-result-title">{page.label}</h2>}
           {page.content}
@@ -712,7 +623,7 @@ function FileEditor({ editor, language, theme, root }: { editor: EditorData; lan
       )}
       <header className="document-header"><File size={16} /><div><strong>{editor.file_name}</strong><span>{editor.relative_path}</span></div><span className={`save-state is-${editor.save_state}`}>{saveStateLabel(editor.save_state, language)}</span><button type="button" className="workspace-button" onClick={() => postNative({ type: "save_active_file" })}><Save size={13} />{t(language, "Save", "Guardar")}</button><button type="button" className="workspace-icon-button" onClick={() => postNative({ type: "close_file_editor" })}><X size={15} /></button></header>
       {editor.state === "loading" ? <div className="workspace-empty">{t(language, "Opening file…", "Abriendo archivo…")}</div> : editor.state === "error" ? <div className="workspace-error">{editor.error}</div> : (
-        <MonacoSurface file={`${root}/${editor.relative_path}`} content={editor.content} requestId={editor.request_id} theme={theme} language={language} />
+        <MonacoSurface file={`${root}/${editor.relative_path}`} content={editor.content} reveal={editor.reveal} requestId={editor.request_id} theme={theme} language={language} />
       )}
     </section>
   );
@@ -745,8 +656,8 @@ function DiffView({ diff, language, theme }: { diff: DiffData; language: "en" | 
   return (
     <section className="file-editor-shell">
       <header className="document-header"><Code2 size={16} /><div><strong>{diff.file_name}</strong><span>{diff.relative_path}</span></div><b className={`diff-status is-${diff.change_kind}`}>{changeMarker[diff.change_kind]}</b><button type="button" className="workspace-icon-button" onClick={() => postNative({ type: "close_repository_diff" })}><X size={15} /></button></header>
-      {!full && <div className="diff-head"><span>HEAD</span><span>{t(language, "WORKING TREE", "CAMBIOS LOCALES")}</span></div>}
-      {diff.state === "loading" ? <div className="workspace-empty">{t(language, "Loading comparison…", "Cargando comparación…")}</div> : diff.state === "error" ? <div className="workspace-error">{diff.error}</div> : diff.state === "binary" ? <div className="workspace-empty">{t(language, "Binary files cannot be compared here", "Los archivos binarios no se pueden comparar aquí")}</div> : full ? <MonacoSurface file={diff.relative_path} content={diff.modified!} original={diff.original!} requestId={diff.request_id} theme={theme} language={language} /> : diff.state === "empty" ? <div className="workspace-empty">{t(language, "No textual changes to display", "No hay cambios de texto para mostrar")}</div> : <VirtualDiff diff={diff} />}
+      {!full && <div className="diff-head"><span>{diff.original_label || "HEAD"}</span><span>{diff.modified_label || t(language, "WORKING TREE", "CAMBIOS LOCALES")}</span></div>}
+      {diff.state === "loading" ? <div className="workspace-empty">{t(language, "Loading comparison…", "Cargando comparación…")}</div> : diff.state === "error" ? <div className="workspace-error">{diff.error}</div> : diff.state === "binary" ? <div className="workspace-empty">{t(language, "Binary files cannot be compared here", "Los archivos binarios no se pueden comparar aquí")}</div> : full ? <MonacoSurface file={diff.relative_path} content={diff.modified!} original={diff.original!} comparisonLabel={diff.modified_label ? `${diff.original_label} ↔ ${diff.modified_label}` : undefined} requestId={diff.request_id} theme={theme} language={language} /> : diff.state === "empty" ? <div className="workspace-empty">{t(language, "No textual changes to display", "No hay cambios de texto para mostrar")}</div> : <VirtualDiff diff={diff} />}
       {!full && diff.truncated && <footer className="diff-truncated">{t(language, "Large diff truncated at 20,000 rows", "Diff grande truncado a 20 000 filas")}</footer>}
     </section>
   );
@@ -761,11 +672,11 @@ function WorkbenchView({ data }: { data: WorkbenchData }) {
     <main className="workbench-page">
       <RepositoryExplorer explorer={data.explorer} language={data.language} width={explorerWidth} onResize={setExplorerWidth} />
       <div className="workbench-content">
-        {data.diff ? <DiffView diff={data.diff} language={data.language} theme={data.theme} /> : data.editor ? <FileEditor editor={data.editor} language={data.language} theme={data.theme} root={data.explorer.root_path} /> : (
+        {data.diff ? <DiffView diff={data.diff} language={data.language} theme={data.theme} /> : data.explorer.mode === "changes" && data.explorer.history?.selected ? <CommitOverview history={data.explorer.history} root={data.explorer.root_path} language={data.language} /> : data.editor ? <FileEditor editor={data.editor} language={data.language} theme={data.theme} root={data.explorer.root_path} /> : (
           <div className="workspace-empty workbench-welcome">
             <span><FileCode2 size={22} /></span>
             <strong>{data.explorer.root_label}</strong>
-            <p>{t(data.language, "Select a file in the explorer to open it", "Selecciona un archivo del explorador para abrirlo")}</p>
+            <p>{t(data.language, data.explorer.mode === "changes" ? "Select a change or commit to review it" : "Select a file in the explorer to open it", data.explorer.mode === "changes" ? "Selecciona un cambio o commit para revisarlo" : "Selecciona un archivo del explorador para abrirlo")}</p>
           </div>
         )}
       </div>

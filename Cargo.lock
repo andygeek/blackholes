@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "blackholes-rust"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "alacritty_terminal",
  "anyhow",

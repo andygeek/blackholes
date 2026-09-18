@@ -149,7 +149,7 @@ fn profiles(home: &Path, isolated_profiles: &Path) -> Vec<Profile> {
             });
         }
     }
-    // Accounts connected inside Blackholes are also used by terminal sessions.
+    // Preserve MCP support for saved terminals that still use legacy Blackholes profiles.
     for (provider, client, file) in [
         ("codex", "Codex", "config.toml"),
         ("claude", "Claude Code", ".claude.json"),

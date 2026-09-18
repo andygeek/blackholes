@@ -1,3 +1,6 @@
+mod git_history;
+mod source_control;
+
 use super::{
     apply_native_theme,
     navigation_webview::{self, NavigationCommand, SidebarSection},
@@ -20,17 +23,15 @@ use crate::{
         files::{
             FileEntry, FileEntryKind, IndexedRepositoryFile, RepositoryChange,
             RepositoryChangeKind, RepositoryDiffLineKind, RepositoryDiffRow, RepositoryFileDiff,
-            index_repository_files, read_directory, read_text_file, repository_changes,
-            repository_file_diff, write_text_file,
+            index_repository_files, read_directory, read_text_file,
+            write_text_file,
         },
+        source_control as scm,
         notes::{
             ProjectInstructionsService, ProjectNoteService, ProjectTaskInstructionsService,
             TaskNoteService,
         },
-        providers::{
-            AgentAuthEvent, AgentAuthMode, AgentProvider, ProviderPlanUsage, PlanUsageWindow,
-            refresh_agent_plan_usage, start_agent_authentication,
-        },
+        providers::{AgentProvider, refresh_agent_plan_usage},
         projects::{
             ProjectService, ProjectRepositoryMode, ProjectRepositorySource, RepositoryRemoval, RepositoryGitSummary, discover_repositories, repository_git_summary,
         },
@@ -111,34 +112,6 @@ struct AppToast {
     target: AppToastTarget,
     title: String,
     message: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AgentAuthStatus {
-    Connecting,
-    NeedsInput,
-    Connected,
-    Error,
-}
-
-struct AgentAuthentication {
-    id: Uuid,
-    provider: AgentProvider,
-    status: AgentAuthStatus,
-    detail: String,
-    output: String,
-    opened_url: Option<String>,
-    input: Entity<InputState>,
-    input_sender: flume::Sender<String>,
-    cancel: Option<flume::Sender<()>>,
-}
-
-impl Drop for AgentAuthentication {
-    fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
-    }
 }
 
 /// Payload of the `task-ready:` bridge message sent by the MCP server's
@@ -295,6 +268,7 @@ enum FileExplorerMode {
     #[default]
     Files,
     Changes,
+    Search,
 }
 
 #[derive(Default)]
@@ -308,6 +282,10 @@ enum RepositoryChangesState {
 
 #[derive(Default)]
 struct FileExplorerState {
+    history: git_history::HistoryState,
+    scm_info: Option<scm::IndexInfo>,
+    search: source_control::SearchState,
+    reveal: Option<serde_json::Value>,
     open: bool,
     root: Option<PathBuf>,
     root_label: String,
@@ -318,7 +296,7 @@ struct FileExplorerState {
     selected: Option<PathBuf>,
     next_request_id: u64,
     changes: RepositoryChangesState,
-    changes_request_id: u64,
+    changes_request_id: Option<Uuid>,
     changes_request_in_flight: bool,
     changes_refresh_pending: bool,
 }
@@ -427,6 +405,8 @@ enum FileDiffLoadState {
 }
 
 struct FileDiffHandle {
+    staged: bool,
+    comparison: Option<(String, String)>,
     root: PathBuf,
     change: RepositoryChange,
     load_state: FileDiffLoadState,
@@ -589,7 +569,6 @@ pub struct BlackholesApp {
     task_removal_confirmation: Option<Uuid>,
     agent_removal_confirmation: Option<AgentRemovalTarget>,
     task_modal_submitting: bool,
-    agent_authentication: Option<AgentAuthentication>,
     workspaces: Vec<Workspace>,
     tasks: Vec<ProjectTask>,
     session: AppSession,
@@ -600,6 +579,7 @@ pub struct BlackholesApp {
     sidebar_scroll: ScrollHandle,
     file_explorer_resize: Entity<ResizableState>,
     file_watcher: Option<notify::RecommendedWatcher>,
+    git_network_busy: bool,
     active_file: Option<FileDocumentHandle>,
     active_diff: Option<FileDiffHandle>,
     next_file_request_id: u64,
@@ -616,11 +596,6 @@ pub struct BlackholesApp {
     show_project_overview: bool,
     show_settings: bool,
     settings_return_view: Option<(bool, bool, bool, Option<Uuid>)>,
-    plan_usage_refreshing: bool,
-    plan_usage_refresh_error: bool,
-    active_plan_usage: Option<ProviderPlanUsage>,
-    plan_usage_updated_at: Option<chrono::DateTime<Utc>>,
-    plan_usage_generation: u64,
     computer_plan_usage: [ComputerPlanUsage; 2],
     usage_details_window: Option<gpui::WindowHandle<usage_bar::UsagePopover>>,
     resident_memory_bytes: Option<u64>,
@@ -891,7 +866,6 @@ impl BlackholesApp {
             task_removal_confirmation: None,
             agent_removal_confirmation: None,
             task_modal_submitting: false,
-            agent_authentication: None,
             workspaces,
             tasks,
             session,
@@ -902,6 +876,7 @@ impl BlackholesApp {
             sidebar_scroll: ScrollHandle::default(),
             file_explorer_resize,
             file_watcher: None,
+            git_network_busy: false,
             active_file: None,
             active_diff: None,
             next_file_request_id: 0,
@@ -918,11 +893,6 @@ impl BlackholesApp {
             show_project_overview: false,
             show_settings: !crate::services::projects::git_tools_available(),
             settings_return_view: None,
-            plan_usage_refreshing: false,
-            plan_usage_refresh_error: false,
-            active_plan_usage: None,
-            plan_usage_updated_at: None,
-            plan_usage_generation: 0,
             computer_plan_usage: [ComputerPlanUsage::new(AgentProvider::Claude), ComputerPlanUsage::new(AgentProvider::Codex)],
             usage_details_window: None,
             resident_memory_bytes: None,
@@ -1055,14 +1025,13 @@ impl BlackholesApp {
     }
 
     fn sync_update_guard(&self) {
-        let blocked = self.busy.is_some()
+        let blocked = self.git_network_busy || self.busy.is_some()
             || self.task_modal_request.is_some()
             || self.task_removal_confirmation.is_some()
             || self.agent_removal_confirmation.is_some()
             || self.project_modal_request.is_some()
             || self.project_appearance_request.is_some()
             || !self.terminals.is_empty()
-            || self.agent_authentication.is_some()
             || self.active_file.as_ref().is_some_and(|file| file.dirty || file.save_state != NoteSaveState::Saved)
             || !self.task_details_dirty.is_empty();
         crate::services::updater::set_blocked(blocked, self.session.language == Language::Spanish);
@@ -1145,12 +1114,8 @@ impl BlackholesApp {
                 cx,
             ),
             WorkspaceCommand::SetTheme { theme } => self.set_theme(theme, cx),
-            WorkspaceCommand::SetAgentProvider { provider } => {
-                self.set_agent_provider(provider, cx)
-            }
             WorkspaceCommand::CloseSettings => self.close_settings(cx),
             WorkspaceCommand::SetSidebarWidth { width, commit } => self.set_sidebar_width(width, commit, cx),
-            WorkspaceCommand::RefreshPlanUsage => self.refresh_plan_usage(cx),
             WorkspaceCommand::InstallGitTools => {
                 #[cfg(target_os = "macos")]
                 if let Err(error) = std::process::Command::new("/usr/bin/xcode-select").arg("--install").spawn() {
@@ -1159,16 +1124,6 @@ impl BlackholesApp {
             }
             WorkspaceCommand::RefreshRuntimeStatus => self.hydrate_active_workspace_surface(cx),
             WorkspaceCommand::RefreshExternalIntegrations => self.refresh_external_integrations(cx),
-            WorkspaceCommand::SetAgentAuthMode { auth_mode } => {
-                self.set_agent_auth_mode(self.agent_provider(), auth_mode, cx)
-            }
-            WorkspaceCommand::AuthenticateAgentProvider => {
-                self.authenticate_agent_provider(self.agent_provider(), window, cx)
-            }
-            WorkspaceCommand::SubmitAgentAuth { value } => {
-                self.submit_agent_auth_value(value, cx)
-            }
-            WorkspaceCommand::CancelAgentAuth => self.cancel_agent_authentication(cx),
             WorkspaceCommand::DismissAppModal => {
                 self.dismiss_app_modal(cx);
                 if self.show_terminal && self.project_modal_request.is_none() && self.task_modal_request.is_none() {
@@ -1336,11 +1291,34 @@ impl BlackholesApp {
             WorkspaceCommand::FocusTerminal { terminal_id } => self.focus_terminal(terminal_id, window, cx),
             WorkspaceCommand::OpenTaskDetails { workspace_id, task_id } => self.show_task_details_for(workspace_id, task_id, cx),
             WorkspaceCommand::OpenProjectRepository { workspace_id, repository_id } => self.select_repository_target(workspace_id, None, repository_id, cx),
+            WorkspaceCommand::SourceControlAction { root_path, request_id, operation, token, relative_path, message } => {
+                if self.history_root_matches(&root_path) { self.source_control_action(request_id, operation, token, relative_path, message, cx); }
+            }
+            WorkspaceCommand::SearchRepository { root_path, request_id, options } => {
+                if self.history_root_matches(&root_path) { self.search_repository(request_id, options, cx); }
+            }
+            WorkspaceCommand::OpenSearchMatch { root_path, request_id, path, line, column } => {
+                if self.history_root_matches(&root_path) { self.open_search_match(&request_id, &path, line, column, cx); }
+            }
+            WorkspaceCommand::RefreshGitHistory { root_path, load_more } => {
+                if self.history_root_matches(&root_path) { self.request_git_history(load_more, cx); }
+            }
+            WorkspaceCommand::SelectGitCommit { root_path, commit, parent } => {
+                if self.history_root_matches(&root_path) { self.select_git_commit(commit, parent, cx); }
+            }
+            WorkspaceCommand::OpenGitCommitDiff { root_path, commit, relative_path } => {
+                if self.history_root_matches(&root_path) { self.open_git_commit_diff(&commit, &relative_path, cx); }
+            }
+            WorkspaceCommand::GitRemoteOperation { root_path, operation, remote, expected_head, expected_branch, expected_upstream, expected_target } => {
+                if self.history_root_matches(&root_path) { self.git_remote_operation(&operation, remote, expected_head, expected_branch, expected_upstream, expected_target, cx); }
+            }
             WorkspaceCommand::RefreshFileExplorer => self.refresh_file_explorer(cx),
             WorkspaceCommand::CloseFileExplorer => self.close_file_explorer(cx),
             WorkspaceCommand::SetFileExplorerMode { mode } => self.set_file_explorer_mode(
                 if mode == "changes" {
                     FileExplorerMode::Changes
+                } else if mode == "search" {
+                    FileExplorerMode::Search
                 } else {
                     FileExplorerMode::Files
                 },
@@ -1361,16 +1339,16 @@ impl BlackholesApp {
                     self.activate_file_tree_row(PathBuf::from(path), kind, click_count, cx);
                 }
             }
-            WorkspaceCommand::OpenRepositoryDiff { relative_path } => {
+            WorkspaceCommand::OpenRepositoryDiff { relative_path, staged } => {
                 let change = match &self.file_explorer.changes {
                     RepositoryChangesState::Ready(changes) => changes
                         .iter()
-                        .find(|change| change.relative_path == relative_path)
+                        .find(|change| change.relative_path == relative_path && scm::side_kind(change, staged).is_some())
                         .cloned(),
                     _ => None,
                 };
                 if let Some(change) = change {
-                    self.open_repository_diff(change, cx);
+                    self.open_repository_diff(change, staged, cx);
                 }
             }
             WorkspaceCommand::CloseRepositoryDiff => self.close_repository_diff(cx),
@@ -1815,66 +1793,6 @@ impl BlackholesApp {
             Language::English => "en",
             Language::Spanish => "es",
         };
-        let provider = self.agent_provider();
-        let authentication = self
-            .agent_authentication
-            .as_ref()
-            .filter(|authentication| authentication.provider == provider)
-            .map(|authentication| {
-                serde_json::json!({
-                    "status": match authentication.status {
-                        AgentAuthStatus::Connecting => "connecting",
-                        AgentAuthStatus::NeedsInput => "needs-input",
-                        AgentAuthStatus::Connected => "connected",
-                        AgentAuthStatus::Error => "error",
-                    },
-                    "detail": authentication.detail,
-                    "opened_url": authentication.opened_url,
-                })
-            });
-        let plan_usage = self.active_plan_usage.as_ref();
-        let mut usage_cards = vec![serde_json::json!({
-            "label": self.tr("Plan", "Plan"),
-            "value": provider_plan_name(provider, plan_usage, self.session.language),
-            "detail": provider_plan_detail(plan_usage, self.session.language),
-            "utilization": serde_json::Value::Null,
-        })];
-        // Window durations are provider-reported, not always five hours / weekly.
-        if let Some(usage) = plan_usage {
-            for (index, window) in usage.windows.iter().enumerate() {
-                let duration = match window.minutes {
-                    Some(10080) => self.tr("Weekly limit", "Límite semanal").to_string(),
-                    Some(minutes) if minutes % 60 == 0 => format!("{} h", minutes / 60),
-                    Some(minutes) => format!("{minutes} min"),
-                    None => self.tr("Usage limit", "Límite de uso").to_string(),
-                };
-                let label = if window.label.is_empty() { duration } else { format!("{} · {duration}", window.label) };
-                let (value, detail, utilization) = plan_limit_display(window, self.session.language);
-                usage_cards.insert(index + 1, serde_json::json!({
-                    "label": label, "value": value, "detail": detail, "utilization": utilization,
-                }));
-            }
-        }
-        let usage_updated = self
-            .plan_usage_updated_at
-            .map(|timestamp| {
-                let timestamp = timestamp.with_timezone(&chrono::Local);
-                match self.session.language {
-                    Language::English => {
-                        format!("Last updated {}", timestamp.format("%b %-d, %H:%M"))
-                    }
-                    Language::Spanish => {
-                        format!("Actualizado el {}", timestamp.format("%-d/%m, %H:%M"))
-                    }
-                }
-            })
-            .unwrap_or_else(|| {
-                self.tr(
-                    "Account limits have not been refreshed yet.",
-                    "Todavía no se actualizaron los límites de la cuenta.",
-                )
-                .to_string()
-            });
         self.dispatch_workspace_event(
             serde_json::json!({
                 "type": "workspace_surface",
@@ -1886,15 +1804,7 @@ impl BlackholesApp {
                     "projects_root": self.projects_root().display().to_string(),
                     "git_available": crate::services::projects::git_tools_available(),
                     "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
-                    "provider": provider.id(),
-                    "provider_label": provider.display_name(),
-                    "auth_mode": self.agent_auth_mode(provider).id(),
-                    "authentication": authentication,
                     "external_integrations": self.external_integrations,
-                    "usage_cards": usage_cards,
-                    "usage_updated": usage_updated,
-                    "usage_refreshing": self.plan_usage_refreshing,
-                    "usage_refresh_error": self.plan_usage_refresh_error,
                 }
             }),
             cx,
@@ -2017,7 +1927,10 @@ impl BlackholesApp {
                         "relative_path": change.relative_path,
                         "previous_relative_path": change.previous_relative_path,
                         "kind": repository_change_kind_id(change.kind),
-                        "selected": self.active_diff.as_ref().is_some_and(|document| document.change.relative_path == change.relative_path),
+                        "staged_kind": scm::side_kind(change, true).map(repository_change_kind_id),
+                        "unstaged_kind": scm::side_kind(change, false).map(repository_change_kind_id),
+                        "selected_staged": self.active_diff.as_ref().is_some_and(|d| d.comparison.is_none() && d.staged && d.change.relative_path == change.relative_path),
+                        "selected": self.active_diff.as_ref().is_some_and(|document| document.comparison.is_none() && !document.staged && document.change.relative_path == change.relative_path),
                     }))
                     .collect::<Vec<_>>(),
             ),
@@ -2087,6 +2000,7 @@ impl BlackholesApp {
                 "workspace_id": workspace_id,
                 "save_state": note_save_state_id(document.save_state),
                 "revision": document.revision,
+                "reveal": self.file_explorer.reveal.as_ref().filter(|r| r["path"].as_str() == document.path.to_str()),
             })
         });
         let diff = self.active_diff.as_ref().map(|document| {
@@ -2130,7 +2044,9 @@ impl BlackholesApp {
                 "error": error,
                 "file_name": file_name,
                 "relative_path": document.change.relative_path,
-                "change_kind": repository_change_kind_id(document.change.kind),
+                "change_kind": repository_change_kind_id(if document.comparison.is_some() { document.change.kind } else { scm::side_kind(&document.change, document.staged).unwrap_or(document.change.kind) }),
+                "original_label": document.comparison.as_ref().map(|c| c.0.as_str()).or(Some(if document.staged { "HEAD" } else { "Index" })),
+                "modified_label": document.comparison.as_ref().map(|c| c.1.as_str()).or(Some(if document.staged { self.tr("Staged changes", "Cambios preparados") } else { self.tr("Working tree", "Cambios locales") })),
                 "original": original,
                 "modified": modified,
                 "rows": rows,
@@ -2149,11 +2065,14 @@ impl BlackholesApp {
                         "open": self.file_explorer.open,
                         "root_label": self.file_explorer.root_label,
                         "root_path": self.file_explorer.root.as_ref().map(|path| path.display().to_string()).unwrap_or_default(),
-                        "mode": if self.file_explorer.mode == FileExplorerMode::Changes { "changes" } else { "files" },
+                        "mode": match self.file_explorer.mode { FileExplorerMode::Changes => "changes", FileExplorerMode::Search => "search", FileExplorerMode::Files => "files" },
                         "rows": rows,
                         "changes": changes,
                         "changes_state": changes_state,
                         "changes_error": changes_error,
+                        "history": self.history_json(),
+                        "index": self.file_explorer.scm_info,
+                        "search": self.search_json(),
                     },
                     "editor": editor,
                     "diff": diff,
@@ -2941,8 +2860,12 @@ impl BlackholesApp {
             self.file_explorer.requests.clear();
             self.file_explorer.selected = None;
             self.file_explorer.changes = RepositoryChangesState::Idle;
-            self.file_explorer.changes_request_id =
-                self.file_explorer.changes_request_id.wrapping_add(1);
+            self.file_explorer.history = git_history::HistoryState::default();
+            self.file_explorer.scm_info = None;
+            self.file_explorer.search.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.file_explorer.search = source_control::SearchState::default();
+            self.file_explorer.reveal = None;
+            self.file_explorer.changes_request_id = None;
             self.file_explorer.changes_request_in_flight = false;
             self.file_explorer.changes_refresh_pending = false;
         }
@@ -2961,6 +2884,7 @@ impl BlackholesApp {
             self.request_directory(root, cx);
         }
         if self.file_explorer.mode == FileExplorerMode::Changes {
+            self.request_git_history(false, cx);
             self.request_repository_changes(cx);
         }
         self.publish_workbench_surface(cx);
@@ -2968,6 +2892,7 @@ impl BlackholesApp {
     }
 
     fn close_file_explorer(&mut self, cx: &mut Context<Self>) {
+        self.file_explorer.search.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
         self.file_watcher = None;
         self.file_explorer = FileExplorerState::default();
         self.active_diff = None;
@@ -2994,6 +2919,7 @@ impl BlackholesApp {
         self.show_settings = false;
         self.project_settings_workspace_id = None;
         if mode == FileExplorerMode::Changes {
+            self.request_git_history(false, cx);
             self.request_repository_changes(cx);
         } else if let Some(root) = self.file_explorer.root.clone() {
             self.refresh_file_explorer_if_root(&root, cx);
@@ -3011,9 +2937,8 @@ impl BlackholesApp {
             return;
         }
         self.file_explorer.changes_request_in_flight = true;
-        self.file_explorer.changes_request_id =
-            self.file_explorer.changes_request_id.wrapping_add(1);
-        let request_id = self.file_explorer.changes_request_id;
+        let request_id = Uuid::new_v4();
+        self.file_explorer.changes_request_id = Some(request_id);
         let show_loading = matches!(
             &self.file_explorer.changes,
             RepositoryChangesState::Idle | RepositoryChangesState::Error(_)
@@ -3026,7 +2951,7 @@ impl BlackholesApp {
         let read_root = root.clone();
         let background = cx
             .background_executor()
-            .spawn(async move { repository_changes(&read_root) });
+            .spawn(async move { scm::status(&read_root) });
         let weak = cx.weak_entity();
         cx.spawn(async move |_, cx| {
             let result = background.await;
@@ -3040,18 +2965,21 @@ impl BlackholesApp {
     fn finish_repository_changes_request(
         &mut self,
         root: PathBuf,
-        request_id: u64,
-        result: Result<Vec<RepositoryChange>>,
+        request_id: Uuid,
+        result: Result<scm::Status>,
         cx: &mut Context<Self>,
     ) {
         if self.file_explorer.root.as_ref() != Some(&root)
-            || self.file_explorer.changes_request_id != request_id
+            || self.file_explorer.changes_request_id != Some(request_id)
         {
             return;
         }
         self.file_explorer.changes_request_in_flight = false;
         let state_changed = match result {
-            Ok(changes) => {
+            Ok(status) => {
+                let info_changed = self.file_explorer.scm_info.as_ref() != Some(&status.info);
+                self.file_explorer.scm_info = Some(status.info);
+                let changes = status.changes;
                 let unchanged = matches!(
                     &self.file_explorer.changes,
                     RepositoryChangesState::Ready(current)
@@ -3060,9 +2988,10 @@ impl BlackholesApp {
                 if !unchanged {
                     self.file_explorer.changes = RepositoryChangesState::Ready(changes.into());
                 }
-                !unchanged
+                !unchanged || info_changed
             }
             Err(error) => {
+                self.file_explorer.scm_info = None;
                 let message = format!("{error:#}");
                 let unchanged = matches!(
                     &self.file_explorer.changes,
@@ -3084,12 +3013,12 @@ impl BlackholesApp {
         }
     }
 
-    fn open_repository_diff(&mut self, change: RepositoryChange, cx: &mut Context<Self>) {
+    fn open_repository_diff(&mut self, change: RepositoryChange, staged: bool, cx: &mut Context<Self>) {
         let Some(root) = self.file_explorer.root.clone() else {
             return;
         };
         if let Some(active_diff) = self.active_diff.as_mut().filter(|active_diff| {
-            active_diff.root == root
+            active_diff.comparison.is_none() && active_diff.staged == staged && active_diff.root == root
                 && active_diff.change.path == change.path
                 && active_diff.request_in_flight
         }) {
@@ -3101,7 +3030,7 @@ impl BlackholesApp {
         let request_id = self.next_file_diff_request_id;
         self.file_explorer.selected = Some(change.path.clone());
         let refreshing_current = self.active_diff.as_ref().is_some_and(|active_diff| {
-            active_diff.root == root && active_diff.change.path == change.path
+            active_diff.comparison.is_none() && active_diff.staged == staged && active_diff.root == root && active_diff.change.path == change.path
         });
         if refreshing_current {
             if let Some(active_diff) = self.active_diff.as_mut() {
@@ -3111,6 +3040,8 @@ impl BlackholesApp {
             }
         } else {
             self.active_diff = Some(FileDiffHandle {
+                comparison: None,
+                staged,
                 root: root.clone(),
                 change: change.clone(),
                 load_state: FileDiffLoadState::Loading,
@@ -3128,7 +3059,7 @@ impl BlackholesApp {
         let read_root = root.clone();
         let background = cx
             .background_executor()
-            .spawn(async move { repository_file_diff(&read_root, &change) });
+            .spawn(async move { scm::diff(&read_root, &change, staged) });
         let weak = cx.weak_entity();
         cx.spawn(async move |_, cx| {
             let result = background.await;
@@ -3191,9 +3122,9 @@ impl BlackholesApp {
     }
 
     fn refresh_active_repository_diff(&mut self, cx: &mut Context<Self>) {
-        let change = self.active_diff.as_ref().map(|diff| diff.change.clone());
-        if let Some(change) = change {
-            self.open_repository_diff(change, cx);
+        let change = self.active_diff.as_ref().filter(|diff| diff.comparison.is_none()).map(|diff| (diff.change.clone(), diff.staged));
+        if let Some((change, staged)) = change {
+            self.open_repository_diff(change, staged, cx);
         }
     }
 
@@ -3278,6 +3209,13 @@ impl BlackholesApp {
         cx: &mut Context<Self>,
     ) {
         if !self.file_explorer.open || self.file_explorer.root.as_ref() != Some(root) {
+            return;
+        }
+
+        if self.file_explorer.mode == FileExplorerMode::Search {
+            if let Some(options) = self.file_explorer.search.options.clone().filter(|o| !o.query.is_empty()) {
+                self.search_repository(Uuid::new_v4().to_string(), options, cx);
+            }
             return;
         }
 
@@ -3399,6 +3337,11 @@ impl BlackholesApp {
     }
 
     fn refresh_file_explorer(&mut self, cx: &mut Context<Self>) {
+        if self.file_explorer.mode == FileExplorerMode::Search {
+            if let Some(options) = self.file_explorer.search.options.clone() { self.search_repository(Uuid::new_v4().to_string(), options, cx); }
+            return;
+        }
+        if self.file_explorer.mode == FileExplorerMode::Changes { self.request_git_history(false, cx); }
         let Some(root) = self.file_explorer.root.clone() else {
             return;
         };
@@ -3630,6 +3573,7 @@ impl BlackholesApp {
     }
 
     fn open_file_in_editor(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.file_explorer.reveal = None;
         let Some(root) = self.file_explorer.root.clone() else {
             return;
         };
@@ -4643,323 +4587,6 @@ impl BlackholesApp {
             });
         })
         .detach();
-    }
-
-    fn agent_provider(&self) -> AgentProvider {
-        AgentProvider::from_setting(self.database.setting("agent-provider").ok().flatten())
-    }
-
-    fn set_agent_provider(&mut self, provider: AgentProvider, cx: &mut Context<Self>) {
-        match self.database.set_setting("agent-provider", provider.id()) {
-            Ok(()) => self.set_status(
-                format!(
-                    "{}: {}",
-                    self.tr("Agent provider updated", "Proveedor de agentes actualizado"),
-                    provider.display_name()
-                ),
-                false,
-                cx,
-            ),
-            Err(error) => self.set_status(
-                format!("Could not save the agent provider: {error:#}"),
-                true,
-                cx,
-            ),
-        }
-
-        self.invalidate_plan_usage(cx);
-        cx.notify();
-    }
-
-    fn agent_auth_mode(&self, provider: AgentProvider) -> AgentAuthMode {
-        AgentAuthMode::from_setting(
-            self.database
-                .setting(&format!("agent-auth-{}", provider.id()))
-                .ok()
-                .flatten(),
-        )
-    }
-
-    fn set_agent_auth_mode(
-        &mut self,
-        provider: AgentProvider,
-        auth_mode: AgentAuthMode,
-        cx: &mut Context<Self>,
-    ) {
-        match self
-            .database
-            .set_setting(&format!("agent-auth-{}", provider.id()), auth_mode.id())
-        {
-            Ok(()) => self.set_status(
-                self.tr(
-                    "Authentication profile updated for new terminal sessions",
-                    "Perfil de autenticación actualizado para las nuevas sesiones de terminal",
-                ),
-                false,
-                cx,
-            ),
-            Err(error) => self.set_status(
-                format!("Could not save the authentication profile: {error:#}"),
-                true,
-                cx,
-            ),
-        }
-
-        self.invalidate_plan_usage(cx);
-        cx.notify();
-    }
-
-    fn authenticate_agent_provider(
-        &mut self,
-        provider: AgentProvider,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Dropping a previous flow also stops its provider process. This keeps
-        // account changes isolated and prevents two OAuth attempts competing.
-        self.agent_authentication = None;
-        let stream = match start_agent_authentication(provider, &self.paths.agent_profiles) {
-            Ok(stream) => stream,
-            Err(error) => {
-                self.set_status(
-                    format!(
-                        "{}: {error:#}",
-                        self.tr(
-                            "Could not start authentication",
-                            "No se pudo iniciar la autenticación"
-                        )
-                    ),
-                    true,
-                    cx,
-                );
-                return;
-            }
-        };
-
-        let authentication_id = Uuid::new_v4();
-        let placeholder = self
-            .tr(
-                "Paste the authorization code",
-                "Pega el código de autorización",
-            )
-            .to_string();
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-        let events = stream.events;
-        self.agent_authentication = Some(AgentAuthentication {
-            id: authentication_id,
-            provider,
-            status: AgentAuthStatus::Connecting,
-            detail: self
-                .tr(
-                    "Preparing secure sign-in…",
-                    "Preparando el inicio de sesión seguro…",
-                )
-                .to_string(),
-            output: String::new(),
-            opened_url: None,
-            input,
-            input_sender: stream.input,
-            cancel: Some(stream.cancel),
-        });
-
-        cx.spawn(async move |this, cx| {
-            while let Ok(event) = events.recv_async().await {
-                let terminal = matches!(
-                    &event,
-                    AgentAuthEvent::Completed | AgentAuthEvent::Error { .. }
-                );
-                if this
-                    .update(cx, |app, cx| {
-                        app.handle_agent_auth_event(authentication_id, provider, event, cx)
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                if terminal {
-                    break;
-                }
-            }
-        })
-        .detach();
-        cx.notify();
-    }
-
-    fn handle_agent_auth_event(
-        &mut self,
-        authentication_id: Uuid,
-        provider: AgentProvider,
-        event: AgentAuthEvent,
-        cx: &mut Context<Self>,
-    ) {
-        let spanish = self.session.language == Language::Spanish;
-        let Some(authentication) = self.agent_authentication.as_mut().filter(|authentication| {
-            authentication.id == authentication_id && authentication.provider == provider
-        }) else {
-            return;
-        };
-
-        let completed = matches!(&event, AgentAuthEvent::Completed);
-        match event {
-            AgentAuthEvent::Output { text } => {
-                authentication.output.push_str(&text);
-                if authentication.output.len() > 65_536 {
-                    let mut keep_from = authentication.output.len() - 32_768;
-                    while !authentication.output.is_char_boundary(keep_from) {
-                        keep_from += 1;
-                    }
-                    authentication.output.drain(..keep_from);
-                }
-                let normalized = text.to_ascii_lowercase();
-                let asks_for_code = (normalized.contains("paste")
-                    || normalized.contains("enter")
-                    || normalized.contains("introduce")
-                    || normalized.contains("pega"))
-                    && (normalized.contains("code")
-                        || normalized.contains("token")
-                        || normalized.contains("código"));
-                if asks_for_code {
-                    authentication.status = AgentAuthStatus::NeedsInput;
-                    authentication.detail = if spanish {
-                        "El proveedor solicita un código. Pégalo aquí para continuar."
-                    } else {
-                        "The provider requested a code. Paste it here to continue."
-                    }
-                    .to_string();
-                }
-            }
-            AgentAuthEvent::OpenUrl { url } => {
-                if authentication.opened_url.as_deref() != Some(url.as_str()) {
-                    authentication.opened_url = Some(url.clone());
-                    authentication.status = AgentAuthStatus::Connecting;
-                    authentication.detail = if spanish {
-                        "Continúa el inicio de sesión en el navegador y vuelve a Blackholes. Si no se abrió, usa el botón de abajo."
-                    } else {
-                        "Continue signing in through your browser, then return to Blackholes. If it did not open, use the button below."
-                    }
-                    .to_string();
-                }
-            }
-            AgentAuthEvent::Completed => {
-                authentication.status = AgentAuthStatus::Connected;
-                authentication.cancel = None;
-                authentication.detail = if spanish {
-                    format!("{} quedó conectado a Blackholes.", provider.display_name())
-                } else {
-                    format!(
-                        "{} is now connected to Blackholes.",
-                        provider.display_name()
-                    )
-                };
-                if let Err(error) = self.database.set_setting(
-                    &format!("agent-auth-{}", provider.id()),
-                    AgentAuthMode::Isolated.id(),
-                ) {
-                    authentication.status = AgentAuthStatus::Error;
-                    authentication.detail = format!(
-                        "{}: {error:#}",
-                        if spanish {
-                            "La cuenta se autenticó, pero no se pudo guardar la selección"
-                        } else {
-                            "The account was authenticated, but the selection could not be saved"
-                        }
-                    );
-                }
-            }
-            AgentAuthEvent::Error { message } => {
-                authentication.status = AgentAuthStatus::Error;
-                authentication.cancel = None;
-                let useful_output = authentication
-                    .output
-                    .lines()
-                    .rev()
-                    .map(str::trim)
-                    .find(|line| {
-                        !line.is_empty() && !line.contains("https://") && !line.contains("http://")
-                    })
-                    .map(|line| line.chars().take(280).collect::<String>());
-                authentication.detail = match useful_output {
-                    Some(output) if output != message => format!("{message}. {output}"),
-                    _ => message,
-                };
-            }
-        }
-        if completed {
-            self.refresh_external_integrations(cx);
-            self.invalidate_plan_usage(cx);
-        }
-        cx.notify();
-    }
-
-    fn submit_agent_auth_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(authentication) = self.agent_authentication.as_ref() else {
-            return;
-        };
-        let value = authentication.input.read(cx).value().trim().to_string();
-        if value.is_empty() {
-            return;
-        }
-        let input = authentication.input.clone();
-        let sender = authentication.input_sender.clone();
-        if sender.send(value).is_err() {
-            let spanish = self.session.language == Language::Spanish;
-            if let Some(authentication) = self.agent_authentication.as_mut() {
-                authentication.status = AgentAuthStatus::Error;
-                authentication.detail = if spanish {
-                    "El proceso de autenticación ya no está disponible."
-                } else {
-                    "The authentication process is no longer available."
-                }
-                .to_string();
-            }
-        } else {
-            input.update(cx, |input, cx| input.set_value("", window, cx));
-            let spanish = self.session.language == Language::Spanish;
-            if let Some(authentication) = self.agent_authentication.as_mut() {
-                authentication.status = AgentAuthStatus::Connecting;
-                authentication.detail = if spanish {
-                    "Verificando el código…"
-                } else {
-                    "Verifying the code…"
-                }
-                .to_string();
-            }
-        }
-        cx.notify();
-    }
-
-    fn submit_agent_auth_value(&mut self, value: String, cx: &mut Context<Self>) {
-        let value = value.trim();
-        if value.is_empty() {
-            return;
-        }
-        let spanish = self.session.language == Language::Spanish;
-        let Some(authentication) = self.agent_authentication.as_mut() else {
-            return;
-        };
-        if authentication.input_sender.send(value.to_string()).is_err() {
-            authentication.status = AgentAuthStatus::Error;
-            authentication.detail = if spanish {
-                "El proceso de autenticación ya no está disponible."
-            } else {
-                "The authentication process is no longer available."
-            }
-            .to_string();
-        } else {
-            authentication.status = AgentAuthStatus::Connecting;
-            authentication.detail = if spanish {
-                "Verificando el código…"
-            } else {
-                "Verifying the code…"
-            }
-            .to_string();
-        }
-        cx.notify();
-    }
-
-    fn cancel_agent_authentication(&mut self, cx: &mut Context<Self>) {
-        self.agent_authentication = None;
-        cx.notify();
     }
 
     fn set_projects_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -7626,18 +7253,6 @@ impl BlackholesApp {
     }
 
 
-    fn terminal_agent_profile(&self, agent: AgentKind) -> Option<PathBuf> {
-        let provider = match agent {
-            AgentKind::Claude => AgentProvider::Claude,
-            AgentKind::Codex => AgentProvider::Codex,
-            AgentKind::Gemini => AgentProvider::Gemini,
-            AgentKind::OpenCode => AgentProvider::OpenCode,
-            AgentKind::Shell | AgentKind::Antigravity => return None,
-        };
-        (self.agent_auth_mode(provider) == AgentAuthMode::Isolated)
-            .then(|| self.paths.agent_profiles.join(provider.id()))
-    }
-
     fn new_terminal(&mut self, agent: AgentKind, window: &mut Window, cx: &mut Context<Self>) {
         self.show_project_overview = false;
         self.show_task_details = false;
@@ -7669,7 +7284,9 @@ impl BlackholesApp {
             state: SessionState::Idle,
             codex_session: None,
             claude_session: None,
-            agent_config_dir: self.terminal_agent_profile(agent),
+            // New sessions inherit the CLI account from the computer. Saved
+            // sessions retain their own profile through TerminalDescriptor.
+            agent_config_dir: None,
             created_at: now,
         };
 
@@ -8630,9 +8247,8 @@ impl BlackholesApp {
             state.refreshing = true;
             state.failed = false;
             let provider = state.provider;
-            let profile = self.paths.agent_profiles.join(provider.id());
             let background = cx.background_executor().spawn(async move {
-                refresh_agent_plan_usage(provider, AgentAuthMode::System, profile)
+                refresh_agent_plan_usage(provider)
             });
             cx.spawn(async move |this, cx| {
                 let result = background.await;
@@ -8648,52 +8264,6 @@ impl BlackholesApp {
                 });
             }).detach();
         }
-        cx.notify();
-    }
-
-    fn invalidate_plan_usage(&mut self, cx: &mut Context<Self>) {
-        self.plan_usage_generation = self.plan_usage_generation.wrapping_add(1);
-        self.active_plan_usage = None;
-        self.plan_usage_updated_at = None;
-        self.plan_usage_refreshing = false;
-        self.plan_usage_refresh_error = false;
-        self.refresh_plan_usage(cx);
-    }
-
-    fn refresh_plan_usage(&mut self, cx: &mut Context<Self>) {
-        if !self.show_settings || self.plan_usage_refreshing { return; }
-        self.plan_usage_refreshing = true;
-        self.plan_usage_refresh_error = false;
-        let provider = self.agent_provider();
-        let generation = self.plan_usage_generation;
-        let auth_mode = self.agent_auth_mode(provider);
-        let profile = self.paths.agent_profiles.join(provider.id());
-        let background = cx.background_executor().spawn(async move {
-            refresh_agent_plan_usage(provider, auth_mode, profile)
-        });
-        let weak = cx.weak_entity();
-        cx.spawn(async move |_, cx| {
-            let result = background.await;
-            let _ = weak.update(cx, |app, cx| {
-                if app.plan_usage_generation != generation { return; }
-                app.plan_usage_refreshing = false;
-                // An account change must not publish the previous account's limits.
-                if app.agent_provider() != provider || app.agent_auth_mode(provider) != auth_mode {
-                    app.plan_usage_refresh_error = true;
-                } else {
-                    match result {
-                        Ok(usage) => {
-                            app.active_plan_usage = Some(usage);
-                            app.plan_usage_updated_at = Some(Utc::now());
-                        }
-                        Err(_) => app.plan_usage_refresh_error = true,
-                    }
-                }
-                app.hydrate_active_workspace_surface(cx);
-                cx.notify();
-            });
-        }).detach();
-        self.hydrate_active_workspace_surface(cx);
         cx.notify();
     }
 
@@ -9086,7 +8656,7 @@ impl BlackholesApp {
                                     .on_click(move |_, _, cx| {
                                         let change = change_for_click.clone();
                                         let _ = weak_change.update(cx, |app, cx| {
-                                            app.open_repository_diff(change, cx)
+                                            app.open_repository_diff(change, false, cx)
                                         });
                                     })
                                     .child(
@@ -10707,7 +10277,7 @@ impl Render for BlackholesApp {
             && !self.show_project_overview
             && !self.show_task_details
             && !self.show_terminal
-            && self.file_explorer.mode == FileExplorerMode::Files
+            && matches!(self.file_explorer.mode, FileExplorerMode::Files | FileExplorerMode::Search)
         {
             self.ensure_file_editor(window, cx);
         }
@@ -11012,75 +10582,6 @@ fn compact_button(
         .on_click(on_click)
         .child(label.into())
         .into_any_element()
-}
-
-fn provider_plan_name(provider: AgentProvider, usage: Option<&ProviderPlanUsage>, language: Language) -> String {
-    match usage.and_then(|usage| usage.subscription_type.as_deref()) {
-        Some(plan) => format!("{} · {plan}", provider.display_name()),
-        None => match language {
-            Language::English => "Not reported".into(),
-            Language::Spanish => "No reportado".into(),
-        },
-    }
-}
-
-fn provider_plan_detail(usage: Option<&ProviderPlanUsage>, language: Language) -> String {
-    match (usage, language) {
-        (Some(usage), Language::English) if usage.rate_limits_available => "Limits reported by the selected account".into(),
-        (Some(usage), Language::Spanish) if usage.rate_limits_available => "Límites reportados por la cuenta seleccionada".into(),
-        (Some(_), Language::English) => "This account or provider did not report plan limits".into(),
-        (Some(_), Language::Spanish) => "Esta cuenta o proveedor no reportó límites del plan".into(),
-        (None, Language::English) => "Refresh to query the selected account".into(),
-        (None, Language::Spanish) => "Actualiza para consultar la cuenta seleccionada".into(),
-    }
-}
-
-fn plan_limit_display(
-    window: &PlanUsageWindow,
-    language: Language,
-) -> (String, String, Option<f32>) {
-    let Some(utilization) = window.utilization else {
-        return match language {
-            Language::English => (
-                "Unavailable".to_string(),
-                "No utilization value reported".to_string(),
-                None,
-            ),
-            Language::Spanish => (
-                "No disponible".to_string(),
-                "No se reportó un porcentaje".to_string(),
-                None,
-            ),
-        };
-    };
-
-    let utilization = utilization.clamp(0.0, 100.0);
-    let remaining = 100.0 - utilization;
-    let reset = window
-        .resets_at
-        .as_deref()
-        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
-        .map(|timestamp| {
-            timestamp
-                .with_timezone(&chrono::Local)
-                .format("%-d/%m %H:%M")
-                .to_string()
-        });
-    let value = match language {
-        Language::English => format!("{remaining:.0}% available"),
-        Language::Spanish => format!("{remaining:.0}% disponible"),
-    };
-    let detail = match (language, reset) {
-        (Language::English, Some(reset)) => {
-            format!("{utilization:.0}% used · resets {reset}")
-        }
-        (Language::Spanish, Some(reset)) => {
-            format!("{utilization:.0}% usado · reinicia {reset}")
-        }
-        (Language::English, None) => format!("{utilization:.0}% used"),
-        (Language::Spanish, None) => format!("{utilization:.0}% usado"),
-    };
-    (value, detail, Some(utilization as f32))
 }
 
 fn content_revision(content: &str) -> u64 {

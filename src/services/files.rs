@@ -55,6 +55,8 @@ pub enum RepositoryChangeKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepositoryChange {
+    pub index_status: char,
+    pub worktree_status: char,
     pub path: PathBuf,
     pub relative_path: String,
     pub previous_relative_path: Option<String>,
@@ -136,10 +138,10 @@ pub fn repository_changes(root: &Path) -> Result<Vec<RepositoryChange>> {
 
         let x = field[0] as char;
         let y = field[1] as char;
-        let relative_path = String::from_utf8_lossy(&field[3..]).into_owned();
+        let relative_path = String::from_utf8(field[3..].to_vec()).context("A changed file name is not UTF-8; manage it in the terminal")?;
         let renamed_or_copied = matches!(x, 'R' | 'C') || matches!(y, 'R' | 'C');
         let previous_relative_path = if renamed_or_copied && index < fields.len() {
-            let previous = String::from_utf8_lossy(fields[index]).into_owned();
+            let previous = String::from_utf8(fields[index].to_vec()).context("A renamed file name is not UTF-8; manage it in the terminal")?;
             index += 1;
             Some(previous)
         } else {
@@ -151,6 +153,8 @@ pub fn repository_changes(root: &Path) -> Result<Vec<RepositoryChange>> {
             relative_path,
             previous_relative_path,
             kind,
+            index_status: x,
+            worktree_status: y,
         });
     }
     changes.sort_by_cached_key(|change| change.relative_path.to_ascii_lowercase());
@@ -441,7 +445,7 @@ fn repository_change_kind(x: char, y: char) -> RepositoryChangeKind {
     RepositoryChangeKind::Modified
 }
 
-fn added_file_diff(root: &Path, path: &Path) -> Result<RepositoryFileDiff> {
+pub(super) fn added_file_diff(root: &Path, path: &Path) -> Result<RepositoryFileDiff> {
     let content = read_text_file(root, path);
     let content = match content {
         Ok(content) => content,
@@ -486,7 +490,7 @@ fn added_file_diff(root: &Path, path: &Path) -> Result<RepositoryFileDiff> {
     })
 }
 
-fn parse_repository_patch(patch: &str) -> RepositoryFileDiff {
+pub(super) fn parse_repository_patch(patch: &str) -> RepositoryFileDiff {
     let binary = patch.contains("GIT binary patch") || patch.contains("Binary files ");
     let mut rows = Vec::new();
     let mut old_number = 0;

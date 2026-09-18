@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, RefreshCw, Search, X } from "lucide-react";
 import type { ExplorerData, ExplorerRow, ChangeRow } from "./WorkspaceSurface";
+import { SourceChanges } from "./SourceChanges";
+import { RepositorySearch } from "./RepositorySearch";
+import { GitHistory } from "./GitHistory";
 import { postNative } from "../shared/native";
 
 const rowHeight = 26;
@@ -17,9 +20,11 @@ export function RepositoryExplorer({ explorer, language, width, onResize }: {
   const drag = useRef<{ x: number; width: number } | null>(null);
   const tr = (en: string, es: string) => language === "en" ? en : es;
   const files = explorer.mode === "files";
+  const changes = explorer.mode === "changes";
+  const searching = explorer.mode === "search";
   const rows = useMemo(() => {
     const source: (ExplorerRow | ChangeRow)[] = files ? explorer.rows : explorer.changes;
-    const term = query.trim().toLowerCase();
+    const term = files ? query.trim().toLowerCase() : "";
     return term ? source.filter(row => ("path" in row ? row.path : row.relative_path).toLowerCase().includes(term)) : source;
   }, [files, explorer.rows, explorer.changes, query]);
   useLayoutEffect(() => {
@@ -28,7 +33,7 @@ export function RepositoryExplorer({ explorer, language, width, onResize }: {
     const observer = new ResizeObserver(() => setScroll({ top: el.scrollTop, height: el.clientHeight }));
     observer.observe(el);
     return () => observer.disconnect();
-  }, [explorer.open]);
+  }, [explorer.open, explorer.mode]);
   useEffect(() => {
     setQuery(""); setActive(0);
     viewport.current?.scrollTo({ top: 0 });
@@ -51,14 +56,16 @@ export function RepositoryExplorer({ explorer, language, width, onResize }: {
     else if (el && (next + 1) * rowHeight > el.scrollTop + el.clientHeight) el.scrollTop = (next + 1) * rowHeight - el.clientHeight;
   };
   return <aside className="workbench-explorer repository-explorer" style={{ width }}>
-    <header><strong>{files ? tr("EXPLORER", "EXPLORADOR") : tr("SOURCE CONTROL", "CONTROL DE CÓDIGO")}</strong>
+    <header><strong>{files ? tr("EXPLORER", "EXPLORADOR") : searching ? tr("SEARCH", "BUSCAR") : tr("SOURCE CONTROL", "CONTROL DE CÓDIGO")}</strong>
       <button title={tr("Refresh", "Actualizar")} aria-label={tr("Refresh", "Actualizar")} onClick={() => postNative({ type: "refresh_file_explorer" })}><RefreshCw size={14} /></button>
       <button title={tr("Close explorer", "Cerrar explorador")} aria-label={tr("Close explorer", "Cerrar explorador")} onClick={() => postNative({ type: "close_file_explorer" })}><X size={14} /></button>
     </header>
     <div className="repository-tabs" role="tablist" aria-label={tr("Repository views", "Vistas del repositorio")}>
       <button role="tab" aria-selected={files} onClick={() => postNative({ type: "set_file_explorer_mode", mode: "files" })}><FolderOpen size={14} />{tr("Files", "Archivos")}</button>
-      <button role="tab" aria-selected={!files} onClick={() => postNative({ type: "set_file_explorer_mode", mode: "changes" })}><GitBranch size={14} />{tr("Changes", "Cambios")}<small>{explorer.changes.length}</small></button>
+      <button role="tab" aria-selected={changes} onClick={() => postNative({ type: "set_file_explorer_mode", mode: "changes" })}><GitBranch size={14} />{tr("Changes", "Cambios")}<small>{explorer.changes.length}</small></button>
+      <button role="tab" aria-selected={searching} onClick={() => postNative({ type: "set_file_explorer_mode", mode: "search" })}><Search size={14} />{tr("Search", "Buscar")}</button>
     </div>
+    {files && <section className="repository-files-section">
     <div className="repository-filter"><Search size={13} /><input value={query} aria-label={tr("Filter loaded files", "Filtrar archivos cargados")}
       placeholder={tr("Filter loaded files…", "Filtrar archivos cargados…")} onChange={event => { setQuery(event.target.value); setActive(0); viewport.current?.scrollTo({ top: 0 }); }}
       onKeyDown={event => { if (event.key === "ArrowDown") { event.preventDefault(); viewport.current?.focus(); focusRow(0); } }} />
@@ -92,7 +99,7 @@ export function RepositoryExplorer({ explorer, language, width, onResize }: {
         }
       }}>
       {!files && explorer.changes_state === "error" ? <div className="explorer-state is-error">{explorer.changes_error}</div>
-        : !rows.length ? <div className="explorer-state">{!files && explorer.changes_state === "loading" ? tr("Loading changes…", "Cargando cambios…") : query ? tr("No matches in loaded files", "Sin coincidencias en los archivos cargados") : tr("No files to show", "No hay archivos para mostrar")}</div>
+        : !rows.length ? <div className="explorer-state">{!files && explorer.changes_state === "loading" ? tr("Loading changes…", "Cargando cambios…") : files && query ? tr("No matches in loaded files", "Sin coincidencias en los archivos cargados") : files ? tr("No files to show", "No hay archivos para mostrar") : tr("Working tree clean", "Sin cambios locales")}</div>
         : <div style={{ height: rows.length * rowHeight, position: "relative" }}>
           <div style={{ position: "absolute", top: start * rowHeight, left: 0, right: 0 }}>
             {rows.slice(start, end).map((row, offset) => {
@@ -116,7 +123,11 @@ export function RepositoryExplorer({ explorer, language, width, onResize }: {
           </div>
         </div>}
     </div>
-    <footer className="repository-footer">{files ? tr("⌘P Quick open", "⌘P Apertura rápida") : `${explorer.changes.length} ${tr("changed files", "archivos modificados")}`}</footer>
+    </section>}
+    {changes && <SourceChanges key={explorer.root_path} explorer={explorer} language={language} />}
+    {searching && <RepositorySearch key={explorer.root_path} root={explorer.root_path} language={language} search={explorer.search} />}
+    {changes && <GitHistory history={explorer.history} root={explorer.root_path} language={language} />}
+    <footer className="repository-footer">{files ? tr("⌘P Quick open", "⌘P Apertura rápida") : searching ? explorer.root_label : `${explorer.changes.length} ${tr("changed files", "archivos modificados")}`}</footer>
     <div className="explorer-resize-handle" role="separator" tabIndex={0} aria-orientation="vertical" aria-label={tr("Resize explorer", "Cambiar ancho del explorador")} aria-valuenow={width} aria-valuemin={220} aria-valuemax={520}
       onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); const next = Math.max(220, Math.min(520, width + (event.key === "ArrowLeft" ? -10 : 10))); onResize(next); try { localStorage.setItem("blackholes-workbench-explorer-width", String(next)); } catch {} } }}
       onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.screenX, width }; }}

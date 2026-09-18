@@ -6,10 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use wry::WebViewBuilder;
 
-use crate::{
-    model::{AppTheme, WorkspaceColor},
-    services::providers::{AgentAuthMode, AgentProvider},
-};
+use crate::model::{AppTheme, WorkspaceColor};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -33,18 +30,6 @@ pub enum WorkspaceCommand {
         #[serde(default)]
         commit: bool,
     },
-    RefreshPlanUsage,
-    SetAgentProvider {
-        provider: AgentProvider,
-    },
-    SetAgentAuthMode {
-        auth_mode: AgentAuthMode,
-    },
-    AuthenticateAgentProvider,
-    SubmitAgentAuth {
-        value: String,
-    },
-    CancelAgentAuth,
     DismissAppModal,
     CreateTaskModal {
         request_id: uuid::Uuid,
@@ -114,6 +99,13 @@ pub enum WorkspaceCommand {
     OpenTaskDetails { workspace_id: uuid::Uuid, task_id: uuid::Uuid },
     OpenProjectRepository { workspace_id: uuid::Uuid, repository_id: uuid::Uuid },
     RefreshFileExplorer,
+    RefreshGitHistory { root_path: String, load_more: bool },
+    SelectGitCommit { root_path: String, commit: String, parent: Option<String> },
+    OpenGitCommitDiff { root_path: String, commit: String, relative_path: String },
+    GitRemoteOperation { root_path: String, operation: String, remote: String, expected_head: Option<String>, expected_branch: Option<String>, expected_upstream: Option<String>, expected_target: Option<String> },
+    SourceControlAction { root_path: String, request_id: String, operation: String, token: String, relative_path: Option<String>, message: Option<String> },
+    SearchRepository { root_path: String, request_id: String, options: crate::services::repository_search::Options },
+    OpenSearchMatch { root_path: String, request_id: String, path: String, line: usize, column: usize },
     CloseFileExplorer,
     SetFileExplorerMode {
         mode: String,
@@ -125,6 +117,8 @@ pub enum WorkspaceCommand {
     },
     OpenRepositoryDiff {
         relative_path: String,
+        #[serde(default)]
+        staged: bool,
     },
     CloseRepositoryDiff,
     UpdateFileContent {

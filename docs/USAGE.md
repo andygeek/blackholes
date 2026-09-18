@@ -8,13 +8,18 @@ Blackholes uses the agent CLIs installed on your computer: `codex`, `claude`,
 `gemini`, `opencode`, and `agy` (Antigravity terminals). Install and update the
 providers you use with their own tools; no provider CLI is included in the app.
 Missing providers do not prevent the app or other providers from working.
-Connect your own provider account in Settings → Accounts. New terminal sessions
-use the selected system or isolated profile for their provider. Existing sessions
-keep their profile. Usage queries plan limits for the selected account; unsupported
-queries are shown as unavailable.
+Sign in through each provider's CLI. New terminal sessions inherit the computer's
+CLI account and profile environment; Blackholes has no separate account login or
+provider selector in Settings. Saved sessions retain their previous profile,
+including legacy isolated Blackholes profiles. Existing profile files are preserved.
+Claude and Codex plan limits are available in the bottom usage bar.
 
-Terminals resolve commands after your interactive login shell starts. Provider
-authentication and usage queries resolve the installed executable
+Settings contains **General** for appearance, language, and the projects folder,
+and **MCP servers** for connecting terminal agents to Blackholes. Agent permissions
+and instructions remain in each project's settings.
+
+Terminals resolve commands after your interactive login shell starts. Account
+usage queries resolve the installed executable
 using that shell's PATH, including shell-configured Homebrew and version managers.
 Conventional user installation directories are fallback search locations. The
 lookup runs off the UI thread and is bounded; shell functions and aliases remain
@@ -132,13 +137,70 @@ up-chevron above the project tree collapses all project and task accordions.
 - Organize projects with one or more Git repositories.
 - Create tasks with separate branches and worktrees for selected repositories.
 - Launch, organize, and restore coding-agent sessions in visible terminals.
-- Configure provider accounts, project terminal permissions, and agent instructions.
+- Configure project terminal permissions and agent instructions.
 - Connect external agents to project and task management through the Blackholes MCP.
 - Browse and edit files, inspect Git diffs, and search with `Cmd+O` and `Cmd+P`.
 - Keep a task objective, acceptance criteria, PR link, and external task link synchronized with agents through MCP.
 - Run native terminals with tabs, splits, scrollback, and session restoration.
 
 Worktrees separate working files and branches. They are not containers or security sandboxes. The file workspace provides focused editing and diffs, not a full IDE or language-server environment.
+
+### Review Git changes and history
+
+Open a repository's file workspace and choose **Changes**. The upper section
+shows **Staged Changes** and pending **Changes**. Use `+` to stage a file and `−`
+to unstage it; each group also has an action for all its files. Unstaging keeps
+the working files. A file modified after staging appears in both groups: opening
+its staged entry compares HEAD with the index, while its pending entry compares
+the index with the working file.
+
+Write a message and choose **Commit**, or press `Cmd+Enter`, to commit only the
+staged changes. Git uses the repository's configured identity, signing, and
+commit hooks. The message remains available if Git rejects the commit. Changes
+to the staged index or branch require reviewing the updated list before retrying.
+An ongoing merge, rebase, or cherry-pick must be finished in the terminal first.
+
+The collapsible **Graph** below shows recent commits
+across local branches, remote references, and tags, with lanes following their
+actual parent relationships. Load more to extend the history, up to 1,000 commits.
+
+Select a commit to see its message, author, date, and changed files. Select a file
+to compare its committed contents with its parent in the read-only diff viewer.
+For merge commits, choose the parent in the commit overview. Close the file diff
+to return to that overview. Initial commits compare against an empty tree;
+renames and deletions use the corresponding historical paths. Binary files show
+an explanatory state, and large text files fall back to a bounded patch view.
+
+The branch summary shows outgoing and incoming counts against its upstream.
+These counts use locally known remote references. **Fetch** updates those
+references without changing working files or merging. The circular refresh
+button reloads local history. Git metadata changes also refresh the view while
+Source Control is open, including commits created by an agent in a worktree.
+
+Use the upward arrow to review a push of the current branch. The preview shows
+the remote, destination branch, and commit. Confirm to push using Git's existing
+authentication. Branches without an upstream can be published to a configured
+remote; select the remote when several are available. Detached HEAD and empty
+branches cannot be pushed from this view. Push does not force, merge, rebase, or
+include later commits made by an agent after the preview. If the remote rejects
+the push, fetch and have the agent reconcile the branches before retrying.
+
+### Search repository contents
+
+Choose **Search** beside **Files** and **Changes** to search saved text across the
+repository. Results are grouped by file, with line numbers and highlighted
+matches. Click a result to open the file and select that occurrence in the editor.
+Search refreshes after typing and when working files change.
+
+Use the case, whole-word, and regular-expression toggles to narrow the results.
+File filters accept comma-separated patterns such as `src/**, *.rs`; `*`, `**`,
+and `?` are supported. Regular expressions use Rust's regex syntax, without
+look-around or backreferences. Invalid expressions show an error.
+
+Search follows Git's tracked and unignored file list and skips binary, oversized,
+unreadable, and non-UTF-8 text. It limits work to 50,000 indexed files, 256 MiB of
+text, 2,000 matches, and a bounded scan duration. The panel reports skipped files
+or limited results so a narrower query can be used. It does not modify files.
 
 ### Task details and links
 
@@ -191,7 +253,7 @@ Application data lives in the macOS Application Support directory resolved by `s
 | `blackholes-local.db` | SQLite WAL database for projects, tasks, settings, and events |
 | `app-session.json` | Saved UI layout and terminal session metadata |
 | `task-workspaces/` | Task worktrees |
-| `agent-profiles/` | Isolated provider profiles |
+| `agent-profiles/` | Legacy isolated provider profiles retained for existing sessions |
 
 Task details are stored with task records in SQLite and exported to `.blackholes-task-details.md` and `.blackholes-task.json` inside each managed task workspace. Previous Markdown notes and rich-block sidecars are preserved. Terminal output is not stored in SQLite.
 Legacy built-in bot history, if present, is left on disk but is no longer read or
@@ -201,8 +263,8 @@ modified. Existing provider conversation files remain managed by their CLIs.
 
 The bottom bar stays visible across terminals, project/task details, files, and
 settings. It shows Claude and Codex plan usage from the computer's local CLI
-accounts, honoring their normal profile environment. It is independent of the
-provider and any isolated Blackholes profile selected in Settings.
+accounts, honoring their normal profile environment. It does not query legacy
+isolated Blackholes profiles used by previously saved sessions.
 
 Both providers load on app startup. The refresh button queries both again in
 parallel and remains disabled while a refresh is running. These metadata queries
@@ -229,5 +291,5 @@ in the bar and an explanation in the panel.
 
 The right side shows the number of open terminal panes and the resident memory
 of the Blackholes process in MB, sampled every five seconds through macOS
-libproc. It excludes agent, shell, and WebKit subprocesses; the tooltip explains
-that scope. An unavailable reading is shown as a dash, never as zero.
+libproc. It excludes agent, shell, and WebKit subprocesses. An unavailable reading
+is shown as a dash, never as zero.

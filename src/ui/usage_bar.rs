@@ -13,7 +13,6 @@ use gpui_component::{
     Disableable as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    tooltip::Tooltip,
     v_flex,
 };
 use std::{cell::Cell, rc::Rc};
@@ -578,11 +577,6 @@ pub(super) fn render(
     let memory = memory_bytes
         .map(|bytes| format!("{:.1} MB", bytes as f64 / 1_000_000.))
         .unwrap_or_else(|| "— MB".into());
-    let resource_tooltip = tr(
-        language,
-        "Blackholes process resident memory (excludes agents and WebKit subprocesses). Updated every 5 seconds. Terminal count includes all open terminal panes.",
-        "Memoria residente del proceso Blackholes (excluye agentes y subprocesos WebKit). Se actualiza cada 5 segundos. El contador incluye todos los paneles de terminal abiertos.",
-    );
     h_flex()
         .h(px(28.))
         .w_full()
@@ -630,7 +624,6 @@ pub(super) fn render(
                 .whitespace_nowrap()
                 .gap_2()
                 .text_color(muted(theme))
-                .tooltip(move |window, cx| Tooltip::new(resource_tooltip.clone()).build(window, cx))
                 .child(Icon::new(AppIcon::Memory).with_size(px(14.)))
                 .child(memory)
                 .child("·")

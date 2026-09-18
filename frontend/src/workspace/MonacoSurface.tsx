@@ -22,8 +22,9 @@ const baseOptions: Monaco.editor.IStandaloneEditorConstructionOptions = {
   unicodeHighlight: { ambiguousCharacters: false },
 };
 
-export function MonacoSurface({ file, content, original, requestId, theme, language }: {
-  file: string; content: string; original?: string; requestId: number;
+export function MonacoSurface({ file, content, original, requestId, theme, language, comparisonLabel, reveal }: {
+  file: string; content: string; original?: string; requestId: number; comparisonLabel?: string;
+  reveal?: { id: string; line: number; column: number; end_column: number } | null;
   theme: "light" | "dark"; language: "en" | "es";
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -133,9 +134,23 @@ export function MonacoSurface({ file, content, original, requestId, theme, langu
     else editor.updateOptions({ wordWrap: wrap ? "on" : "off" });
   }, [inline, wrap, ready]);
 
+  useEffect(() => {
+    if (!ready || !reveal || isDiff) return;
+    const editor = codeEditor();
+    if (!editor) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const line = Math.max(1, Math.min(reveal.line, model.getLineCount()));
+    const column = Math.max(1, Math.min(reveal.column, model.getLineMaxColumn(line)));
+    const end = Math.max(column, Math.min(reveal.end_column, model.getLineMaxColumn(line)));
+    editor.setSelection({ startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: end });
+    editor.revealLineInCenter(line);
+    editor.focus();
+  }, [ready, reveal?.id, requestId, isDiff]);
+
   return <div className="monaco-surface">
     <div className="code-toolbar">
-      <span>{isDiff ? tr("HEAD ↔ Working tree", "HEAD ↔ Cambios locales") : tr("Editor", "Editor")}</span>
+      <span>{isDiff ? comparisonLabel || tr("HEAD ↔ Working tree", "HEAD ↔ Cambios locales") : tr("Editor", "Editor")}</span>
       {isDiff && <>
         <button disabled={!ready} title={tr("Previous change", "Cambio anterior")} aria-label={tr("Previous change", "Cambio anterior")}
           onClick={() => { const value = instance.current; if (value && "goToDiff" in value) value.goToDiff("previous"); }}><ArrowUp size={14} /></button>

@@ -15,7 +15,7 @@
 </p>
 
 <h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
-<p align="center">Current version: <a href="docs/releases/0.1.10.md">0.1.10</a></p>
+<p align="center">Current version: <a href="docs/releases/0.1.12.md">0.1.12</a></p>
 <p align="center">macOS 13+ · Apple Silicon · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 [![Blackholes demo: creating tasks and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
@@ -30,7 +30,8 @@
 | **Multiple repositories**<br><br>Keep repositories together and create isolated Git worktrees for each task.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-repositories.mp4) | [![Project repositories](docs/media/project-repositories.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4) |
 
 - Task objectives, acceptance criteria, PR links, and external task links.
-- Terminal sessions, file browsing, editing, and Git diffs.
+- Terminal sessions, file editing, and repository-wide text search.
+- Git staging, manual commits, history, commit diffs, and push.
 - Local Codex and Claude usage in the bottom bar, with one-click refresh.
 - MCP tools to create tasks and launch agents from your existing clients.
 

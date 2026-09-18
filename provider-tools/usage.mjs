@@ -7,7 +7,7 @@ import { installedAgentBinary, providerEnvironment } from "./environment.mjs";
 
 // Account metadata only: no prompts, threads, tools, or billable generations.
 const request = JSON.parse(readFileSync(0, "utf8"));
-const environment = providerEnvironment(request);
+const environment = providerEnvironment();
 const abortController = new AbortController();
 let dispose = () => {};
 let timer;

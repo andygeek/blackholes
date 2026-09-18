@@ -7,7 +7,7 @@
 The desktop configures the Blackholes MCP in Codex and Claude Code profiles on
 startup, including after updates. Task-agent launches also receive the connection
 through their launch settings.
-Default profiles, connected Blackholes profiles, `CODEX_HOME` / `CLAUDE_CONFIG_DIR`, existing `-work` profiles,
+Default profiles, existing legacy Blackholes profiles, `CODEX_HOME` / `CLAUDE_CONFIG_DIR`, existing `-work` profiles,
 and the legacy Claude script profile are supported. Configuring one client does
 not require the other client to exist, and a profile failure does not block the app
 or the remaining profiles.
@@ -26,8 +26,11 @@ atomically only when changed; unexpected concurrent edits are reported for retry
 Explicitly disabled Codex entries remain disabled. No credentials, approval modes,
 shell profiles, or global PATH entries are installed or modified by this setup.
 See **Settings → MCP servers → Blackholes in your terminal agents** for profile
-status or to refresh the connection. "Configured" describes registration, not
-CLI installation, authentication, or a verified agent session.
+status or to refresh the connection. Each client appears once; expand
+**Configuration details** to see its profile paths, individual statuses, and any
+warnings. The client shows **Needs attention** if any profile has a setup issue.
+"Configured" describes registration, not CLI installation, authentication, or a
+verified agent session. Sign in through the provider CLI itself.
 
 The repository script remains available as an optional manual tool for advanced
 profiles and development:
