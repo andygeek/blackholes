@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use gpui::{App, AppContext as _, Entity, Window};
+use gpui::{App, AppContext as _, Entity, Focusable as _, Window};
 use gpui_component::webview::WebView;
 use serde::Deserialize;
 use serde_json::Value;
@@ -171,6 +171,13 @@ pub fn create(
 }
 
 pub fn dispatch(webview: &Entity<WebView>, event: Value, cx: &mut App) -> Result<()> {
+    match event.get("type").and_then(Value::as_str) {
+        Some("quick_open") => {
+            set_quick_open_keyboard(webview, event.get("open_id").and_then(Value::as_u64), cx);
+        }
+        Some("quick_open_close") => set_quick_open_keyboard(webview, None, cx),
+        _ => {}
+    }
     let payload = serde_json::to_string(&event)?;
     webview.update(cx, |webview, _| {
         webview
@@ -178,6 +185,28 @@ pub fn dispatch(webview: &Entity<WebView>, event: Value, cx: &mut App) -> Result
             .evaluate_script(&format!("window.blackholesNative?.receive({payload});"))
             .context("Unable to dispatch an event to the workspace WebView")
     })
+}
+
+/// Keep AppKit's early arrow interception scoped to the visible search dialog.
+pub fn set_quick_open_keyboard(webview: &Entity<WebView>, open_id: Option<u64>, cx: &App) {
+    #[cfg(target_os = "macos")]
+    {
+        use wry::WebViewExtMacOS;
+        unsafe extern "C" {
+            fn bh_quick_open_keyboard_set_dialog(view: *mut std::ffi::c_void, open_id: u64);
+        }
+        let native_view = webview.read(cx).raw().webview();
+        // SAFETY: this runs on GPUI's main thread. Wry retains the WKWebView
+        // throughout the call; the bridge ties its monitor to that view's life.
+        unsafe {
+            bh_quick_open_keyboard_set_dialog(
+                objc2::rc::Retained::as_ptr(&native_view).cast_mut().cast(),
+                open_id.unwrap_or(0),
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (webview, open_id, cx);
 }
 
 pub fn set_visible(webview: &Entity<WebView>, visible: bool, cx: &mut App) {
@@ -188,6 +217,14 @@ pub fn set_visible(webview: &Entity<WebView>, visible: bool, cx: &mut App) {
             webview.hide();
         }
     });
+}
+
+/// Transfer both GPUI's keyboard dispatch and AppKit's first responder away
+/// from the native terminal when the central WebView owns an overlay.
+pub fn focus(webview: &Entity<WebView>, window: &mut Window, cx: &mut App) -> Result<()> {
+    webview.read(cx).focus_handle(cx).focus(window);
+    window.refresh();
+    webview.read(cx).raw().focus().context("Unable to focus the workspace WebView")
 }
 
 fn workspace_html() -> String {

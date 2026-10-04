@@ -8,6 +8,7 @@ pub mod git_history;
 pub mod installed_agents;
 pub mod notes;
 pub mod notifications;
+pub mod project_terminals;
 pub mod providers;
 pub mod projects;
 pub mod tasks;

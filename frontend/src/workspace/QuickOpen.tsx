@@ -52,6 +52,26 @@ const icons: Record<string, LucideIcon> = {
   branch: GitBranch,
 };
 
+// AppKit's NS*ArrowFunctionKey values can arrive from WKWebView as text
+// rather than standard DOM arrow key names.
+const macArrowKeys = new Map([
+  ["\uF700", "ArrowUp"], ["\uF701", "ArrowDown"],
+  ["\uF702", "ArrowLeft"], ["\uF703", "ArrowRight"],
+]);
+const legacyArrowKeys: Record<number, string> = {
+  37: "ArrowLeft", 38: "ArrowUp", 39: "ArrowRight", 40: "ArrowDown",
+  0xF700: "ArrowUp", 0xF701: "ArrowDown", 0xF702: "ArrowLeft", 0xF703: "ArrowRight",
+};
+const normalizeSearchKey = (key: string, code = "", keyCode = 0): string => {
+  const arrow = macArrowKeys.get(key) || legacyArrowKeys[keyCode];
+  if (arrow) return arrow;
+  if (key === "Enter") return key;
+  return code.startsWith("Key") ? code.slice(3) : code && code !== "Unidentified" ? code : key;
+};
+const characterSegments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const wordSegments = new Intl.Segmenter(undefined, { granularity: "word" });
+type SearchKeyModifiers = { command?: boolean; shift?: boolean; alt?: boolean };
+
 export function QuickOpen({ state }: { state: QuickOpenState }) {
   const [query, setQuery] = useState(state.query || "");
   const [selected, setSelected] = useState(0);
@@ -59,6 +79,7 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
   const selectedRef = useRef<HTMLButtonElement>(null);
   const openIdRef = useRef(state.open_id);
   const pendingPaste = useRef<{ id: string; query: string; start: number; end: number } | null>(null);
+  const keyHandler = useRef<(key: string, modifiers?: SearchKeyModifiers) => boolean>(() => false);
   const updateQuery = (next: string) => {
     setQuery(next);
     setSelected(0);
@@ -127,6 +148,82 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
     result_index: resultIndex,
   });
 
+  const handleSearchKey = (rawKey: string, { command = false, shift = false, alt = false }: SearchKeyModifiers = {}): boolean => {
+    const input = inputRef.current;
+    if (!input) return false;
+    const key = normalizeSearchKey(rawKey).toLowerCase();
+    if (command && !alt && ["a", "c", "v", "x"].includes(key)) {
+      input.focus();
+      const start = input.selectionStart ?? 0;
+      const end = input.selectionEnd ?? start;
+      if (key === "a") input.select();
+      else if (key === "v") {
+        const id = createId();
+        pendingPaste.current = { id, query: input.value, start, end };
+        postNative({ type: "quick_open_paste", open_id: state.open_id, request_id: id });
+      } else if (start !== end) {
+        postNative({ type: "copy_text", text: input.value.slice(start, end) });
+        if (key === "x") {
+          pendingPaste.current = null;
+          updateQuery(input.value.slice(0, start) + input.value.slice(end));
+          requestAnimationFrame(() => input.setSelectionRange(start, start));
+        }
+      }
+      return true;
+    }
+    if (key === "tab") input.focus();
+    else if (key === "arrowup") setSelected(current => Math.max(0, current - 1));
+    else if (key === "arrowdown") setSelected(current => Math.min(Math.max(0, state.results.length - 1), current + 1));
+    else if (key === "arrowleft" || key === "arrowright") {
+      const left = key === "arrowleft";
+      const start = input.selectionStart ?? 0, end = input.selectionEnd ?? start;
+      const backward = input.selectionDirection === "backward";
+      const anchor = backward ? end : start;
+      const position = shift ? (backward ? start : end) : left ? start : end;
+      let caret = position;
+      if (command) caret = left ? 0 : input.value.length;
+      else if (alt) {
+        const words = [...wordSegments.segment(input.value)].filter(segment => segment.isWordLike);
+        const word = left ? words.filter(segment => segment.index < position).at(-1)
+          : words.find(segment => segment.index + segment.segment.length > position);
+        caret = word ? word.index + (left ? 0 : word.segment.length) : left ? 0 : input.value.length;
+      } else if (shift || start === end) {
+        const boundaries = [0, ...[...characterSegments.segment(input.value)].map(segment => segment.index + segment.segment.length)];
+        caret = left ? boundaries.filter(index => index < position).at(-1) ?? 0
+          : boundaries.find(index => index > position) ?? input.value.length;
+      }
+      input.focus();
+      input.setSelectionRange(shift ? Math.min(anchor, caret) : caret, shift ? Math.max(anchor, caret) : caret,
+        shift && caret < anchor ? "backward" : "forward");
+    } else if (key === "enter") {
+      if (state.results[selected]) activate(selected);
+    } else if (key === "escape") dismiss();
+    else return false;
+    return true;
+  };
+  useLayoutEffect(() => { keyHandler.current = handleSearchKey; });
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const data = (event as CustomEvent<{ open_id: number; key: string } & SearchKeyModifiers>).detail;
+      if (data.open_id === state.open_id) keyHandler.current(data.key, data);
+    };
+    window.addEventListener("blackholes:quick-open-key", receive);
+    return () => window.removeEventListener("blackholes:quick-open-key", receive);
+  }, [state.open_id]);
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const beforeInput = (event: InputEvent) => {
+      if (event.inputType !== "insertText" || !event.data || !event.cancelable) return;
+      const characters = [...event.data];
+      if (!characters.every(character => macArrowKeys.has(character))) return;
+      event.preventDefault();
+      for (const character of characters) keyHandler.current(macArrowKeys.get(character)!);
+    };
+    input.addEventListener("beforeinput", beforeInput);
+    return () => input.removeEventListener("beforeinput", beforeInput);
+  }, [state.open_id]);
+
   return (
     <div
       className="quick-open-backdrop"
@@ -151,46 +248,24 @@ export function QuickOpen({ state }: { state: QuickOpenState }) {
             spellCheck={false}
             onChange={(event) => {
               pendingPaste.current = null;
-              updateQuery(event.target.value);
+              const input = event.currentTarget;
+              const next = input.value.replace(/[\uF700-\uF703]/g, "");
+              if (next !== input.value) {
+                // Some native text commits cannot cancel beforeinput. Restore
+                // the query and handle the function characters as navigation.
+                const arrows = [...input.value].filter(character => macArrowKeys.has(character));
+                const caret = input.value.slice(0, input.selectionStart ?? 0).replace(/[\uF700-\uF703]/g, "").length;
+                input.value = next;
+                input.setSelectionRange(caret, caret);
+                if (next !== query) updateQuery(next);
+                for (const character of arrows) keyHandler.current(macArrowKeys.get(character)!);
+              } else updateQuery(next);
             }}
             onKeyDown={(event) => {
               event.stopPropagation();
-              const key = event.code.startsWith("Key") ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
-              if ((event.metaKey || event.ctrlKey) && !event.altKey && ["a", "c", "v", "x"].includes(key)) {
-                event.preventDefault();
-                const input = event.currentTarget;
-                const start = input.selectionStart ?? 0;
-                const end = input.selectionEnd ?? start;
-                if (key === "a") input.select();
-                else if (key === "v") {
-                  const id = createId();
-                  pendingPaste.current = { id, query: input.value, start, end };
-                  postNative({ type: "quick_open_paste", open_id: state.open_id, request_id: id });
-                } else if (start !== end) {
-                  postNative({ type: "copy_text", text: input.value.slice(start, end) });
-                  if (key === "x") {
-                    pendingPaste.current = null;
-                    updateQuery(input.value.slice(0, start) + input.value.slice(end));
-                    requestAnimationFrame(() => input.setSelectionRange(start, start));
-                  }
-                }
-                return;
-              }
-              if (event.key === "Tab") {
-                event.preventDefault();
-              } else if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setSelected((current) => Math.max(0, current - 1));
-              } else if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setSelected((current) => Math.min(Math.max(0, state.results.length - 1), current + 1));
-              } else if (event.key === "Enter" && state.results[selected]) {
-                event.preventDefault();
-                activate(selected);
-              } else if (event.key === "Escape") {
-                event.preventDefault();
-                dismiss();
-              }
+              if (event.nativeEvent.isComposing) return;
+              const key = normalizeSearchKey(event.key, event.code, event.keyCode);
+              if (handleSearchKey(key, { command: event.metaKey || event.ctrlKey, shift: event.shiftKey, alt: event.altKey })) event.preventDefault();
             }}
           />
           <span className="quick-open-shortcut">{state.shortcut}</span>

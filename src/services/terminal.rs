@@ -12,6 +12,17 @@ use std::{
 pub type SharedMasterPty = Arc<Mutex<Box<dyn MasterPty + Send>>>;
 pub type SharedChild = Arc<Mutex<Box<dyn Child + Send + Sync>>>;
 
+/// What a new terminal runs once its login shell starts.
+#[derive(Clone, Copy, Debug)]
+pub enum TerminalStartup<'a> {
+    /// The descriptor's agent CLI, if any, as when opening a terminal by hand.
+    Default,
+    /// The descriptor's agent CLI with an initial prompt.
+    Prompt(&'a str),
+    /// A shell command typed at the prompt, as if the user entered it.
+    Command(&'a str),
+}
+
 /// The native process-side resources for one terminal.
 ///
 /// Rendering owns `reader` and `writer`; this value keeps only the PTY master
@@ -63,15 +74,20 @@ impl TerminalService {
     }
 
     pub fn spawn(&self, descriptor: &TerminalDescriptor, skip_agent_permissions: bool) -> Result<SpawnedTerminal> {
-        self.spawn_with_prompt(descriptor, skip_agent_permissions, None)
+        self.spawn_with_startup(descriptor, skip_agent_permissions, TerminalStartup::Default)
     }
 
-    pub fn spawn_with_prompt(
+    pub fn spawn_with_startup(
         &self,
         descriptor: &TerminalDescriptor,
         skip_agent_permissions: bool,
-        prompt: Option<&str>,
+        startup: TerminalStartup<'_>,
     ) -> Result<SpawnedTerminal> {
+        if let TerminalStartup::Command(command) = startup
+            && (command.trim().is_empty() || command.contains(['\r', '\n', '\0']))
+        {
+            bail!("The startup command must be a single non-empty line");
+        }
         if !descriptor.cwd.is_dir() {
             bail!(
                 "terminal directory does not exist: {}",
@@ -90,7 +106,7 @@ impl TerminalService {
         let shell = super::installed_agents::login_shell();
         let mut command = CommandBuilder::new(&shell);
         command.arg("-l");
-        if let Some(prompt) = prompt {
+        if let TerminalStartup::Prompt(prompt) = startup {
             let (program, mut args) = prompted_agent_command(descriptor, skip_agent_permissions, prompt)?;
             configure_task_mcp(descriptor, &mut args, &mut command)?;
             // Pass the brief as a process argument, not keystrokes: long/multiline
@@ -160,12 +176,25 @@ impl TerminalService {
             .take_writer()
             .context("could not open terminal input")?;
 
-        if prompt.is_none() && let Some((program, args)) = initial_agent_command(descriptor, skip_agent_permissions) {
-            let initial_command = render_command(program, &args);
-            writer
-                .write_all(initial_command.as_bytes())
-                .context("could not launch the selected coding agent")?;
-            writer.flush().ok();
+        match startup {
+            TerminalStartup::Default => {
+                if let Some((program, args)) = initial_agent_command(descriptor, skip_agent_permissions) {
+                    let initial_command = render_command(program, &args);
+                    writer
+                        .write_all(initial_command.as_bytes())
+                        .context("could not launch the selected coding agent")?;
+                    writer.flush().ok();
+                }
+            }
+            // Typed like the agent CLIs above, so the command stays in the shell's
+            // history and Ctrl-C returns to a usable prompt.
+            TerminalStartup::Command(command) => {
+                writer
+                    .write_all(format!("{command}\r").as_bytes())
+                    .context("could not run the startup command")?;
+                writer.flush().ok();
+            }
+            TerminalStartup::Prompt(_) => {}
         }
 
         Ok(SpawnedTerminal {

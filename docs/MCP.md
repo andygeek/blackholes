@@ -42,6 +42,24 @@ profiles and development:
 
 Restart the external client session after installation. The installer supports `--codex`, `--claude`, `--codex-home PATH`, `--claude-home PATH`, `--binary PATH`, and `uninstall`. It honors custom profile locations and manages only its own registrations and skill files.
 
+## Open project terminals
+
+`open_project_terminal` opens a visible shell outside any task, in the project
+root or in one of its repositories. An optional `command`, such as a local dev
+server, is typed at the prompt as if the user entered it:
+
+```json
+{ "projectId": "<project-id>", "repositoryId": "<repository-id>", "command": "pnpm dev --port 3001" }
+```
+
+The command runs in the same interactive login shell as a manually opened
+terminal, stays in its history, and Ctrl-C returns to the prompt. It must be a
+single line of at most 1,000 bytes. The terminal appears under the project or
+repository in the sidebar and is restored as a plain shell when the session is
+reopened; the command is not replayed. By default the current view is kept and a
+toast links to the terminal; `reveal:true` shows and focuses it instead. Each
+call opens a new terminal, so do not retry a started launch.
+
 ## Start task agents from any MCP client
 
 Ask your agent to create implementation tasks. `create_task` now starts each

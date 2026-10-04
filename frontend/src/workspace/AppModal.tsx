@@ -60,7 +60,7 @@ export function AppModal({ modal, language, onDismiss }: {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); }
         if (event.key === "Tab") {
           const items = [...(section.current?.querySelectorAll<HTMLElement>(
-            'button:enabled, input:enabled, textarea:enabled, select:enabled, [tabindex="0"]') || [])].filter(item => item.getClientRects().length > 0);
+            'button:enabled, input:enabled, textarea:enabled, select:enabled, [tabindex="0"]') || [])].filter(item => item.tabIndex >= 0 && item.getClientRects().length > 0);
           const first = items[0], last = items[items.length - 1];
           if (!first) { event.preventDefault(); }
           else if (document.activeElement === section.current) { event.preventDefault(); (event.shiftKey ? last : first)?.focus(); }

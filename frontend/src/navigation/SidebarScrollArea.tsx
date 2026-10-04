@@ -30,14 +30,15 @@ export function SidebarScrollArea({ children, label, id, hidden = false }: {
     };
   }, []);
   const maxScroll = Math.max(0, metrics.total - metrics.height);
+  const scrollable = maxScroll > 1;
   const thumbHeight = Math.min(metrics.height, Math.max(28, metrics.height * metrics.height / Math.max(1, metrics.total)));
   const travel = metrics.height - thumbHeight;
   const thumbTop = maxScroll > 0 ? Math.max(0, Math.min(travel, metrics.top / maxScroll * travel)) : 0;
-  return <div className="sidebar-scroll-region" id={id} hidden={hidden}>
+  return <div className="sidebar-scroll-region" id={id} hidden={hidden} data-scrollable={scrollable}>
     <div className="sidebar-scroll" id={viewportId} ref={viewport} role="region" aria-label={label} tabIndex={0}>
       <div ref={content}>{children}</div>
     </div>
-    {maxScroll > 1 && <div className="sidebar-scroll-track"
+    {scrollable && <div className="sidebar-scroll-track"
       onWheel={(event) => {
         if (viewport.current) viewport.current.scrollTop += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? metrics.height : 1);
       }}>

@@ -26,6 +26,11 @@ The bundled Geist Mono font retains the
 
 ## Provider brand assets
 
+The GitHub mark in `frontend/src/shared/GitHubIcon.tsx` comes from
+[Primer Octicons](https://github.com/primer/octicons/blob/main/icons/mark-github-16.svg)
+under the [MIT License](licenses/OCTICONS.txt). Its geometry is unchanged and
+its fill follows the interface text color.
+
 The OpenCode symbols in `assets/icons/opencode.svg` and `opencode-dark.svg`
 come from the [official brand assets](https://opencode.ai/brand), distributed in
 [anomalyco/opencode](https://github.com/anomalyco/opencode/tree/dev/packages/console/app/src/asset/brand)

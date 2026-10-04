@@ -43,6 +43,7 @@ export interface WorkspaceSurfaceEvent {
   type: "workspace_surface";
   surface: SurfaceKind;
   theme: AppTheme;
+  language?: "en" | "es";
   data: SettingsData | ProjectSettingsData | TaskDetailsData | ProjectOverviewData | WorkbenchData | HomeData;
 }
 
@@ -687,9 +688,14 @@ function WorkbenchView({ data }: { data: WorkbenchData }) {
 export function WorkspaceSurface({ event }: { event: WorkspaceSurfaceEvent }) {
   if (event.surface === "home") {
     const data = event.data as HomeData;
+    const language = event.language || "es";
     return <main className="workbench-page"><div className="workbench-content"><div className="workspace-empty workbench-welcome home-welcome">
       <img className="home-welcome-logo" src={document.getElementById("root")?.dataset.appLogo} alt="Blackholes" width={112} height={112} draggable={false} />
       <p>{data.description}</p>
+      <ul className="home-welcome-shortcuts" aria-label={t(language, "Keyboard shortcuts", "Atajos de teclado")}>
+        <li><kbd>⌘O</kbd><span>{t(language, "Search projects, tasks, agents and terminals", "Buscar proyectos, tareas, agentes y terminales")}</span></li>
+        <li><kbd>⌘P</kbd><span>{t(language, "Search files in the selected repository", "Buscar archivos del repositorio seleccionado")}</span></li>
+      </ul>
     </div></div></main>;
   }
   if (event.surface === "settings") return <SettingsView data={event.data as SettingsData} />;

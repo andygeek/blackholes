@@ -124,7 +124,8 @@ button:focus-visible {
   transform: scale(.92);
 }
 
-.sidebar-scroll-region { position: relative; flex: 1; min-height: 0; }
+.sidebar-scroll-region { --sidebar-scroll-right-padding: 8px; position: relative; flex: 1; min-height: 0; }
+.sidebar-scroll-region[data-scrollable="true"] { --sidebar-scroll-right-padding: 16px; }
 .sidebar-scroll-region[hidden] { display: none; }
 .sidebar-sections { display: grid; grid-template-rows: minmax(33px, 2fr) minmax(32px, 3fr); flex: 1; min-height: 0; }
 .sidebar-sections[data-agents-collapsed="true"] { grid-template-rows: 33px minmax(32px, 1fr); }
@@ -151,7 +152,7 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 8px 16px 8px 8px;
+  padding: 8px var(--sidebar-scroll-right-padding, 8px) 8px 8px;
 }
 
 .agent-card {
@@ -339,7 +340,7 @@ button:focus-visible {
 }
 
 .projects {
-  padding: 8px 16px 8px 8px;
+  padding: 8px var(--sidebar-scroll-right-padding, 8px) 8px 8px;
 }
 
 .project-block + .project-block {

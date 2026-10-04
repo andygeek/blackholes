@@ -68,6 +68,9 @@ function WorkspaceApp() {
         case "quick_open_paste":
           window.dispatchEvent(new CustomEvent("blackholes:quick-open-paste", { detail: raw }));
           break;
+        case "quick_open_key":
+          window.dispatchEvent(new CustomEvent("blackholes:quick-open-key", { detail: raw }));
+          break;
         case "quick_open": setQuickOpen(raw as QuickOpenState); break;
         case "quick_open_close": setQuickOpen(null); break;
         case "app_modal": setModal(event.modal || null); break;

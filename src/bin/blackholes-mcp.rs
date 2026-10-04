@@ -5,6 +5,7 @@ use blackholes_rust::{
     services::{
         database::Database,
         notes::{PROJECT_NOTE_FILE_NAME, ProjectNoteService, TASK_NOTE_FILE_NAME, TaskNoteService},
+        project_terminals::{MAX_TERMINAL_COMMAND_BYTES, MAX_TERMINAL_TITLE_CHARS, OpenProjectTerminalRequest},
         projects::ProjectService,
         task_agents::{StartTaskAgentsRequest, TaskAgentRequest, detect_agent},
         tasks::{
@@ -82,7 +83,7 @@ impl McpServer {
                     .unwrap_or("2025-06-18"),
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "blackholes-rust", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Blackholes is a local project and task manager exposed through this MCP. Whenever the user says \"in Blackholes\" or asks Blackholes to create or manage a project, repository, task, branch, worktree, note, terminal agent launch, navigation, or notification, use this MCP before filesystem, browser, or Computer Use tools. Never use Computer Use for an operation exposed by this server. When the user asks to create a project and provides only its name, call create_project with that name immediately; do not ask for a path or technology because the tool prepares the project container, Git repository, initial commit, and managed context automatically. When the user explicitly provides an existing local path, pass it to create_project to link its repositories to a new project container. Local sources stay in place, including pending changes and local environments. Linking does not edit files, but subsequent project work changes the originals. Agents may inspect, review, edit, build, and test directly in the intended project repositories; tasks, isolated worktrees, and delegation are optional, not prerequisites. Resolve the intended project and repositories, respect user-authored project instructions and selected permissions, and preserve unrelated changes. Use isolated tasks when the user requests them, selects an existing task, or their project instructions require that workflow. Creating implementation tasks launches visible terminal agents automatically: create_task defaults startAgent to true, detects the calling provider, and applies the project permission setting. Include user constraints in agentPrompt or the task description. To prepare a whole batch first, pass startAgent:false to every create_task, then call start_task_agents once with all taskIds and briefs. Do not ask for redundant delegation approval. For planning-only requests, backlog preparation, or explicit instructions not to start, pass startAgent:false and do not call start_task_agents. Ask only when the requested work or destination is unclear. The receiving task agent implements directly without recreating the task or handing it back. Honor explicit requests to work here or not delegate. Do not require an isolation opt-out. When working in a task, change its attached worktrees rather than original checkouts. Use search tools before asking for IDs. Read details before mutations. Task description is the objective; acceptanceCriteria, pullRequestUrl and externalTaskUrl are editable via create_task and update_task. Prefer update_task to legacy notes. Omitted fields remain unchanged and null clears optional fields. Use detailsRevision from get_task as expectedRevision when editing a snapshot. When a task must start from a specific base, such as a repository whose task branch does not exist yet, pass baseBranch to create_task or add_task_repositories instead of relying on whatever branch the repository has checked out. remove_task_repositories undoes a wrong add: it deletes those worktrees and keeps their branches unless deleteBranch is true. delete_task is destructive and requires explicit confirmation; it refuses active terminals or uncommitted worktree changes. Terminal agents launched with start_task_agents show progress and results in their terminals; do not require completion notifications. When the user asks to open, go to, or show a Blackholes task or project, call open_task or open_project; the app opens the requested project or task. Never use these navigation tools merely to announce work."
+                "instructions": "Blackholes is a local project and task manager exposed through this MCP. Whenever the user says \"in Blackholes\" or asks Blackholes to create or manage a project, repository, task, branch, worktree, note, terminal agent launch, navigation, or notification, use this MCP before filesystem, browser, or Computer Use tools. Never use Computer Use for an operation exposed by this server. When the user asks to create a project and provides only its name, call create_project with that name immediately; do not ask for a path or technology because the tool prepares the project container, Git repository, initial commit, and managed context automatically. When the user explicitly provides an existing local path, pass it to create_project to link its repositories to a new project container. Local sources stay in place, including pending changes and local environments. Linking does not edit files, but subsequent project work changes the originals. Agents may inspect, review, edit, build, and test directly in the intended project repositories; tasks, isolated worktrees, and delegation are optional, not prerequisites. Resolve the intended project and repositories, respect user-authored project instructions and selected permissions, and preserve unrelated changes. Use isolated tasks when the user requests them, selects an existing task, or their project instructions require that workflow. Creating implementation tasks launches visible terminal agents automatically: create_task defaults startAgent to true, detects the calling provider, and applies the project permission setting. Include user constraints in agentPrompt or the task description. To prepare a whole batch first, pass startAgent:false to every create_task, then call start_task_agents once with all taskIds and briefs. Do not ask for redundant delegation approval. For planning-only requests, backlog preparation, or explicit instructions not to start, pass startAgent:false and do not call start_task_agents. Ask only when the requested work or destination is unclear. The receiving task agent implements directly without recreating the task or handing it back. Honor explicit requests to work here or not delegate. Do not require an isolation opt-out. When working in a task, change its attached worktrees rather than original checkouts. Use search tools before asking for IDs. Read details before mutations. Task description is the objective; acceptanceCriteria, pullRequestUrl and externalTaskUrl are editable via create_task and update_task. Prefer update_task to legacy notes. Omitted fields remain unchanged and null clears optional fields. Use detailsRevision from get_task as expectedRevision when editing a snapshot. When a task must start from a specific base, such as a repository whose task branch does not exist yet, pass baseBranch to create_task or add_task_repositories instead of relying on whatever branch the repository has checked out. remove_task_repositories undoes a wrong add: it deletes those worktrees and keeps their branches unless deleteBranch is true. delete_task is destructive and requires explicit confirmation; it refuses active terminals or uncommitted worktree changes. Terminal agents launched with start_task_agents show progress and results in their terminals; do not require completion notifications. To open a plain terminal in a project or repository without a task, for example to run a local dev server, call open_project_terminal with the command; do not create a task for it. When the user asks to open, go to, or show a Blackholes task or project, call open_task or open_project; the app opens the requested project or task. Never use these navigation tools merely to announce work."
                 }))
             },
             "ping" => Ok(json!({})),
@@ -135,6 +136,7 @@ impl McpServer {
             "write_task_note" => self.write_task_note(arguments),
             "append_task_note" => self.append_task_note(arguments),
             "start_task_agents" => self.start_task_agents(arguments),
+            "open_project_terminal" => self.open_project_terminal(arguments),
             "open_project" => self.open_project(arguments),
             "open_task" => self.open_task(arguments),
             "notify_task_ready" => self.notify_task_ready(arguments),
@@ -1017,6 +1019,21 @@ impl McpServer {
         blackholes_rust::services::agent_commands::send(&self.paths, &format!("start-task-agents:{payload}"))
     }
 
+    fn open_project_terminal(&self, arguments: &Value) -> Result<Value> {
+        let request: OpenProjectTerminalRequest = serde_json::from_value(arguments.clone())
+            .context("Invalid arguments: pass projectId and optionally repositoryId, command, title, and reveal")?;
+        request.validate()?;
+        let workspaces = self.database.workspaces()?;
+        let project = find_workspace(&workspaces, request.project_id)?;
+        if let Some(repository_id) = request.repository_id
+            && !project.repositories.iter().any(|repository| repository.id == repository_id)
+        {
+            bail!("The repository does not belong to this project");
+        }
+        let payload = serde_json::to_string(&request)?;
+        blackholes_rust::services::agent_commands::send(&self.paths, &format!("open-project-terminal:{payload}"))
+    }
+
     fn notify_task_ready(&self, arguments: &Value) -> Result<Value> {
         let task_id = required_uuid(arguments, "taskId")?;
         let tasks = self.database.all_tasks()?;
@@ -1183,6 +1200,17 @@ fn tool_definitions() -> Vec<Value> {
                     },"required":["taskId"]
                 }}
             },"required":["tasks"]}),
+        ),
+        write_tool(
+            "open_project_terminal",
+            "Open a visible shell terminal in Blackholes without creating a task, in the project root or in one of its repositories, and optionally run one command in it, such as a local dev server (`pnpm dev`) or a build. Use it when the user asks to open a terminal or to start, run, or serve something locally in Blackholes, directly in the project. The command is typed at the shell prompt as if the user entered it, so the interactive login shell environment applies, long-running processes keep running and stay visible, and Ctrl-C returns to the prompt. Each call opens a new terminal; nothing is deduplicated, so do not retry a started launch. By default the user's current view is kept and a toast links to the terminal; pass reveal:true when the user wants to see it now. Returns terminalId and cwd. For implementation work in an isolated task, use create_task or start_task_agents instead.",
+            json!({"type":"object","additionalProperties":false,"properties":{
+                "projectId":{"type":"string","format":"uuid"},
+                "repositoryId":{"type":"string","format":"uuid","description":"A repository of this project. Omit to open the terminal in the project root."},
+                "command":{"type":"string","minLength":1,"maxLength":MAX_TERMINAL_COMMAND_BYTES,"description":"One shell command line to run, without newlines."},
+                "title":{"type":"string","minLength":1,"maxLength":MAX_TERMINAL_TITLE_CHARS,"description":"Terminal name. Defaults to the command."},
+                "reveal":{"type":"boolean","default":false,"description":"Show and focus the terminal immediately."}
+            },"required":["projectId"]}),
         ),
         write_tool(
             "open_project",

@@ -40,7 +40,8 @@ use crate::{
             ExistingBranchAction, RemoveTaskRepositoriesRequest, RemovedTaskRepository,
             RepositoryPreparation, TaskBranchSource, TaskService,
         },
-        terminal::{SharedChild, SharedMasterPty, TerminalService},
+        project_terminals::OpenProjectTerminalRequest,
+        terminal::{SharedChild, SharedMasterPty, TerminalService, TerminalStartup},
         task_agents::{StartTaskAgentsRequest, TaskAgentRequest, implementation_prompt},
     },
 };
@@ -692,6 +693,12 @@ impl BlackholesApp {
                     _ => {}
                 });
                 return;
+            }
+            if window.window_handle().downcast::<Root>().is_some() {
+                let handled = shortcut_view.update(cx, |app, cx| {
+                    app.forward_quick_open_keystroke(&event.keystroke, cx)
+                }).unwrap_or(false);
+                if handled { cx.stop_propagation(); }
             }
         })
         .detach();
@@ -2491,10 +2498,42 @@ impl BlackholesApp {
         );
         if let Some(webview) = &self.workspace_webview {
             workspace_webview::set_visible(webview, true, cx);
-            let _ = webview.read(cx).raw().focus();
+            let _ = workspace_webview::focus(webview, window, cx);
         } else if let Some(state) = &self.quick_open {
             state.query.focus_handle(cx).focus(window);
         }
+    }
+
+    fn forward_quick_open_keystroke(&self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some(state) = &self.quick_open else { return false; };
+        let Some(webview) = &self.workspace_webview else { return false; };
+        if !webview.read(cx).visible() { return false; }
+
+        let modifiers = keystroke.modifiers;
+        let key = keystroke.key.to_ascii_lowercase();
+        let command = modifiers.secondary() && !modifiers.alt;
+        let plain = !modifiers.platform && !modifiers.control && !modifiers.alt;
+        let key = match key.as_str() {
+            "a" | "c" | "v" | "x" if command => key.as_str(),
+            "up" | "arrowup" | "\u{f700}" => "ArrowUp",
+            "down" | "arrowdown" | "\u{f701}" => "ArrowDown",
+            "left" | "arrowleft" | "\u{f702}" => "ArrowLeft",
+            "right" | "arrowright" | "\u{f703}" => "ArrowRight",
+            "enter" if plain => "Enter",
+            "escape" if plain => "Escape",
+            "tab" if plain => "Tab",
+            _ => return false,
+        };
+
+        // Child WKWebViews can send Cmd shortcuts to the GPUI parent instead
+        // of JavaScript. Consume them here before a hidden terminal or native
+        // input action can handle them; the visible search input owns selection
+        // and uses its existing clipboard request/response bridge.
+        self.dispatch_workspace_event(serde_json::json!({
+            "type": "quick_open_key", "open_id": state.id,
+            "key": key, "command": command, "shift": modifiers.shift, "alt": modifiers.alt,
+        }), cx);
+        true
     }
 
     fn hydrate_quick_open_overlay(&self, cx: &mut Context<Self>) {
@@ -7414,7 +7453,7 @@ impl BlackholesApp {
             codex_session: None, claude_session: None, agent_config_dir: config_dir,
             created_at: Utc::now(),
         };
-        self.spawn_terminal_view_with_prompt(&descriptor, Some(&prompt), window, cx)?;
+        self.spawn_terminal_view_with_startup(&descriptor, TerminalStartup::Prompt(&prompt), window, cx)?;
         let tab_id = Uuid::new_v4();
         let dock = self.session.docks.entry(dock_key(task.workspace_id, Some(task.id), None)).or_default();
         dock.tabs.push(DockTab {
@@ -7446,29 +7485,90 @@ impl BlackholesApp {
         }))
     }
 
+    /// Opens a shell outside any task, in the project root or one of its
+    /// repositories, optionally typing a startup command such as a dev server.
+    fn open_project_terminal(
+        &mut self,
+        request: OpenProjectTerminalRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value> {
+        request.validate()?;
+        self.reload_external_data(cx);
+        let workspace = self.workspaces.iter().find(|workspace| workspace.id == request.project_id)
+            .cloned().context("The project does not exist")?;
+        if let Some(repository_id) = request.repository_id
+            && !workspace.repositories.iter().any(|repository| repository.id == repository_id)
+        {
+            anyhow::bail!("The repository does not belong to this project");
+        }
+        let cwd = workspace.terminal_root(request.repository_id)
+            .context("The project does not have a terminal directory")?;
+        let descriptor = TerminalDescriptor {
+            id: Uuid::new_v4(), workspace_id: workspace.id,
+            task_id: None, repository_id: request.repository_id, agent: AgentKind::Shell,
+            label: request.label(), cwd, state: SessionState::Idle,
+            codex_session: None, claude_session: None, agent_config_dir: None,
+            created_at: Utc::now(),
+        };
+        let startup = request.command().map_or(TerminalStartup::Default, TerminalStartup::Command);
+        self.spawn_terminal_view_with_startup(&descriptor, startup, window, cx)?;
+        let tab_id = Uuid::new_v4();
+        let dock = self.session.docks.entry(dock_key(workspace.id, None, request.repository_id)).or_default();
+        dock.tabs.push(DockTab {
+            id: tab_id, title: descriptor.label.clone(),
+            root: DockNode::Panel { terminal_id: descriptor.id }, active_terminal_id: descriptor.id,
+        });
+        dock.active_tab_id = Some(tab_id);
+        self.session.terminals.push(descriptor.clone());
+        insert_unique(&mut self.session.expanded_workspace_ids, workspace.id);
+        if request.reveal {
+            self.focus_terminal(descriptor.id, window, cx);
+        } else {
+            // Like task launches, keep the caller's view and offer a shortcut instead.
+            self.app_toasts.push(AppToast {
+                target: AppToastTarget::Terminal { terminal_id: descriptor.id, agent: AgentKind::Shell },
+                title: format!("{} · {}", workspace.label(), descriptor.label),
+                message: self.tr("Terminal started. Click to open it.", "Terminal iniciada. Haz clic para abrirla.").into(),
+            });
+        }
+        let persistence_warning = self.database.save_session(&self.session).err()
+            .map(|error| format!("Terminal started but session persistence failed: {error:#}"));
+        self.hydrate_navigation(cx);
+        cx.notify();
+        Ok(serde_json::json!({
+            "accepted": true, "started": true,
+            "projectId": workspace.id, "repositoryId": request.repository_id,
+            "terminalId": descriptor.id, "cwd": descriptor.cwd, "title": descriptor.label,
+            "command": request.command(), "revealed": request.reveal,
+            "warning": persistence_warning,
+            "message": "Shell terminal opened. The command runs in it and its output is visible there.",
+        }))
+    }
+
     fn spawn_terminal_view(
         &mut self,
         descriptor: &TerminalDescriptor,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
-        self.spawn_terminal_view_with_prompt(descriptor, None, window, cx)
+        self.spawn_terminal_view_with_startup(descriptor, TerminalStartup::Default, window, cx)
     }
 
-    fn spawn_terminal_view_with_prompt(
+    fn spawn_terminal_view_with_startup(
         &mut self,
         descriptor: &TerminalDescriptor,
-        prompt: Option<&str>,
+        startup: TerminalStartup<'_>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
         if self.terminals.contains_key(&descriptor.id) {
             return Ok(());
         }
-        let spawned = TerminalService.spawn_with_prompt(
+        let spawned = TerminalService.spawn_with_startup(
             descriptor,
             self.project_terminal_skip_permissions(descriptor.workspace_id),
-            prompt,
+            startup,
         )?;
         let master = spawned.master.clone();
         let master_for_resize = spawned.master.clone();
@@ -10311,7 +10411,12 @@ impl Render for BlackholesApp {
         if let Some(webview) = &self.workspace_webview {
             let focus_modal = terminal_modal && !webview.read(cx).visible();
             workspace_webview::set_visible(webview, workspace_visible, cx);
-            if focus_modal { let _ = webview.read(cx).raw().focus(); }
+            workspace_webview::set_quick_open_keyboard(
+                webview,
+                self.quick_open.as_ref().filter(|_| workspace_visible).map(|state| state.id),
+                cx,
+            );
+            if focus_modal { let _ = workspace_webview::focus(webview, window, cx); }
         }
         let navigation_visible = !self.show_settings && !window.has_active_dialog(cx);
         if let Some(webview) = &self.navigation_webview {
@@ -12019,6 +12124,12 @@ fn install_agent_command_bridge(paths: &AppPaths, window: &Window, cx: &mut Cont
                 window_handle.update(cx, |_, window, cx| {
                     this.update(cx, |app, cx| -> Result<serde_json::Value> {
                         app.start_task_agents(serde_json::from_str(payload)?, window, cx)
+                    })
+                }).and_then(|result| result)
+            } else if let Some(payload) = command.message.strip_prefix("open-project-terminal:") {
+                window_handle.update(cx, |_, window, cx| {
+                    this.update(cx, |app, cx| -> Result<serde_json::Value> {
+                        app.open_project_terminal(serde_json::from_str(payload)?, window, cx)
                     })
                 }).and_then(|result| result)
             } else {

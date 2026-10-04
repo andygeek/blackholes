@@ -1,6 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=native/updater.m");
     println!("cargo:rerun-if-changed=native/notifications.m");
+    println!("cargo:rerun-if-changed=native/quick_open_keyboard.m");
     println!("cargo:rerun-if-env-changed=BLACKHOLES_SPARKLE_DIR");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") { return; }
     let sparkle = std::env::var("BLACKHOLES_SPARKLE_DIR")
@@ -18,7 +19,14 @@ fn main() {
         .flag("-fblocks")
         .flag("-mmacosx-version-min=13.0")
         .compile("blackholes_notifications");
+    cc::Build::new()
+        .file("native/quick_open_keyboard.m")
+        .flag("-fobjc-arc")
+        .flag("-fblocks")
+        .flag("-mmacosx-version-min=13.0")
+        .compile("blackholes_quick_open_keyboard");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=AppKit");
+    println!("cargo:rustc-link-lib=framework=WebKit");
     println!("cargo:rustc-link-lib=framework=UserNotifications");
 }

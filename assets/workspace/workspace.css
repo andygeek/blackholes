@@ -567,6 +567,9 @@
 .workbench-welcome p { max-width: 340px; margin: 0; color: #788294; font-size: 11px; }
 .home-welcome { gap: 16px; padding: 24px; }
 .home-welcome-logo { display: block; width: 112px; height: 112px; flex: none; object-fit: contain; }
+.home-welcome-shortcuts { display: grid; gap: 9px; max-width: 340px; margin: 8px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 11px; text-align: left; }
+.home-welcome-shortcuts li { display: flex; align-items: center; gap: 10px; line-height: 1.5; }
+.home-welcome-shortcuts kbd { flex: none; min-width: 36px; padding: 3px 6px; border: 1px solid #78829440; border-radius: 5px; color: inherit; font: inherit; font-size: 10px; text-align: center; }
 .diff-head,
 .diff-row { display: flex; width: 100%; min-width: 0; }
 .diff-head { height: 28px; flex: none; border-bottom: 1px solid #343b47; background: #181d24; color: #8e97aa; font-size: 10px; font-weight: 650; }
