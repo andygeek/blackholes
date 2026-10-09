@@ -22,10 +22,14 @@ refresh; if neither is installed, both meters and their refresh button are hidde
 
 ## Release notes
 
-The first launch of each version opens its release notes on the main screen.
+The first launch of each version opens the latest three releases in the central
+workspace, with the navigation sidebar still visible. The current version is
+expanded; use **View changes** to expand older versions. **All releases on GitHub**
+opens the complete online history. Selecting a project, task, repository, or
+terminal from the sidebar opens it directly.
 Use the **X** at the upper right to close them and return to your workspace;
 the dismissal is saved for that version. The small rocket icon beside the
-version opens them again at any time. Notes are bundled in English and Spanish,
+version opens them again at any time. Recent notes are bundled in English and Spanish,
 follow the selected application language, and work without an internet connection.
 
 ## Setup and local tools

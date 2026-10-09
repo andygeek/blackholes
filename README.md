@@ -15,7 +15,7 @@
 </p>
 
 <h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
-<p align="center">Current version: <a href="docs/releases/0.1.14.md">0.1.14</a></p>
+<p align="center">Current version: <a href="docs/releases/0.1.15.md">0.1.15</a></p>
 <p align="center">macOS 13+ · Apple Silicon · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 [![Blackholes demo: creating tasks and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
@@ -33,7 +33,7 @@
 - Terminal sessions, file editing, and repository-wide text search.
 - Git staging, manual commits, history, commit diffs, and push.
 - Local Codex and Claude usage, refreshed every 10 minutes for installed providers.
-- In-app release notes after updates, with a shortcut beside the version.
+- The latest three releases in the workspace, with a shortcut beside the version and a link to the full history.
 - MCP tools to create tasks and launch agents from your existing clients.
 
 ## Supported agents

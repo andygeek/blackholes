@@ -880,10 +880,12 @@
 :root[data-theme="light"] .task-session-list .provider-logo-dark { display: none; }
 
 .release-notes {
+  --release-line: color-mix(in srgb, var(--text) 12%, transparent);
+  --release-accent: #729dff;
   height: 100%;
   overflow: auto;
   background: var(--background);
-  color: var(--text, #e5e9f0);
+  color: var(--text);
 }
 .release-notes-header {
   position: sticky;
@@ -892,25 +894,40 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
+  padding: 10px 22px;
   background: var(--background);
-  border-bottom: 1px solid var(--border, #252a33);
+  border-bottom: 1px solid var(--release-line);
 }
-.release-notes-header > span { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 600; }
-.release-notes-header b { margin-left: 4px; color: var(--muted, #8e97aa); font-size: 11px; font-weight: 400; }
+.release-notes-header > span { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-weight: 500; }
 .release-notes-close { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; }
-.release-notes-close:hover { background: var(--surface); }
-.release-notes-close:focus-visible { outline: 2px solid #729dff; outline-offset: 2px; }
-.release-notes-content { width: min(760px, 100%); margin: 0 auto; padding: 48px 32px 56px; box-sizing: border-box; }
-.release-notes-emblem { display: grid; width: 56px; height: 56px; place-items: center; margin-bottom: 24px; border: 1px solid #729dff45; border-radius: 16px; color: #729dff; background: #729dff12; }
-.release-notes-content h1 { margin: 0 0 12px; font-size: clamp(23px, 4vw, 32px); line-height: 1.2; letter-spacing: -.8px; }
-.release-notes-version { display: inline-block; padding: 4px 9px; border: 1px solid var(--border, #252a33); border-radius: 6px; color: var(--muted, #8e97aa); font-size: 11px; }
-.release-notes-body { margin-top: 28px; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
-.release-notes-body > p:first-child { color: var(--muted, #8e97aa); font-size: 15px; }
-.release-notes-body h2 { margin: 32px 0 12px; font-size: 15px; line-height: 1.4; }
-.release-notes-body p { margin: 12px 0; }
-.release-notes-body ul { display: grid; gap: 12px; margin: 12px 0; padding-left: 20px; }
-.release-notes-body li::marker { color: #729dff; }
-.release-notes-body code { padding: 2px 5px; border-radius: 4px; background: var(--surface); font-size: 11px; }
-.release-notes-hint { margin: 36px 0 0; padding-top: 20px; border-top: 1px solid var(--border, #252a33); color: var(--muted, #8e97aa); font-size: 11px; line-height: 1.6; }
-@media (max-width: 520px) { .release-notes-content { padding: 28px 20px 36px; } .release-notes-header { padding: 12px 16px; } }
+.release-notes-close:hover { background: var(--release-line); }
+.release-notes-close:focus-visible, .release-card-toggle:focus-visible, .release-history-link:focus-visible { outline: 2px solid var(--release-accent); outline-offset: 4px; }
+.release-notes-content { width: min(720px, 100%); margin: 0 auto; padding: 32px 28px 36px; box-sizing: border-box; }
+.release-notes-intro { margin-bottom: 28px; }
+.release-notes-emblem { display: grid; width: 44px; height: 44px; place-items: center; margin-bottom: 18px; border: 1px solid color-mix(in srgb, var(--release-accent) 25%, transparent); border-radius: 13px; color: var(--release-accent); background: color-mix(in srgb, var(--release-accent) 8%, transparent); }
+.release-notes-content h1 { margin: 0; font-size: clamp(21px, 3vw, 28px); font-weight: 600; line-height: 1.25; letter-spacing: -.7px; }
+.release-notes-intro > p { margin: 9px 0 14px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.release-history-link { display: inline-flex; align-items: center; gap: 5px; color: var(--release-accent); font-size: 12px; text-decoration: none; border-radius: 3px; }
+.release-history-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.release-history { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.release-card { padding: 20px 22px; border: 1px solid var(--release-line); border-radius: 12px; background: color-mix(in srgb, var(--text) 2%, var(--background)); }
+.release-card.is-current { border-color: color-mix(in srgb, var(--release-accent) 28%, var(--background)); background: linear-gradient(135deg, color-mix(in srgb, var(--release-accent) 7%, var(--background)), var(--background) 65%); }
+.release-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.release-card-heading h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.3px; }
+.release-current-badge { padding: 3px 8px; border-radius: 20px; color: var(--release-accent); background: color-mix(in srgb, var(--release-accent) 12%, transparent); font-size: 10px; font-weight: 500; }
+.release-card-summary { margin: 10px 0 12px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.release-card-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; }
+.release-card-toggle:hover { color: var(--text); }
+.release-card-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.release-notes-body { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--release-line); font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
+.release-notes-body[hidden] { display: none; }
+.release-notes-body h3 { margin: 20px 0 9px; font-size: 13px; font-weight: 600; line-height: 1.4; }
+.release-notes-body > :first-child { margin-top: 0; }
+.release-notes-body > :last-child { margin-bottom: 0; }
+.release-notes-body p { margin: 10px 0; }
+.release-notes-body ul { display: grid; gap: 8px; margin: 10px 0; padding-left: 18px; }
+.release-notes-body li::marker { color: var(--release-accent); }
+.release-notes-body code, .release-card-summary code { padding: 2px 5px; border-radius: 4px; background: var(--release-line); font-size: 11px; }
+.release-notes-hint { margin: 22px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+:root[data-theme="light"] .release-notes { --release-accent: #315ec9; }
+@media (max-width: 520px) { .release-notes-content { padding: 24px 16px 28px; } .release-notes-header { padding: 8px 14px; } .release-card { padding: 17px; } }

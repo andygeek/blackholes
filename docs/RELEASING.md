@@ -100,9 +100,11 @@ source. Include changes, installation instructions, known limitations, and
 only the checks actually performed. Keep private operational notes outside Git.
 
 Provide both `docs/releases/VERSION.md` (English) and
-`docs/releases/VERSION.es.md` (Spanish). These files are embedded using the
-package version; missing notes fail compilation. They appear on the first launch
-of each version and can be reopened beside the version in the title bar.
+`docs/releases/VERSION.es.md` (Spanish). The build automatically embeds the
+three most recent stable versions up to the package version. English and Spanish
+notes must exist for each of those versions; missing notes fail compilation.
+They appear in the central workspace on the first launch of each version, keeping
+the navigation sidebar visible, and can be reopened beside the title-bar version.
 Use headings, paragraphs, bullet lists, bold text, and inline code, which the
 in-app reader supports. Keep both languages aligned with the published behavior.
 

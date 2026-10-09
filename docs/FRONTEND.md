@@ -28,13 +28,21 @@ WebViews, including settings. `src/services/updater.rs` connects to the native
 Sparkle delegate in `native/updater.m`; React never downloads or installs an
 executable. See [Releasing and updates](RELEASING.md).
 
-`workspace/ReleaseNotes.tsx` renders bundled Markdown for the current version,
-with headings, paragraphs, lists, bold text, and inline code. The full workspace
-surface is shown before other content until closed, with navigation and native
-terminal rendering hidden. Closing sends `close_release_notes`; Rust saves
-`last_seen_release_version` and restores the current view. Background surface
-updates cannot replace the notes while they are open. Existing terminals keep
-running. The notes use the same theme and language as the application.
+`workspace/ReleaseNotes.tsx` renders the three most recent releases inside the
+central workspace, keeping the navigation sidebar visible and resizable.
+`build.rs` selects stable versions up to the package version from `docs/releases/`
+and embeds their English and Spanish notes. Each card shows a summary; the current
+version's changes start expanded and older versions can be expanded individually.
+Installation and verification sections remain in the full online notes, linked
+through the native `open_url` command to GitHub Releases.
+
+Closing sends `close_release_notes`; Rust saves `last_seen_release_version` and
+restores the current view. Choosing a project, task, repository, terminal, or
+settings also dismisses the notes and opens that destination. Search shortcuts
+remain available. Background surface updates cannot replace the notes while
+they are open, and existing terminals keep running. Modal overlays use the notes
+as their backdrop rather than the hidden terminal. The notes use the same theme
+and language as the application.
 
 The native bottom bar (`src/ui/usage_bar.rs`) is also outside the WebViews.
 It displays local Claude/Codex account limits through independent background

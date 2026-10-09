@@ -1134,11 +1134,7 @@ impl BlackholesApp {
             WorkspaceCommand::SetTheme { theme } => self.set_theme(theme, cx),
             WorkspaceCommand::CloseSettings => self.close_settings(cx),
             WorkspaceCommand::CloseReleaseNotes => {
-                self.show_release_notes = false;
-                self.session.last_seen_release_version = Some(env!("CARGO_PKG_VERSION").into());
-                if self.database.save_session(&self.session).is_err() {
-                    tracing::warn!("Could not save the release notes acknowledgment");
-                }
+                self.dismiss_release_notes();
                 self.hydrate_active_workspace_surface(cx);
                 if self.show_terminal && let Some(terminal_id) = self.selected_terminal_id() {
                     self.focus_terminal_input(terminal_id, window, cx);
@@ -2127,7 +2123,17 @@ impl BlackholesApp {
         );
     }
 
+    fn dismiss_release_notes(&mut self) {
+        if !self.show_release_notes { return; }
+        self.show_release_notes = false;
+        self.session.last_seen_release_version = Some(env!("CARGO_PKG_VERSION").into());
+        if self.database.save_session(&self.session).is_err() {
+            tracing::warn!("Could not save the release notes acknowledgment");
+        }
+    }
+
     fn show_home(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_release_notes();
         self.flush_active_file(cx);
         self.show_terminal = false;
         self.show_task_details = false;
@@ -2158,15 +2164,20 @@ impl BlackholesApp {
 
     fn hydrate_active_workspace_surface(&self, cx: &mut Context<Self>) {
         if self.show_release_notes {
-            let notes = match self.session.language {
-                Language::English => include_str!(concat!("../../docs/releases/", env!("CARGO_PKG_VERSION"), ".md")),
-                Language::Spanish => include_str!(concat!("../../docs/releases/", env!("CARGO_PKG_VERSION"), ".es.md")),
-            };
+            let releases = super::release_notes::RECENT_RELEASES.iter().map(|(version, english, spanish)| {
+                serde_json::json!({
+                    "version": version,
+                    "notes": match self.session.language {
+                        Language::English => english,
+                        Language::Spanish => spanish,
+                    },
+                })
+            }).collect::<Vec<_>>();
             self.dispatch_workspace_event(serde_json::json!({
                 "type": "workspace_surface", "surface": "release-notes", "theme": app_theme_id(self.session.theme),
                 "data": {
                     "language": if self.session.language == Language::English { "en" } else { "es" },
-                    "version": env!("CARGO_PKG_VERSION"), "notes": notes,
+                    "version": env!("CARGO_PKG_VERSION"), "releases": releases,
                 }
             }), cx);
         } else if let Some(workspace_id) = self.project_settings_workspace_id {
@@ -2436,7 +2447,8 @@ impl BlackholesApp {
     }
 
     fn open_navigation_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_release_notes { return; }
+        self.dismiss_release_notes();
+        self.hydrate_active_workspace_surface(cx);
         self.next_quick_open_id = self.next_quick_open_id.wrapping_add(1);
         let id = self.next_quick_open_id;
         let placeholder = self
@@ -2459,7 +2471,6 @@ impl BlackholesApp {
     }
 
     fn open_file_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_release_notes { return; }
         let Some((root, root_label)) = self.selected_repository_target() else {
             let message = self
                 .tr(
@@ -2471,6 +2482,8 @@ impl BlackholesApp {
             return;
         };
 
+        self.dismiss_release_notes();
+        self.hydrate_active_workspace_surface(cx);
         self.next_quick_open_id = self.next_quick_open_id.wrapping_add(1);
         let id = self.next_quick_open_id;
         let placeholder = format!(
@@ -2638,7 +2651,7 @@ impl BlackholesApp {
                 "type": "quick_open",
                 "open_id": state.id,
                 "sidebar_width": if self.show_settings { 0.0 } else { self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) },
-                "over_terminal": self.show_terminal,
+                "over_terminal": self.show_terminal && !self.show_release_notes,
                 "query": query,
                 "placeholder": state.placeholder.clone(),
                 "shortcut": shortcut,
@@ -3478,6 +3491,7 @@ impl BlackholesApp {
             return;
         };
 
+        self.dismiss_release_notes();
         let preparation = ProjectInstructionsService::ensure(&workspace)
             .and_then(|_| ProjectTaskInstructionsService::ensure(&workspace).map(|_| ()));
         if let Err(error) = preparation {
@@ -4751,6 +4765,7 @@ impl BlackholesApp {
         show_file_explorer: bool,
         cx: &mut Context<Self>,
     ) {
+        self.dismiss_release_notes();
         self.session.selected_workspace_id = Some(workspace_id);
         self.session.selected_task_id = task_id;
         self.session.selected_repository_id = repository_id;
@@ -5260,7 +5275,7 @@ impl BlackholesApp {
             self.dispatch_workspace_event(serde_json::json!({
                 "type": "app_modal", "modal": {
                     "kind": "edit_project", "request_id": request_id, "workspace_id": workspace_id,
-                    "over_terminal": self.show_terminal,
+                    "over_terminal": self.show_terminal && !self.show_release_notes,
                     "title": self.tr("Edit project", "Editar proyecto"),
                     "name": workspace.label(), "icon": workspace.icon,
                     "color_id": workspace_color_id(workspace.color),
@@ -5606,7 +5621,7 @@ impl BlackholesApp {
                 "type": "app_modal",
                 "modal": {
                     "kind": "remove_task", "task_id": task_id,
-                    "over_terminal": self.show_terminal,
+                    "over_terminal": self.show_terminal && !self.show_release_notes,
                     "title": self.tr("Delete task and worktrees?", "¿Eliminar tarea y worktrees?"),
                     "name": task_title, "context": worktree_path,
                     "description": self.tr(
@@ -6364,7 +6379,7 @@ impl BlackholesApp {
         self.dispatch_workspace_event(serde_json::json!({
             "type": "app_modal", "modal": {
                 "kind": "add_repository", "request_id": request_id, "workspace_id": workspace_id,
-                "over_terminal": self.show_terminal,
+                "over_terminal": self.show_terminal && !self.show_release_notes,
                 "title": self.tr("Add repository", "Agregar repositorio"),
                 "name": workspace.label(), "description": "",
                 "projects_root": workspace.root_path.as_ref().map(|p| p.display().to_string()),
@@ -6500,7 +6515,7 @@ impl BlackholesApp {
             "type": "app_modal", "modal": {
                 "kind": "remove_repository", "request_id": request_id,
                 "workspace_id": workspace_id, "repository_id": repository_id,
-                "over_terminal": self.show_terminal,
+                "over_terminal": self.show_terminal && !self.show_release_notes,
                 "title": if plan.linked { self.tr("Remove repository link?", "¿Eliminar enlace al repositorio?") }
                     else { self.tr("Remove repository and its files?", "¿Eliminar repositorio y sus archivos?") },
                 "name": name, "context": plan.path.display().to_string(), "description": description,
@@ -6574,7 +6589,7 @@ impl BlackholesApp {
                 "type": "app_modal",
                 "modal": {
                     "kind": "create_project",
-                    "over_terminal": self.show_terminal,
+                    "over_terminal": self.show_terminal && !self.show_release_notes,
                     "request_id": request_id,
                     "title": self.tr("Create project", "Crear proyecto"),
                     "name": "", "description": "",
@@ -6671,7 +6686,7 @@ impl BlackholesApp {
             self.dispatch_workspace_event(serde_json::json!({
                 "type": "app_modal",
                 "modal": {
-                    "kind": "create_task", "request_id": request_id, "over_terminal": self.show_terminal,
+                    "kind": "create_task", "request_id": request_id, "over_terminal": self.show_terminal && !self.show_release_notes,
                     "workspace_id": workspace.id,
                     "repositories": workspace.repositories.iter().map(|repository| serde_json::json!({
                         "id": repository.id, "name": repository.name,
@@ -7272,6 +7287,7 @@ impl BlackholesApp {
         {
             return;
         }
+        self.dismiss_release_notes();
         self.session.selected_workspace_id = Some(workspace_id);
         self.session.selected_task_id = None;
         self.session.selected_repository_id = None;
@@ -7312,6 +7328,7 @@ impl BlackholesApp {
         {
             return;
         }
+        self.dismiss_release_notes();
         self.mark_task_seen(task_id, cx);
         self.session.projects_section_collapsed = false;
         self.session.selected_workspace_id = Some(workspace_id);
@@ -7333,6 +7350,7 @@ impl BlackholesApp {
 
 
     fn new_terminal(&mut self, agent: AgentKind, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_release_notes();
         self.show_project_overview = false;
         self.show_task_details = false;
         self.show_terminal = true;
@@ -8124,6 +8142,7 @@ impl BlackholesApp {
             return;
         };
 
+        self.dismiss_release_notes();
         self.app_toasts
             .retain(|toast| toast.target.terminal_id() != Some(terminal_id));
 
@@ -8199,7 +8218,7 @@ impl BlackholesApp {
             self.dispatch_workspace_event(serde_json::json!({
                 "type": "app_modal", "modal": {
                     "kind": "close_terminal", "terminal_id": terminal_id,
-                    "over_terminal": self.show_terminal,
+                    "over_terminal": self.show_terminal && !self.show_release_notes,
                     "title": title, "name": name, "context": context,
                     "description": description, "confirm_label": confirm_label,
                     "cancel_label": self.tr("Cancel", "Cancelar"),
@@ -8327,6 +8346,7 @@ impl BlackholesApp {
     }
 
     fn show_settings(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_release_notes();
         self.flush_active_file(cx);
         if !self.show_settings {
             self.settings_return_view = Some((self.show_terminal, self.show_task_details, self.show_project_overview, self.project_settings_workspace_id));
@@ -10478,7 +10498,7 @@ impl Render for BlackholesApp {
             );
             if focus_modal { let _ = workspace_webview::focus(webview, window, cx); }
         }
-        let navigation_visible = !self.show_release_notes && !self.show_settings && !window.has_active_dialog(cx);
+        let navigation_visible = (self.show_release_notes || !self.show_settings) && !window.has_active_dialog(cx);
         if let Some(webview) = &self.navigation_webview {
             navigation_webview::set_visible(webview, navigation_visible, cx);
             self.hydrate_navigation(cx);
@@ -10561,7 +10581,7 @@ impl Render for BlackholesApp {
                     .into_any_element()
             })
             .unwrap_or_else(|| self.render_sidebar(cx));
-        let workspace_layout = if self.show_settings || self.show_release_notes {
+        let workspace_layout = if self.show_settings && !self.show_release_notes {
             workspace_content
         } else {
             h_flex().size_full()

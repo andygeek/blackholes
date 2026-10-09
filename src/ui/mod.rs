@@ -4,6 +4,9 @@ pub mod workspace_webview;
 pub mod quick_open_webview;
 pub mod terminal;
 mod usage_bar;
+mod release_notes {
+    include!(concat!(env!("OUT_DIR"), "/release_notes.rs"));
+}
 
 pub use app::BlackholesApp;
 
