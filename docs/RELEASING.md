@@ -99,6 +99,13 @@ release notes in `docs/releases/VERSION.md` and commit them with the release
 source. Include changes, installation instructions, known limitations, and
 only the checks actually performed. Keep private operational notes outside Git.
 
+Provide both `docs/releases/VERSION.md` (English) and
+`docs/releases/VERSION.es.md` (Spanish). These files are embedded using the
+package version; missing notes fail compilation. They appear on the first launch
+of each version and can be reopened beside the version in the title bar.
+Use headings, paragraphs, bullet lists, bold text, and inline code, which the
+in-app reader supports. Keep both languages aligned with the published behavior.
+
 Build using the repository entry point:
 
 ```sh

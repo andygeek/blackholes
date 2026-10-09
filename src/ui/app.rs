@@ -31,7 +31,7 @@ use crate::{
             ProjectInstructionsService, ProjectNoteService, ProjectTaskInstructionsService,
             TaskNoteService,
         },
-        providers::{AgentProvider, refresh_agent_plan_usage},
+        providers::{AgentProvider, ProviderUsageResult, refresh_agent_plan_usage},
         projects::{
             ProjectService, ProjectRepositoryMode, ProjectRepositorySource, RepositoryRemoval, RepositoryGitSummary, discover_repositories, repository_git_summary,
         },
@@ -596,6 +596,7 @@ pub struct BlackholesApp {
     show_task_details: bool,
     show_project_overview: bool,
     show_settings: bool,
+    show_release_notes: bool,
     settings_return_view: Option<(bool, bool, bool, Option<Uuid>)>,
     computer_plan_usage: [ComputerPlanUsage; 2],
     usage_details_window: Option<gpui::WindowHandle<usage_bar::UsagePopover>>,
@@ -720,6 +721,7 @@ impl BlackholesApp {
             Vec::new()
         });
         let mut session = database.load_session();
+        let show_release_notes = session.last_seen_release_version.as_deref() != Some(env!("CARGO_PKG_VERSION"));
         session
             .unseen_task_ids
             .retain(|task_id| tasks.iter().any(|task| task.id == *task_id));
@@ -899,6 +901,7 @@ impl BlackholesApp {
             show_task_details,
             show_project_overview: false,
             show_settings: !crate::services::projects::git_tools_available(),
+            show_release_notes,
             settings_return_view: None,
             computer_plan_usage: [ComputerPlanUsage::new(AgentProvider::Claude), ComputerPlanUsage::new(AgentProvider::Codex)],
             usage_details_window: None,
@@ -968,6 +971,14 @@ impl BlackholesApp {
         .detach();
         app.refresh_external_integrations(cx);
         app.refresh_computer_plan_usage(cx);
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_secs(10 * 60)).await;
+                if this.update(cx, |app, cx| app.refresh_computer_plan_usage(cx)).is_err() {
+                    break;
+                }
+            }
+        }).detach();
         let mut usage_anchor_geometry = (window.bounds(), window.display(cx).map(|display| display.id()));
         cx.observe_window_bounds(window, move |app, window, cx| {
             let geometry = (window.bounds(), window.display(cx).map(|display| display.id()));
@@ -1122,6 +1133,18 @@ impl BlackholesApp {
             ),
             WorkspaceCommand::SetTheme { theme } => self.set_theme(theme, cx),
             WorkspaceCommand::CloseSettings => self.close_settings(cx),
+            WorkspaceCommand::CloseReleaseNotes => {
+                self.show_release_notes = false;
+                self.session.last_seen_release_version = Some(env!("CARGO_PKG_VERSION").into());
+                if self.database.save_session(&self.session).is_err() {
+                    tracing::warn!("Could not save the release notes acknowledgment");
+                }
+                self.hydrate_active_workspace_surface(cx);
+                if self.show_terminal && let Some(terminal_id) = self.selected_terminal_id() {
+                    self.focus_terminal_input(terminal_id, window, cx);
+                }
+                cx.notify();
+            }
             WorkspaceCommand::SetSidebarWidth { width, commit } => self.set_sidebar_width(width, commit, cx),
             WorkspaceCommand::InstallGitTools => {
                 #[cfg(target_os = "macos")]
@@ -1534,6 +1557,9 @@ impl BlackholesApp {
     }
 
     fn dispatch_workspace_event(&self, mut event: serde_json::Value, cx: &mut Context<Self>) {
+        if self.show_release_notes && event["type"] == "workspace_surface" && event["surface"] != "release-notes" {
+            return;
+        }
         event["language"] = serde_json::json!(if self.session.language == Language::English { "en" } else { "es" });
         if event.get("sidebar_width").is_none() {
             event["sidebar_width"] = serde_json::json!(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX));
@@ -2131,7 +2157,19 @@ impl BlackholesApp {
     }
 
     fn hydrate_active_workspace_surface(&self, cx: &mut Context<Self>) {
-        if let Some(workspace_id) = self.project_settings_workspace_id {
+        if self.show_release_notes {
+            let notes = match self.session.language {
+                Language::English => include_str!(concat!("../../docs/releases/", env!("CARGO_PKG_VERSION"), ".md")),
+                Language::Spanish => include_str!(concat!("../../docs/releases/", env!("CARGO_PKG_VERSION"), ".es.md")),
+            };
+            self.dispatch_workspace_event(serde_json::json!({
+                "type": "workspace_surface", "surface": "release-notes", "theme": app_theme_id(self.session.theme),
+                "data": {
+                    "language": if self.session.language == Language::English { "en" } else { "es" },
+                    "version": env!("CARGO_PKG_VERSION"), "notes": notes,
+                }
+            }), cx);
+        } else if let Some(workspace_id) = self.project_settings_workspace_id {
             self.hydrate_project_settings_surface(workspace_id, cx);
         } else if self.show_settings {
             self.hydrate_settings_surface(cx);
@@ -2398,6 +2436,7 @@ impl BlackholesApp {
     }
 
     fn open_navigation_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_release_notes { return; }
         self.next_quick_open_id = self.next_quick_open_id.wrapping_add(1);
         let id = self.next_quick_open_id;
         let placeholder = self
@@ -2420,6 +2459,7 @@ impl BlackholesApp {
     }
 
     fn open_file_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_release_notes { return; }
         let Some((root, root_label)) = self.selected_repository_target() else {
             let message = self
                 .tr(
@@ -7326,6 +7366,7 @@ impl BlackholesApp {
             // New sessions inherit the CLI account from the computer. Saved
             // sessions retain their own profile through TerminalDescriptor.
             agent_config_dir: None,
+            model: None,
             created_at: now,
         };
 
@@ -7399,7 +7440,8 @@ impl BlackholesApp {
                             }
                         })
                 } else { None };
-                self.start_task_terminal(entry, agent, config_dir, request.source_terminal_id, window, cx)
+                let model = entry.model.clone().or_else(|| request.model.clone());
+                self.start_task_terminal(entry, agent, model, config_dir, request.source_terminal_id, window, cx)
             })();
             results.push(result.unwrap_or_else(|error| serde_json::json!({
                 "taskId": entry.task_id, "started": false, "reused": false, "error": format!("{error:#}"),
@@ -7421,6 +7463,7 @@ impl BlackholesApp {
         &mut self,
         request: &TaskAgentRequest,
         agent: AgentKind,
+        model: Option<String>,
         config_dir: Option<PathBuf>,
         source_terminal_id: Option<Uuid>,
         window: &mut Window,
@@ -7451,7 +7494,7 @@ impl BlackholesApp {
             label: format!("{} · {}", agent.label(), task.title),
             cwd: task.worktree_root_path.clone(), state: SessionState::Idle,
             codex_session: None, claude_session: None, agent_config_dir: config_dir,
-            created_at: Utc::now(),
+            model, created_at: Utc::now(),
         };
         self.spawn_terminal_view_with_startup(&descriptor, TerminalStartup::Prompt(&prompt), window, cx)?;
         let tab_id = Uuid::new_v4();
@@ -7477,7 +7520,7 @@ impl BlackholesApp {
             message: self.tr("Task terminal started. Click to follow its work.", "Terminal de la tarea iniciada. Haz clic para seguir el trabajo.").into(),
         });
         Ok(serde_json::json!({
-            "taskId": task.id, "terminalId": descriptor.id, "agent": agent,
+            "taskId": task.id, "terminalId": descriptor.id, "agent": agent, "model": descriptor.model,
             "cwd": descriptor.cwd, "started": true, "reused": false,
             "skipPermissions": self.project_terminal_skip_permissions(task.workspace_id),
             "warning": persistence_warning,
@@ -7509,7 +7552,7 @@ impl BlackholesApp {
             task_id: None, repository_id: request.repository_id, agent: AgentKind::Shell,
             label: request.label(), cwd, state: SessionState::Idle,
             codex_session: None, claude_session: None, agent_config_dir: None,
-            created_at: Utc::now(),
+            model: None, created_at: Utc::now(),
         };
         let startup = request.command().map_or(TerminalStartup::Default, TerminalStartup::Command);
         self.spawn_terminal_view_with_startup(&descriptor, startup, window, cx)?;
@@ -8320,7 +8363,7 @@ impl BlackholesApp {
 
     fn open_usage_details(&mut self, provider: AgentProvider, bounds: gpui::Bounds<gpui::Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         self.close_usage_details(cx);
-        let Some(state) = self.computer_plan_usage.iter().find(|state| state.provider == provider) else { return; };
+        let Some(state) = self.computer_plan_usage.iter().find(|state| state.provider == provider && state.installed) else { return; };
         match usage_bar::open_details(state.clone(), self.session.language, self.session.theme, bounds, window, cx) {
             Ok(handle) => self.usage_details_window = Some(handle),
             Err(error) => self.set_status(format!("Could not open usage details: {error:#}"), true, cx),
@@ -8329,8 +8372,12 @@ impl BlackholesApp {
 
     fn sync_usage_details(&mut self, cx: &mut Context<Self>) {
         if let Some(handle) = self.usage_details_window {
-            if handle.update(cx, |panel, _, cx| {
+            if handle.update(cx, |panel, window, cx| {
                 if let Some(state) = self.computer_plan_usage.iter().find(|state| state.provider == panel.state.provider) {
+                    if !state.installed {
+                        window.remove_window();
+                        return;
+                    }
                     panel.state = state.clone();
                     cx.notify();
                 }
@@ -8341,9 +8388,9 @@ impl BlackholesApp {
     }
 
     fn refresh_computer_plan_usage(&mut self, cx: &mut Context<Self>) {
-        if self.computer_plan_usage.iter().any(|state| state.refreshing) { return; }
         for index in 0..self.computer_plan_usage.len() {
             let state = &mut self.computer_plan_usage[index];
+            if state.refreshing { continue; }
             state.refreshing = true;
             state.failed = false;
             let provider = state.provider;
@@ -8356,8 +8403,20 @@ impl BlackholesApp {
                     let state = &mut app.computer_plan_usage[index];
                     state.refreshing = false;
                     match result {
-                        Ok(usage) => { state.usage = Some(usage); state.updated_at = Some(Utc::now()); }
-                        Err(_) => state.failed = true,
+                        ProviderUsageResult::NotInstalled => {
+                            state.installed = false;
+                            state.usage = None;
+                            state.updated_at = None;
+                        }
+                        ProviderUsageResult::Ready(usage) => {
+                            state.installed = true;
+                            state.usage = Some(usage);
+                            state.updated_at = Some(Utc::now());
+                        }
+                        ProviderUsageResult::Unavailable => {
+                            state.installed = true;
+                            state.failed = true;
+                        }
                     }
                     app.sync_usage_details(cx);
                     cx.notify();
@@ -10372,7 +10431,7 @@ impl BlackholesApp {
 impl Render for BlackholesApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_update_guard();
-        if !self.show_settings
+        if !self.show_release_notes && !self.show_settings
             && self.project_settings_workspace_id.is_none()
             && !self.show_project_overview
             && !self.show_task_details
@@ -10400,6 +10459,7 @@ impl Render for BlackholesApp {
         // high-throughput native terminal. Quick-open lives inside that same
         // surface so macOS can preserve the real content beneath its backdrop.
         let terminal_modal = self.show_terminal
+            && !self.show_release_notes
             && (self.project_modal_request.is_some()
                 || self.project_appearance_request.is_some()
                 || self.task_modal_request.is_some()
@@ -10407,7 +10467,7 @@ impl Render for BlackholesApp {
                 || self.agent_removal_confirmation.is_some()
                 || self.quick_open.is_some());
         let workspace_visible =
-            (!self.show_terminal || terminal_modal || self.quick_open.is_some()) && !window.has_active_dialog(cx);
+            (self.show_release_notes || !self.show_terminal || terminal_modal || self.quick_open.is_some()) && !window.has_active_dialog(cx);
         if let Some(webview) = &self.workspace_webview {
             let focus_modal = terminal_modal && !webview.read(cx).visible();
             workspace_webview::set_visible(webview, workspace_visible, cx);
@@ -10418,7 +10478,7 @@ impl Render for BlackholesApp {
             );
             if focus_modal { let _ = workspace_webview::focus(webview, window, cx); }
         }
-        let navigation_visible = !self.show_settings && !window.has_active_dialog(cx);
+        let navigation_visible = !self.show_release_notes && !self.show_settings && !window.has_active_dialog(cx);
         if let Some(webview) = &self.navigation_webview {
             navigation_webview::set_visible(webview, navigation_visible, cx);
             self.hydrate_navigation(cx);
@@ -10428,7 +10488,7 @@ impl Render for BlackholesApp {
             AppTheme::Light => (rgb(0xf6f7fa), rgb(0x18212f), rgb(0xd9dee8)),
         };
         let weak_status = cx.weak_entity();
-        let body = if self.show_terminal {
+        let body = if self.show_terminal && !self.show_release_notes {
             self.render_dock(cx)
         } else {
             self.render_empty_state(cx)
@@ -10501,7 +10561,7 @@ impl Render for BlackholesApp {
                     .into_any_element()
             })
             .unwrap_or_else(|| self.render_sidebar(cx));
-        let workspace_layout = if self.show_settings {
+        let workspace_layout = if self.show_settings || self.show_release_notes {
             workspace_content
         } else {
             h_flex().size_full()
@@ -10529,6 +10589,26 @@ impl Render for BlackholesApp {
                     .child(TitleBar::new().bg(background).border_color(chrome_border).child(
                         h_flex().w_full().justify_end().gap_2().pr_3()
                             .child(div().text_xs().text_color(rgb(0x8791a2)).child(concat!("v", env!("CARGO_PKG_VERSION"))))
+                            .child(Button::new("show-release-notes")
+                                .icon(AppIcon::Rocket)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(self.tr("What's new in this version", "Novedades de esta versión").to_string())
+                                .on_click(cx.listener(|app, _, window, cx| {
+                                    if app.task_modal_submitting || app.project_modal_submitting || window.has_active_dialog(cx) {
+                                        return;
+                                    }
+                                    app.close_usage_details(cx);
+                                    app.dismiss_app_modal(cx);
+                                    app.close_quick_open(cx);
+                                    app.show_release_notes = true;
+                                    app.hydrate_active_workspace_surface(cx);
+                                    if let Some(webview) = &app.workspace_webview {
+                                        workspace_webview::set_visible(webview, true, cx);
+                                        let _ = workspace_webview::focus(webview, window, cx);
+                                    }
+                                    cx.notify();
+                                })))
                             .child(Button::new("app-update")
                                 .xsmall()
                                 .rounded_full()

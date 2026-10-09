@@ -90,7 +90,11 @@ No completion notification is required.
 Provider selection uses a per-task `agent`, then the batch `agent`, then the
 calling terminal/provider or MCP client's identity. Supported values are
 `codex`, `claude`, `gemini`, and `opencode`. Other MCP clients can
-specify one of these providers explicitly. The launcher reuses provider profile directories
+specify one of these providers explicitly. Model selection works the same way:
+a per-task `model`, then the batch `model` (`agentModel` in `create_task`), then
+the provider's configured default. The value is passed to the CLI as `--model`,
+for example `claude-opus-5-5`, and the terminal keeps it when its session is
+restored. The launcher reuses provider profile directories
 when supplied by the caller (Codex, Claude, and Gemini), without copying credentials.
 Task terminals run the installed CLI through the same interactive login shell
 as manually opened terminals. Missing commands and provider startup errors are

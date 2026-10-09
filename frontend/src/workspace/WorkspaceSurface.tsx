@@ -32,8 +32,9 @@ import { MonacoSurface } from "./MonacoSurface";
 import { RepositoryExplorer } from "./RepositoryExplorer";
 import { applyAppTheme, type AppTheme } from "../shared/theme";
 import { TaskDetails, ProjectOverview, type TaskDetailsData, type ProjectOverviewData } from "./TaskDetails";
+import { ReleaseNotes, type ReleaseNotesData } from "./ReleaseNotes";
 
-export type SurfaceKind = "settings" | "project-settings" | "task-details" | "project-overview" | "workbench" | "home";
+export type SurfaceKind = "settings" | "project-settings" | "task-details" | "project-overview" | "workbench" | "home" | "release-notes";
 
 interface HomeData {
   description: string;
@@ -44,7 +45,7 @@ export interface WorkspaceSurfaceEvent {
   surface: SurfaceKind;
   theme: AppTheme;
   language?: "en" | "es";
-  data: SettingsData | ProjectSettingsData | TaskDetailsData | ProjectOverviewData | WorkbenchData | HomeData;
+  data: SettingsData | ProjectSettingsData | TaskDetailsData | ProjectOverviewData | WorkbenchData | HomeData | ReleaseNotesData;
 }
 
 interface Choice {
@@ -686,6 +687,7 @@ function WorkbenchView({ data }: { data: WorkbenchData }) {
 }
 
 export function WorkspaceSurface({ event }: { event: WorkspaceSurfaceEvent }) {
+  if (event.surface === "release-notes") return <ReleaseNotes data={event.data as ReleaseNotesData} />;
   if (event.surface === "home") {
     const data = event.data as HomeData;
     const language = event.language || "es";

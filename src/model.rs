@@ -304,6 +304,9 @@ pub struct TerminalDescriptor {
     /// Inherit a caller's provider profile without copying its credentials or session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_config_dir: Option<PathBuf>,
+    /// Model requested at launch; restored sessions reopen with the same model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -331,6 +334,8 @@ pub struct AppSession {
     pub agents_section_collapsed: bool,
     #[serde(default)]
     pub projects_section_collapsed: bool,
+    #[serde(default)]
+    pub last_seen_release_version: Option<String>,
 }
 
 impl Default for AppSession {
@@ -351,6 +356,7 @@ impl Default for AppSession {
             sidebar_width: 260.0,
             agents_section_collapsed: false,
             projects_section_collapsed: false,
+            last_seen_release_version: None,
         }
     }
 }

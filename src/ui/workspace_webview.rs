@@ -25,6 +25,7 @@ pub enum WorkspaceCommand {
         theme: AppTheme,
     },
     CloseSettings,
+    CloseReleaseNotes,
     SetSidebarWidth {
         width: f32,
         #[serde(default)]

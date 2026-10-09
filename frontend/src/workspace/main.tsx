@@ -92,7 +92,7 @@ function WorkspaceApp() {
   if (overTerminal) return <>{modalLayer}{quickOpenLayer}</>;
   return <>
     {surface && <WorkspaceSurface event={surface} />}
-    {surface?.surface !== "settings" && !modal && !quickOpen && <SidebarResizeHandle width={sidebarWidth}
+    {surface?.surface !== "settings" && surface?.surface !== "release-notes" && !modal && !quickOpen && <SidebarResizeHandle width={sidebarWidth}
       left={0} hitWidth={8} edge="left" fixed label={language === "en" ? "Resize sidebar" : "Cambiar ancho del menú lateral"} />}
     {status && <button type="button" className={`workspace-status${status.error ? " is-error" : ""}`}
       onClick={() => { setStatus(null); postNative({ type: "dismiss_status" }); }}>{status.message}</button>}

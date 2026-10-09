@@ -20,7 +20,8 @@ flowchart TD
 - **UI:** three independent React roots handle navigation, the central workspace, and quick open. HTML and production bundles are embedded in the application; the UI needs no web server.
 - **Terminal:** `portable-pty` runs the shell, `alacritty_terminal` interprets terminal output, and GPUI draws it. Terminal bytes never pass through React or xterm.js.
 - **Sessions:** provider CLIs run in visible native terminals. Blackholes manages their placement, profile, process lifecycle, and supported session restoration.
-- **Usage:** small helpers query plan limits for the computer’s Claude and Codex accounts. Authentication stays in the provider CLI. The helpers do not run chat turns or retain conversation history.
+- **Usage:** independent background helpers query plan limits at startup, every 10 minutes, and on manual refresh. Provider detection hides missing CLIs; bounded failures retain the last report without interrupting the UI. Authentication stays in the provider CLI. The helpers do not run chat turns or retain conversation history.
+- **Release notes:** the workspace renders the current version's bundled English or Spanish Markdown before its usual content. `AppSession.last_seen_release_version` records dismissal; the title-bar shortcut reopens the notes without changing the selected workspace or stopping terminals.
 - **MCP:** the same Rust executable runs as a STDIO MCP server with the `mcp` argument. It exposes project/task details, legacy note compatibility, navigation, terminal agent launches, and completion notifications.
 - **Source Control:** `services/git_history.rs` reads bounded Git history and
   immutable commit comparisons on background workers. React draws parent-based

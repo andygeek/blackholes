@@ -152,12 +152,30 @@ fn terminate_helper_process(process_id: u32) {
 
 /// Fetch plan metadata without a conversation, prompt, tools, or token usage.
 /// Runs on a background executor; the deadline also covers provider startup/cleanup.
-pub fn refresh_agent_plan_usage(provider: AgentProvider) -> Result<ProviderPlanUsage> {
-    let script = locate_usage_script()?;
+pub fn refresh_agent_plan_usage(provider: AgentProvider) -> ProviderUsageResult {
     let cwd = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"));
-    let agent = super::installed_agents::InstalledAgent::resolve(provider.id(), &cwd)?;
+    let Ok(agent) = super::installed_agents::InstalledAgent::resolve(provider.id(), &cwd) else {
+        return ProviderUsageResult::NotInstalled;
+    };
+    match query_plan_usage(provider, &agent) {
+        Ok(usage) => ProviderUsageResult::Ready(usage),
+        Err(_) => ProviderUsageResult::Unavailable,
+    }
+}
+
+pub enum ProviderUsageResult {
+    NotInstalled,
+    Ready(ProviderPlanUsage),
+    Unavailable,
+}
+
+fn query_plan_usage(
+    provider: AgentProvider,
+    agent: &super::installed_agents::InstalledAgent,
+) -> Result<ProviderPlanUsage> {
+    let script = locate_usage_script()?;
     let mut command = Command::new(locate_node_binary());
     agent.configure_sidecar(&mut command);
     command

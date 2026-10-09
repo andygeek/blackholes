@@ -326,7 +326,19 @@ fn initial_agent_command(
     if skip_permissions && let Some(flag) = permission_bypass_flag(descriptor.agent) {
         args.push(flag.into());
     }
+    if let Some(model) = descriptor.model.as_deref()
+        && let Some(flag) = model_flag(descriptor.agent)
+    {
+        args.extend([flag.into(), model.into()]);
+    }
     Some((program, args))
+}
+
+fn model_flag(agent: AgentKind) -> Option<&'static str> {
+    match agent {
+        AgentKind::Codex | AgentKind::Claude | AgentKind::Gemini | AgentKind::OpenCode => Some("--model"),
+        AgentKind::Shell | AgentKind::Antigravity => None,
+    }
 }
 
 fn permission_bypass_flag(agent: AgentKind) -> Option<&'static str> {
@@ -423,8 +435,29 @@ mod tests {
             codex_session: None,
             claude_session: None,
             agent_config_dir: None,
+            model: None,
             created_at: chrono::Utc::now(),
         }
+    }
+
+    #[test]
+    fn requested_model_is_passed_on_launch_and_resume() {
+        for agent in [AgentKind::Claude, AgentKind::Codex, AgentKind::Gemini, AgentKind::OpenCode] {
+            let mut terminal = descriptor(agent);
+            terminal.model = Some("some-model".into());
+            let (_, args) = prompted_agent_command(&terminal, true, "brief").unwrap();
+            let model = args.iter().position(|arg| arg == "--model").unwrap();
+            assert_eq!(args[model + 1], "some-model");
+            // Provider options must precede the prompt.
+            assert!(model + 1 < args.iter().rposition(|arg| arg == "brief").unwrap());
+        }
+        let mut terminal = descriptor(AgentKind::Claude);
+        terminal.model = Some("claude-opus-5-5".into());
+        terminal.claude_session = Some(ClaudeSession { id: "saved-session-id".into(), profile: ClaudeProfile::Default });
+        let (_, args) = initial_agent_command(&terminal, false).unwrap();
+        assert!(args.ends_with(&["--resume".into(), "saved-session-id".into(), "--model".into(), "claude-opus-5-5".into()]));
+        terminal.agent = AgentKind::Shell;
+        assert!(initial_agent_command(&terminal, false).is_none());
     }
 
     #[test]

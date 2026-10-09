@@ -20,6 +20,7 @@ use std::{cell::Cell, rc::Rc};
 #[derive(Clone)]
 pub(super) struct ComputerPlanUsage {
     pub provider: AgentProvider,
+    pub installed: bool,
     pub usage: Option<ProviderPlanUsage>,
     pub refreshing: bool,
     pub failed: bool,
@@ -30,6 +31,7 @@ impl ComputerPlanUsage {
     pub fn new(provider: AgentProvider) -> Self {
         Self {
             provider,
+            installed: false,
             usage: None,
             refreshing: false,
             failed: false,
@@ -573,6 +575,7 @@ pub(super) fn render(
         AppTheme::Light => (rgb(0xf0f2f6), rgb(0xd9dee8)),
     };
     let refreshing = states.iter().any(|state| state.refreshing);
+    let has_providers = states.iter().any(|state| state.installed);
     let on_open: OpenDetails = Rc::new(on_open);
     let memory = memory_bytes
         .map(|bytes| format!("{:.1} MB", bytes as f64 / 1_000_000.))
@@ -597,9 +600,10 @@ pub(super) fn render(
                 .children(
                     states
                         .iter()
+                        .filter(|state| state.installed)
                         .map(|state| provider_item(state, language, theme, on_open.clone())),
                 )
-                .child(
+                .when(has_providers, |this| this.child(
                     Button::new("refresh-computer-usage")
                         .icon(AppIcon::RefreshCw)
                         .loading_icon(Icon::new(AppIcon::RefreshCw).text_color(muted(theme)))
@@ -614,7 +618,7 @@ pub(super) fn render(
                             "Actualizar el uso de las cuentas locales de Codex y Claude",
                         ))
                         .on_click(on_refresh),
-                ),
+                )),
         )
         .child(div().flex_1())
         .child(

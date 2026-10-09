@@ -23,14 +23,25 @@ mounted, and the grid reallocates its space to the remaining open section.
 The toggle buttons expose `aria-expanded` and `aria-controls`; section folding
 does not change the expanded project/task IDs or stop terminal sessions.
 
-The GPUI title bar shows the installed version and the update action outside all
+The GPUI title bar shows the installed version, a release-notes icon, and the update action outside all
 WebViews, including settings. `src/services/updater.rs` connects to the native
 Sparkle delegate in `native/updater.m`; React never downloads or installs an
 executable. See [Releasing and updates](RELEASING.md).
 
+`workspace/ReleaseNotes.tsx` renders bundled Markdown for the current version,
+with headings, paragraphs, lists, bold text, and inline code. The full workspace
+surface is shown before other content until closed, with navigation and native
+terminal rendering hidden. Closing sends `close_release_notes`; Rust saves
+`last_seen_release_version` and restores the current view. Background surface
+updates cannot replace the notes while they are open. Existing terminals keep
+running. The notes use the same theme and language as the application.
+
 The native bottom bar (`src/ui/usage_bar.rs`) is also outside the WebViews.
 It displays local Claude/Codex account limits through independent background
-queries at startup and on manual refresh. Reset countdowns update locally each
+queries at startup, every 10 minutes, and on manual refresh. Missing CLIs are
+hidden independently, including the refresh control when both are absent.
+Checks do not overlap for a provider, retain the last report on query failure,
+and detect installations/removals on subsequent refreshes. Reset countdowns update locally each
 minute. Its height is reserved by the root layout, so it does not cover terminal
 rows or React content. The inline value prefers a valid general five-hour limit,
 then weekly, then another reported limit, always using its actual label.

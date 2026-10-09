@@ -878,3 +878,39 @@
 .task-session-list .terminal-provider--claude { color: #d97757; }
 :root[data-theme="light"] .task-session-list .provider-logo-light { display: block; }
 :root[data-theme="light"] .task-session-list .provider-logo-dark { display: none; }
+
+.release-notes {
+  height: 100%;
+  overflow: auto;
+  background: var(--background);
+  color: var(--text, #e5e9f0);
+}
+.release-notes-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border, #252a33);
+}
+.release-notes-header > span { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 600; }
+.release-notes-header b { margin-left: 4px; color: var(--muted, #8e97aa); font-size: 11px; font-weight: 400; }
+.release-notes-close { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; }
+.release-notes-close:hover { background: var(--surface); }
+.release-notes-close:focus-visible { outline: 2px solid #729dff; outline-offset: 2px; }
+.release-notes-content { width: min(760px, 100%); margin: 0 auto; padding: 48px 32px 56px; box-sizing: border-box; }
+.release-notes-emblem { display: grid; width: 56px; height: 56px; place-items: center; margin-bottom: 24px; border: 1px solid #729dff45; border-radius: 16px; color: #729dff; background: #729dff12; }
+.release-notes-content h1 { margin: 0 0 12px; font-size: clamp(23px, 4vw, 32px); line-height: 1.2; letter-spacing: -.8px; }
+.release-notes-version { display: inline-block; padding: 4px 9px; border: 1px solid var(--border, #252a33); border-radius: 6px; color: var(--muted, #8e97aa); font-size: 11px; }
+.release-notes-body { margin-top: 28px; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
+.release-notes-body > p:first-child { color: var(--muted, #8e97aa); font-size: 15px; }
+.release-notes-body h2 { margin: 32px 0 12px; font-size: 15px; line-height: 1.4; }
+.release-notes-body p { margin: 12px 0; }
+.release-notes-body ul { display: grid; gap: 12px; margin: 12px 0; padding-left: 20px; }
+.release-notes-body li::marker { color: #729dff; }
+.release-notes-body code { padding: 2px 5px; border-radius: 4px; background: var(--surface); font-size: 11px; }
+.release-notes-hint { margin: 36px 0 0; padding-top: 20px; border-top: 1px solid var(--border, #252a33); color: var(--muted, #8e97aa); font-size: 11px; line-height: 1.6; }
+@media (max-width: 520px) { .release-notes-content { padding: 28px 20px 36px; } .release-notes-header { padding: 12px 16px; } }

@@ -12,7 +12,23 @@ Sign in through each provider's CLI. New terminal sessions inherit the computer'
 CLI account and profile environment; Blackholes has no separate account login or
 provider selector in Settings. Saved sessions retain their previous profile,
 including legacy isolated Blackholes profiles. Existing profile files are preserved.
-Claude and Codex plan limits are available in the bottom usage bar.
+Claude and Codex plan limits are available in the bottom usage bar only for
+installed providers. Reports refresh on startup, every 10 minutes while the app
+is running, and with the refresh button. Each query runs independently in the
+background with a time limit. Temporary failures retain the last report, marked
+with an asterisk, without a blocking dialog. Open its details to see the last
+successful refresh time. Installing or removing a CLI is detected on the next
+refresh; if neither is installed, both meters and their refresh button are hidden.
+
+## Release notes
+
+The first launch of each version opens its release notes on the main screen.
+Use the **X** at the upper right to close them and return to your workspace;
+the dismissal is saved for that version. The small rocket icon beside the
+version opens them again at any time. Notes are bundled in English and Spanish,
+follow the selected application language, and work without an internet connection.
+
+## Setup and local tools
 
 Settings contains **General** for appearance, language, and the projects folder,
 and **MCP servers** for connecting terminal agents to Blackholes. Agent permissions
@@ -23,8 +39,9 @@ usage queries resolve the installed executable
 using that shell's PATH, including shell-configured Homebrew and version managers.
 Conventional user installation directories are fallback search locations. The
 lookup runs off the UI thread and is bounded; shell functions and aliases remain
-terminal features. A missing CLI produces an installation message, without
-downloading a replacement. Updating a CLI takes effect on its next launch;
+terminal features. Launching a missing CLI produces an installation message,
+without downloading a replacement; account-usage checks silently hide it.
+Updating a CLI takes effect on its next launch;
 already-running sessions keep their current executable.
 
 Packaged apps retain a private Node.js engine for provider account usage queries.
@@ -266,10 +283,10 @@ settings. It shows Claude and Codex plan usage from the computer's local CLI
 accounts, honoring their normal profile environment. It does not query legacy
 isolated Blackholes profiles used by previously saved sessions.
 
-Both providers load on app startup. The refresh button queries both again in
-parallel and remains disabled while a refresh is running. These metadata queries
-do not submit prompts or generate model responses. No periodic provider requests
-are made; reset countdowns update locally each minute.
+Installed providers load on app startup and refresh every 10 minutes. The refresh
+button queries them again in parallel and remains disabled while a refresh is
+running. A provider's queries never overlap. These metadata queries do not submit
+prompts or generate model responses; reset countdowns update locally each minute.
 
 The bottom bar prefers the general **5-hour** allowance, then the **weekly**
 allowance, then another available limit. Its label always identifies the actual
@@ -280,13 +297,14 @@ reset countdowns, exact local reset times, and the last update. Unreported
 windows are omitted, and the panel opens at a size based on its visible limits.
 Escape, the close button, clicking outside, or moving/resizing the main window
 dismisses it.
-The refresh button sits immediately after the two providers. Its arrow icon
+The refresh button sits immediately after the visible providers. Its arrow icon
 stays visible and rotates while either query is running; repeated clicks are
 disabled until both finish.
 
 A passed reset deadline asks for a refresh; it does not assume usage is zero.
-Missing CLIs, authentication failures, and accounts without reported limits show
-**Unavailable**. Failed refreshes retain the last report, marked with an asterisk
+Missing CLIs are hidden. Installed CLIs with authentication failures or accounts
+without reported limits show **Unavailable** when no prior report is available.
+Failed refreshes retain the last report, marked with an asterisk
 in the bar and an explanation in the panel.
 
 The right side shows the number of open terminal panes and the resident memory
