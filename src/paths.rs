@@ -15,6 +15,14 @@ pub struct AppPaths {
 }
 
 impl AppPaths {
+    /// Hooks only send an event. They must not create/migrate app state or
+    /// open a database while a provider is starting or submitting a prompt.
+    pub fn events_socket_path() -> Result<PathBuf> {
+        let project_dirs = ProjectDirs::from("dev", "blackholes", "Blackholes Rust")
+            .context("Unable to resolve the Application Support directory")?;
+        Ok(project_dirs.data_dir().join("blackholes-events.sock"))
+    }
+
     pub fn discover() -> Result<Self> {
         let project_dirs = ProjectDirs::from("dev", "blackholes", "Blackholes Rust")
             .context("Unable to resolve the macOS Application Support directory")?;

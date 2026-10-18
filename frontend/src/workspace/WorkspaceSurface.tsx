@@ -360,8 +360,8 @@ function SettingsView({ data }: { data: SettingsData }) {
       content: <>
         <PreferenceGroup title={t(language, "Blackholes in your terminal agents", "Blackholes en tus agentes de terminal")}>
           <PreferenceRow title={t(language, "Automatic connection", "Conexión automática")} description={t(language,
-            "Let Codex and Claude Code manage projects and tasks in Blackholes. The connection is prepared automatically when the app opens. Start a new agent session to use it.",
-            "Permite que Codex y Claude Code gestionen proyectos y tareas en Blackholes. La conexión se prepara automáticamente al abrir la app. Inicia una nueva sesión del agente para usarla.")}>
+            "Let Codex and Claude Code manage projects and worktree groups in Blackholes. The connection is prepared automatically when the app opens. Start a new agent session to use it.",
+            "Permite que Codex y Claude Code gestionen proyectos y grupos de worktrees en Blackholes. La conexión se prepara automáticamente al abrir la app. Inicia una nueva sesión del agente para usarla.")}>
             <button type="button" className="workspace-button" disabled={data.external_integrations?.running}
               onClick={() => postNative({ type: "refresh_external_integrations" })}>
               <RefreshCw size={14} />{data.external_integrations?.running ? t(language, "Preparing…", "Preparando…") : t(language, "Refresh connection", "Actualizar conexión")}
@@ -542,7 +542,7 @@ function ProjectSettingsView({ data }: { data: ProjectSettingsData }) {
         {activeTab === "terminals" && (
           <div className="settings-tab-panel">
             <SettingsSection wide title={t(language, "Agent permissions", "Permisos de agentes")}
-              description={t(language, "For terminal agents launched or restored in this project and its tasks, including parallel launches through MCP.", "Para los agentes de terminal que se inician o restauran en este proyecto y sus tareas, incluidos los inicios en paralelo por MCP.")}>
+              description={t(language, "For terminal agents launched or restored in this project and its worktree groups, including parallel launches through MCP.", "Para los agentes de terminal que se inician o restauran en este proyecto y sus grupos de worktrees, incluidos los inicios en paralelo por MCP.")}>
               <label className="project-terminal-permissions">
                 <input type="checkbox" checked={Boolean(data.terminal_skip_permissions)}
                   aria-describedby="terminal-permissions-description"
@@ -589,11 +589,11 @@ function ProjectSettingsView({ data }: { data: ProjectSettingsData }) {
 
         <SettingsSection
           wide
-          title={t(language, "CLAUDE.MD FOR TASKS", "CLAUDE.MD PARA TAREAS")}
+          title={t(language, "CLAUDE.MD FOR WORKTREE GROUPS", "CLAUDE.MD PARA GRUPOS DE WORKTREES")}
           description={t(
             language,
-            "This shared template is added to every new task and reapplied to existing tasks whenever it is saved.",
-            "Esta plantilla compartida se agrega a cada tarea nueva y se vuelve a aplicar a las tareas existentes cada vez que se guarda.",
+            "This shared template is added to every new worktree group and reapplied to existing worktree groups whenever it is saved.",
+            "Esta plantilla compartida se agrega a cada grupo de worktrees nuevo y se vuelve a aplicar a los grupos de worktrees existentes cada vez que se guarda.",
           )}
         >
           <ProjectInstructionsEditor
@@ -620,7 +620,7 @@ function FileEditor({ editor, language, theme, root }: { editor: EditorData; lan
       {editor.source !== "repository" && editor.workspace_id && (
         <nav className="instructions-tabs">
           <button className={editor.source === "project-instructions" ? "is-selected" : ""} onClick={() => postNative({ type: "open_project_instructions", workspace_id: editor.workspace_id })}>{t(language, "Project CLAUDE.md", "CLAUDE.md del proyecto")}</button>
-          <button className={editor.source === "task-instructions" ? "is-selected" : ""} onClick={() => postNative({ type: "open_project_task_instructions", workspace_id: editor.workspace_id })}>{t(language, "Task CLAUDE.md", "CLAUDE.md de tareas")}</button>
+          <button className={editor.source === "task-instructions" ? "is-selected" : ""} onClick={() => postNative({ type: "open_project_task_instructions", workspace_id: editor.workspace_id })}>{t(language, "Worktree Group CLAUDE.md", "CLAUDE.md de grupos de worktrees")}</button>
         </nav>
       )}
       <header className="document-header"><File size={16} /><div><strong>{editor.file_name}</strong><span>{editor.relative_path}</span></div><span className={`save-state is-${editor.save_state}`}>{saveStateLabel(editor.save_state, language)}</span><button type="button" className="workspace-button" onClick={() => postNative({ type: "save_active_file" })}><Save size={13} />{t(language, "Save", "Guardar")}</button><button type="button" className="workspace-icon-button" onClick={() => postNative({ type: "close_file_editor" })}><X size={15} /></button></header>
@@ -695,7 +695,7 @@ export function WorkspaceSurface({ event }: { event: WorkspaceSurfaceEvent }) {
       <img className="home-welcome-logo" src={document.getElementById("root")?.dataset.appLogo} alt="Blackholes" width={112} height={112} draggable={false} />
       <p>{data.description}</p>
       <ul className="home-welcome-shortcuts" aria-label={t(language, "Keyboard shortcuts", "Atajos de teclado")}>
-        <li><kbd>⌘O</kbd><span>{t(language, "Search projects, tasks, agents and terminals", "Buscar proyectos, tareas, agentes y terminales")}</span></li>
+        <li><kbd>⌘O</kbd><span>{t(language, "Search projects, worktree groups, agents and terminals", "Buscar proyectos, grupos de worktrees, agentes y terminales")}</span></li>
         <li><kbd>⌘P</kbd><span>{t(language, "Search files in the selected repository", "Buscar archivos del repositorio seleccionado")}</span></li>
       </ul>
     </div></div></main>;

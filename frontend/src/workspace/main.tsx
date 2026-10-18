@@ -1,5 +1,5 @@
 import { receiveSourceControlResult } from "./SourceChanges";
-import { receiveTaskDetailsSave } from "./TaskDetails";
+import { receiveTaskDetailsSave, requestTaskDetailsEdit } from "./TaskDetails";
 import { StrictMode, useEffect, useLayoutEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { postNative } from "../shared/native";
@@ -58,6 +58,9 @@ function WorkspaceApp() {
         }
         case "source_control_result":
           receiveSourceControlResult(raw as Parameters<typeof receiveSourceControlResult>[0]);
+          break;
+        case "task_details_edit":
+          requestTaskDetailsEdit((raw as { task_id: string }).task_id);
           break;
         case "task_details_saved":
           receiveTaskDetailsSave(raw as Parameters<typeof receiveTaskDetailsSave>[0]);

@@ -106,15 +106,19 @@ impl TerminalService {
         let shell = super::installed_agents::login_shell();
         let mut command = CommandBuilder::new(&shell);
         command.arg("-l");
-        if let TerminalStartup::Prompt(prompt) = startup {
-            let (program, mut args) = prompted_agent_command(descriptor, skip_agent_permissions, prompt)?;
-            configure_task_mcp(descriptor, &mut args, &mut command)?;
-            // Pass the brief as a process argument, not keystrokes: long/multiline
-            // prompts must not hit the PTY line limit or shell-startup timing races.
+        let agent_command = match startup {
+            TerminalStartup::Default => initial_agent_command(descriptor, skip_agent_permissions),
+            TerminalStartup::Prompt(prompt) => Some(prompted_agent_command(descriptor, skip_agent_permissions, prompt)?),
+            TerminalStartup::Command(_) => None,
+        };
+        if let Some((program, mut args)) = agent_command {
+            configure_agent_mcp(descriptor, &mut args, &mut command,
+                matches!(startup, TerminalStartup::Prompt(_)))?;
+            // Use shell arguments for every agent launch, including resumed
+            // sessions. PTY input can be consumed by shell startup scripts and
+            // long MCP settings can exceed the terminal's canonical line limit.
             command.arg("-i");
             command.arg("-c");
-            // Resolve the CLI after interactive login startup, exactly as when
-            // typing its name manually. Never pin tasks to an app-owned binary.
             command.arg(format!("{}; exec {} -l", render_command(program, &args).trim_end_matches('\r'), shell_quote(&shell)));
         }
         command.cwd(&descriptor.cwd);
@@ -177,16 +181,7 @@ impl TerminalService {
             .context("could not open terminal input")?;
 
         match startup {
-            TerminalStartup::Default => {
-                if let Some((program, args)) = initial_agent_command(descriptor, skip_agent_permissions) {
-                    let initial_command = render_command(program, &args);
-                    writer
-                        .write_all(initial_command.as_bytes())
-                        .context("could not launch the selected coding agent")?;
-                    writer.flush().ok();
-                }
-            }
-            // Typed like the agent CLIs above, so the command stays in the shell's
+            // Plain shell commands stay in the shell's
             // history and Ctrl-C returns to a usable prompt.
             TerminalStartup::Command(command) => {
                 writer
@@ -194,7 +189,7 @@ impl TerminalService {
                     .context("could not run the startup command")?;
                 writer.flush().ok();
             }
-            TerminalStartup::Prompt(_) => {}
+            TerminalStartup::Default | TerminalStartup::Prompt(_) => {}
         }
 
         Ok(SpawnedTerminal {
@@ -245,10 +240,11 @@ fn prompted_agent_command(
     Ok((program, args))
 }
 
-fn configure_task_mcp(
+fn configure_agent_mcp(
     descriptor: &TerminalDescriptor,
     args: &mut Vec<String>,
     command: &mut CommandBuilder,
+    managed_task_launch: bool,
 ) -> Result<()> {
     let executable = env::current_exe().context("Could not locate the Blackholes MCP executable")?;
     let environment = serde_json::json!({
@@ -267,14 +263,14 @@ fn configure_task_mcp(
                 .map(|(key, value)| format!("{key} = {value}"))
                 .collect::<Vec<_>>().join(", ");
             options.extend(["-c".into(), format!(
-                "mcp_servers.blackholes={{ command = {}, args = [\"mcp\"], env = {{ {env} }}, enabled = true }}",
+                "mcp_servers.blackholes={{ command = {}, args = [\"mcp\"], env = {{ {env} }}, enabled = true, startup_timeout_sec = 10, tool_timeout_sec = 610 }}",
                 serde_json::to_string(&executable)?,
             )]);
         }
         AgentKind::Claude => options.extend([
             "--mcp-config".into(), serde_json::json!({ "mcpServers": { "blackholes": server } }).to_string(),
         ]),
-        AgentKind::Gemini => {
+        AgentKind::Gemini if managed_task_launch => {
             // Gemini uses workspace settings. Only add our server in the managed
             // task container, preserving any other settings and provider permissions.
             let directory = descriptor.cwd.join(".gemini");

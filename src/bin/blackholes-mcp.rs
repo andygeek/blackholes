@@ -25,6 +25,8 @@ use std::{
 };
 use uuid::Uuid;
 
+const SERVER_INSTRUCTIONS: &str = "Blackholes manages local projects and Worktree Groups. A Worktree Group contains one or more repository worktrees/branches, agent sessions and current context. Use this MCP for Blackholes project/group/repository/worktree orchestration before filesystem discovery or Computer Use; never use Computer Use for an operation exposed here. Work directly in the user's selected checkout when requested; do not create a group or delegate unless explicitly requested. Resolve names with search tools before asking for IDs. Project creation with only a name needs no path/technology question: create_project prepares the container and repository. Linking existing repositories preserves their location and changes. Direct project work is valid; inside a Worktree Group change only its attached writable worktrees, treating source repositories as read-only context. Preserve user constraints, instructions and unrelated work. create_worktree_group defaults startAgent:true with the calling provider and project permission setting; include all user constraints in agentPrompt/description. For planning/backlog or explicit no-execution use startAgent:false. For an authorized batch create groups with startAgent:false, then start_worktree_group_agents with groups:[{groupId,prompt}]. Inspect every agentLaunch/result: retry failed launches on the existing group; never recreate it or duplicate successful launches. The receiving agent implements directly without redelegating. Progress/results appear in terminals; no completion notification is required. Read get_worktree_group before edits. description is a living document: begin with a short summary paragraph (320 characters shown), preserve requirements/constraints/essential decisions/unresolved work, and replace stale content after meaningful changes and before finishing. NEVER append dated progress entries, a changelog, action history or a journal. Maintain multiple PR/context URLs in links:[{url,label,kind:pull_request|context}]; links replaces the complete collection, so preserve relevant sources. Use update_worktree_group, not legacy note append tools. Omitted fields stay unchanged; description:null clears context and links:[] clears links. Pass detailsRevision as expectedRevision; on conflict reread and reconcile rather than overwriting another agent. Context Markdown/manifest files are generated. baseBranch selects the base for missing branches; existing branches are reused unchanged. Use add_worktree_group_repositories/remove_worktree_group_repositories to change attached repositories. close_worktree_groups accepts 1-32 groupIds; close_worktree_group accepts groupId. Both require confirm:true and the updated running desktop app. Restored/exited tabs without live processes close automatically and return Claude/Codex session IDs. Live terminals default to fail; close_idle permits idle/attention terminals and close_all permits working terminals. Closure sends SIGHUP to owned process groups, then SIGKILL after 3 seconds if needed. The calling terminal/group is protected when identifiable by environment, cwd or PID ancestry; externally detached clients may not expose their true caller. uncommittedChanges and extraFiles default to fail; explicitly choose discard to remove them. Managed worktrees/group directories are removed and origins pruned; branches survive unless deleteBranches:true. Inspect per-group deleted/blocked results, reasons and partial cleanup; one blocked group never stops the batch. bytesFreed is estimated allocated bytes. open_project_terminal opens a plain project/repository shell without a group, optionally typing one command; each call opens a new terminal so do not retry a started launch. Navigation open_worktree_group/open_project only when the user asks to open/show/go to them, never to announce work. Legacy task-named tools remain callable for compatibility but new clients should use Worktree Group tools.";
+
 fn main() -> Result<()> {
     run()
 }
@@ -83,7 +85,7 @@ impl McpServer {
                     .unwrap_or("2025-06-18"),
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "blackholes-rust", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Blackholes is a local project and task manager exposed through this MCP. Whenever the user says \"in Blackholes\" or asks Blackholes to create or manage a project, repository, task, branch, worktree, note, terminal agent launch, navigation, or notification, use this MCP before filesystem, browser, or Computer Use tools. Never use Computer Use for an operation exposed by this server. When the user asks to create a project and provides only its name, call create_project with that name immediately; do not ask for a path or technology because the tool prepares the project container, Git repository, initial commit, and managed context automatically. When the user explicitly provides an existing local path, pass it to create_project to link its repositories to a new project container. Local sources stay in place, including pending changes and local environments. Linking does not edit files, but subsequent project work changes the originals. Agents may inspect, review, edit, build, and test directly in the intended project repositories; tasks, isolated worktrees, and delegation are optional, not prerequisites. Resolve the intended project and repositories, respect user-authored project instructions and selected permissions, and preserve unrelated changes. Use isolated tasks when the user requests them, selects an existing task, or their project instructions require that workflow. Creating implementation tasks launches visible terminal agents automatically: create_task defaults startAgent to true, detects the calling provider, and applies the project permission setting. Include user constraints in agentPrompt or the task description. To prepare a whole batch first, pass startAgent:false to every create_task, then call start_task_agents once with all taskIds and briefs. Do not ask for redundant delegation approval. For planning-only requests, backlog preparation, or explicit instructions not to start, pass startAgent:false and do not call start_task_agents. Ask only when the requested work or destination is unclear. The receiving task agent implements directly without recreating the task or handing it back. Honor explicit requests to work here or not delegate. Do not require an isolation opt-out. When working in a task, change its attached worktrees rather than original checkouts. Use search tools before asking for IDs. Read details before mutations. Task description is the objective; acceptanceCriteria, pullRequestUrl and externalTaskUrl are editable via create_task and update_task. Prefer update_task to legacy notes. Omitted fields remain unchanged and null clears optional fields. Use detailsRevision from get_task as expectedRevision when editing a snapshot. When a task must start from a specific base, such as a repository whose task branch does not exist yet, pass baseBranch to create_task or add_task_repositories instead of relying on whatever branch the repository has checked out. remove_task_repositories undoes a wrong add: it deletes those worktrees and keeps their branches unless deleteBranch is true. delete_task is destructive and requires explicit confirmation; it refuses active terminals or uncommitted worktree changes. Terminal agents launched with start_task_agents show progress and results in their terminals; do not require completion notifications. To open a plain terminal in a project or repository without a task, for example to run a local dev server, call open_project_terminal with the command; do not create a task for it. When the user asks to open, go to, or show a Blackholes task or project, call open_task or open_project; the app opens the requested project or task. Never use these navigation tools merely to announce work."
+                "instructions": SERVER_INSTRUCTIONS
                 }))
             },
             "ping" => Ok(json!({})),
@@ -107,13 +109,31 @@ impl McpServer {
     }
 
     fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<Value> {
+        // Canonical product vocabulary. Older clients keep their original
+        // tool names, argument names and result shapes until they reconnect.
+        if let Some(legacy) = GROUP_TOOL_NAMES.iter().find(|(canonical, _)| *canonical == name).map(|(_, legacy)| *legacy) {
+            let mut arguments = arguments.clone();
+            reject_mixed_group_keys(&arguments)?;
+            rename_group_keys(&mut arguments, false, false);
+            if legacy == "update_task" && arguments.get("description").is_some() {
+                arguments["acceptanceCriteria"] = Value::Null;
+            }
+            let mut result = self.call_tool(legacy, &arguments)?;
+            canonical_group_documents(&mut result);
+            rename_group_keys(&mut result, true, false);
+            return Ok(result);
+        }
         match name {
             "get_current_context" => self.get_current_context(arguments).map(|mut context| {
                 context["callerAgent"] = json!(self.calling_agent());
+                if let Some(mut task) = context.get("task").cloned() {
+                    canonical_group_documents(&mut task);
+                    context["worktreeGroup"] = task;
+                }
                 context
             }),
             "search_projects" => self.search_projects(arguments),
-            "list_projects" => Ok(serde_json::to_value(self.database.workspaces()?)?),
+            "list_projects" => Ok(json!({ "projects": self.database.workspaces()? })),
             "get_project" => self.get_project(arguments),
             "create_project" => self.create_project(arguments),
             "import_project" => self.import_project(arguments),
@@ -128,6 +148,7 @@ impl McpServer {
             "create_task" => self.create_task(arguments),
             "update_task" => self.update_task(arguments),
             "delete_task" => self.delete_task(arguments),
+            "close_tasks" => self.close_tasks(arguments, false),
             "add_task_repositories" => self.add_task_repositories(arguments),
             "remove_task_repositories" => self.remove_task_repositories(arguments),
             "get_project_note" => self.get_project_note(arguments),
@@ -160,7 +181,7 @@ impl McpServer {
                     return Ok(json!({
                         "kind": "task-repository",
                         "cwd": cwd,
-                        "task": task,
+                        "task": group_value(&task),
                         "detailsRevision": blackholes_rust::services::task_details::revision(task),
                         "repositoryId": repository.repository_id,
                         "writableRoot": repository.worktree_path,
@@ -171,7 +192,7 @@ impl McpServer {
                 return Ok(json!({
                     "kind": "task",
                     "cwd": cwd,
-                    "task": task,
+                    "task": group_value(&task),
                         "detailsRevision": blackholes_rust::services::task_details::revision(task),
                     "writableRoot": task.worktree_root_path,
                 }));
@@ -274,7 +295,8 @@ impl McpServer {
                 "fileName": PROJECT_NOTE_FILE_NAME,
                 "content": note,
             },
-            "tasks": tasks,
+            "tasks": tasks.iter().map(group_value).collect::<Vec<_>>(),
+            "worktreeGroups": tasks.iter().map(|task| { let mut value = group_value(task); canonical_group_documents(&mut value); value }).collect::<Vec<_>>(),
         }))
     }
 
@@ -492,8 +514,9 @@ impl McpServer {
                         })
                     })
             });
+            let links_match = blackholes_rust::services::task_details::links(&task).iter().any(|link| link.url.to_lowercase().contains(&query) || link.label.as_deref().is_some_and(|label| label.to_lowercase().contains(&query)));
             let details_match = [task.acceptance_criteria.as_deref(), task.pull_request_url.as_deref(), task.external_task_url.as_deref()].into_iter().flatten().any(|value|value.to_lowercase().contains(&query));
-            let task_matches = details_match || task.title.to_lowercase().contains(&query)
+            let task_matches = links_match || details_match || task.title.to_lowercase().contains(&query)
                 || task
                     .description
                     .as_deref()
@@ -502,7 +525,7 @@ impl McpServer {
                 || repository_matches;
             if task_matches {
                 matches.push(json!({
-                    "task": task,
+                    "task": group_value(&task),
                     "project": project,
                     "noteExcerpt": excerpt(&note, 500),
                 }));
@@ -516,11 +539,12 @@ impl McpServer {
     }
 
     fn list_tasks(&self, arguments: &Value) -> Result<Value> {
-        if let Some(project_id) = optional_uuid(arguments, "projectId")? {
-            Ok(serde_json::to_value(self.database.tasks(project_id)?)?)
+        let tasks = if let Some(project_id) = optional_uuid(arguments, "projectId")? {
+            self.database.tasks(project_id)?
         } else {
-            Ok(serde_json::to_value(self.database.all_tasks()?)?)
-        }
+            self.database.all_tasks()?
+        };
+        Ok(json!({ "tasks": tasks.iter().map(group_value).collect::<Vec<_>>() }))
     }
 
     fn get_task(&self, arguments: &Value) -> Result<Value> {
@@ -542,7 +566,8 @@ impl McpServer {
             })
             .collect::<Vec<_>>();
         Ok(json!({
-            "task": task,
+            "task": group_value(&task),
+            "details": blackholes_rust::services::task_details::metadata(task),
             "detailsRevision": blackholes_rust::services::task_details::revision(task),
             "detailsFileName": blackholes_rust::services::task_details::DETAILS_FILE_NAME,
             "project": project,
@@ -678,6 +703,7 @@ impl McpServer {
         let mut task = TaskService::new(&self.paths).create(
             &project,
             CreateTaskRequest {
+                links: serde_json::from_value(arguments.get("links").cloned().unwrap_or_else(|| json!([])))?,
                 acceptance_criteria: arguments.get("acceptanceCriteria").and_then(Value::as_str).map(str::to_string),
                 pull_request_url: arguments.get("pullRequestUrl").and_then(Value::as_str).map(str::to_string),
                 external_task_url: arguments.get("externalTaskUrl").and_then(Value::as_str).map(str::to_string),
@@ -712,7 +738,7 @@ impl McpServer {
         }
         self.notify_app("reload");
         launch_task.task_id = task.id;
-        let mut response = serde_json::to_value(task)?;
+        let mut response = group_value(&task);
         response["agentStartRequested"] = start_agent.into();
         if start_agent {
             // Creation succeeded even if the app/CLI cannot launch. Return both
@@ -732,30 +758,46 @@ impl McpServer {
         let patch = serde_json::from_value::<blackholes_rust::services::task_details::TaskDetailsPatch>(Value::Object(fields))?;
         let task = blackholes_rust::services::task_details::update(&self.database, &project, &TaskService::new(&self.paths), task_id, &patch)?;
         self.notify_app("reload");
-        let mut result = serde_json::to_value(&task)?;
+        let mut result = group_value(&task);
         result["detailsRevision"] = blackholes_rust::services::task_details::revision(&task).into();
         Ok(result)
     }
 
     fn delete_task(&self, arguments: &Value) -> Result<Value> {
-        let task_id = required_uuid(arguments, "taskId")?;
-        if !arguments
-            .get("confirm")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            bail!("delete_task requires confirm=true")
+        self.close_tasks(arguments, true)
+    }
+
+    fn close_tasks(&self, arguments: &Value, single: bool) -> Result<Value> {
+        use blackholes_rust::services::tasks::closure::{CallerContext, CloseOptions, CloseTasksRequest};
+        let task_ids = if single { vec![required_uuid(arguments, "taskId")?] }
+            else { optional_uuid_list(arguments, "taskIds")? };
+        let mut options = serde_json::Map::new();
+        for key in ["terminals", "uncommittedChanges", "extraFiles", "deleteBranches"] {
+            if let Some(value) = arguments.get(key) { options.insert(key.into(), value.clone()); }
         }
-        let task = find_task(&self.database.all_tasks()?, task_id)?.clone();
-        TaskService::new(&self.paths).remove(&task)?;
-        self.database.remove_task(task_id)?;
-        self.notify_app("reload");
-        Ok(json!({
-            "taskId": task_id,
-            "title": task.title,
-            "deleted": true,
-            "branchesPreserved": true,
-        }))
+        let request = CloseTasksRequest {
+            task_ids,
+            confirm: arguments.get("confirm").and_then(Value::as_bool).unwrap_or(false),
+            options: serde_json::from_value::<CloseOptions>(Value::Object(options))?,
+            caller: CallerContext::current(),
+        };
+        request.validate()?;
+        // The app owns live PTYs and session persistence. A database/session-file
+        // snapshot cannot prove that an agent is idle, exited or restored.
+        let response = blackholes_rust::services::agent_commands::send_with_timeout(
+            &self.paths, &format!("close-tasks:{}", serde_json::to_string(&request)?),
+            std::time::Duration::from_secs(610),
+        )?;
+        if single {
+            let mut result = response.pointer("/results/0").cloned().context("Missing task closure result")?;
+            result["deleted"] = json!(result["status"] == "deleted");
+            result["branchesPreserved"] = json!(!result["removedWorktrees"].as_array().is_some_and(|items|
+                items.iter().any(|item| item["branchDeleted"] == true)));
+            result["persistenceError"] = response["persistenceError"].clone();
+            Ok(result)
+        } else {
+            Ok(response)
+        }
     }
 
     fn add_task_repositories(&self, arguments: &Value) -> Result<Value> {
@@ -860,7 +902,7 @@ impl McpServer {
         self.database.upsert_task(&task)?;
         self.notify_app("reload");
         Ok(json!({
-            "task": task,
+            "task": group_value(&task),
             "removed": removed,
         }))
     }
@@ -1060,6 +1102,7 @@ impl McpServer {
 }
 
 fn tool_result(value: Value, is_error: bool) -> Value {
+    let value = if value.is_object() { value } else { json!({ "result": value }) };
     json!({
         "content": [{ "type": "text", "text": serde_json::to_string_pretty(&value).unwrap_or_default() }],
         "structuredContent": value,
@@ -1067,7 +1110,160 @@ fn tool_result(value: Value, is_error: bool) -> Value {
     })
 }
 
+fn close_schema(batch: bool) -> Value {
+    let id = if batch { "taskIds" } else { "taskId" };
+    let mut properties = json!({
+        "confirm": {"type":"boolean", "const":true},
+        "terminals": {"type":"string", "enum":["fail","close_idle","close_all"], "default":"fail"},
+        "uncommittedChanges": {"type":"string", "enum":["fail","discard"], "default":"fail",
+            "description":"Includes untracked and ignored files in worktrees."},
+        "extraFiles": {"type":"string", "enum":["fail","discard"], "default":"fail",
+            "description":"Files at the task root outside worktrees and generated Blackholes files."},
+        "deleteBranches": {"type":"boolean", "default":false}
+    });
+    properties[id] = if batch {
+        json!({"type":"array","minItems":1,"maxItems":32,"uniqueItems":true,"items":{"type":"string","format":"uuid"}})
+    } else { json!({"type":"string","format":"uuid"}) };
+    json!({"type":"object","additionalProperties":false,"properties":properties,"required":[id,"confirm"]})
+}
+
+const GROUP_TOOL_NAMES: &[(&str, &str)] = &[
+    ("search_worktree_groups", "search_tasks"),
+    ("list_worktree_groups", "list_tasks"),
+    ("get_worktree_group", "get_task"),
+    ("create_worktree_group", "create_task"),
+    ("update_worktree_group", "update_task"),
+    ("close_worktree_group", "delete_task"),
+    ("close_worktree_groups", "close_tasks"),
+    ("add_worktree_group_repositories", "add_task_repositories"),
+    ("remove_worktree_group_repositories", "remove_task_repositories"),
+    ("start_worktree_group_agents", "start_task_agents"),
+    ("open_worktree_group", "open_task"),
+    ("notify_worktree_group_ready", "notify_task_ready"),
+];
+
+fn group_value(task: &ProjectTask) -> Value {
+    let mut value = serde_json::to_value(task).expect("serializable worktree group");
+    value["links"] = json!(blackholes_rust::services::task_details::links(task));
+    value["summary"] = json!(blackholes_rust::services::task_details::summary(task));
+    // Keep legacy description/criteria separate for old clients.
+    value
+}
+
+fn canonical_group_documents(value: &mut Value) {
+    if value.get("worktree_root_path").is_some() && value.get("workspace_id").is_some() {
+        if let Ok(task) = serde_json::from_value::<ProjectTask>(value.clone()) {
+            value["description"] = json!(blackholes_rust::services::task_details::document(&task));
+            if let Some(object) = value.as_object_mut() {
+                for key in ["acceptance_criteria", "pull_request_url", "external_task_url"] { object.remove(key); }
+            }
+        }
+    }
+    match value {
+        Value::Object(items) => for item in items.values_mut() { canonical_group_documents(item); },
+        Value::Array(items) => for item in items { canonical_group_documents(item); },
+        _ => {}
+    }
+}
+
+fn reject_mixed_group_keys(value: &Value) -> Result<()> {
+    match value {
+        Value::Object(object) => {
+            for (key, item) in object {
+                anyhow::ensure!(!matches!(key.as_str(), "taskId" | "taskIds" | "tasks"), "Use groupId/groupIds/groups with Worktree Group tools; task-named arguments are supported by legacy tools");
+                reject_mixed_group_keys(item)?;
+            }
+        }
+        Value::Array(items) => for item in items { reject_mixed_group_keys(item)?; },
+        _ => {}
+    }
+    Ok(())
+}
+
+fn rename_group_keys(value: &mut Value, canonical: bool, schema: bool) {
+    let rename = |key: &str| -> String {
+        let renamed = if canonical {
+            match key {
+                "taskId" => "groupId", "taskIds" => "groupIds", "task_id" => "group_id",
+                "task" => "worktreeGroup", "tasks" if schema => "groups", "tasks" => "worktreeGroups",
+                _ => key,
+            }
+        } else {
+            match key { "groupId" => "taskId", "groupIds" => "taskIds", "groups" => "tasks", _ => key }
+        };
+        renamed.to_string()
+    };
+    match value {
+        Value::Object(object) => {
+            let previous = std::mem::take(object);
+            for (key, mut item) in previous {
+                rename_group_keys(&mut item, canonical, schema);
+                if schema && key == "description" {
+                    if let Some(text) = item.as_str() { item = json!(group_vocabulary(text)); }
+                }
+                object.insert(rename(&key), item);
+            }
+        }
+        Value::Array(items) => for item in items { rename_group_keys(item, canonical, schema); },
+        Value::String(text) if schema => *text = rename(text),
+        _ => {}
+    }
+}
+
+fn group_vocabulary(text: &str) -> String {
+    let mut text = text.to_string();
+    for (canonical, legacy) in GROUP_TOOL_NAMES { text = text.replace(legacy, canonical); }
+    let words = regex::Regex::new(r"\b(tasks|task|Tasks|Task|taskIds|taskId)\b").expect("fixed vocabulary pattern");
+    words.replace_all(&text, |captures: &regex::Captures<'_>| match &captures[0] {
+        "tasks" => "worktree groups", "task" => "worktree group", "Tasks" => "Worktree Groups",
+        "Task" => "Worktree Group", "taskIds" => "groupIds", "taskId" => "groupId", _ => unreachable!(),
+    }).into_owned()
+}
+
+fn group_links_schema() -> Value {
+    json!({"type":"array","maxItems":64,"description":"Complete link collection; replaces existing links. [] clears all links. Preserve links still relevant to the current context.","items":{
+        "type":"object","additionalProperties":false,"properties":{
+            "url":{"type":"string","format":"uri","maxLength":4096},
+            "label":{"type":["string","null"],"maxLength":200},
+            "kind":{"type":"string","enum":["pull_request","context"],"default":"context"}
+        },"required":["url"]
+    }})
+}
+
 fn tool_definitions() -> Vec<Value> {
+    legacy_tool_definitions().into_iter().filter(|tool| !matches!(tool["name"].as_str(), Some("write_task_note" | "append_task_note"))).map(|mut tool| {
+        let legacy = tool["name"].as_str().unwrap_or_default().to_string();
+        if let Some((canonical, _)) = GROUP_TOOL_NAMES.iter().find(|(_, name)| *name == legacy) {
+            tool["name"] = json!(canonical);
+            rename_group_keys(&mut tool["inputSchema"], true, true);
+        }
+        tool["description"] = json!(group_vocabulary(tool["description"].as_str().unwrap_or_default()));
+        if matches!(legacy.as_str(), "create_task" | "update_task") {
+            let properties = tool["inputSchema"]["properties"].as_object_mut().expect("object schema");
+            for field in ["acceptanceCriteria", "pullRequestUrl", "externalTaskUrl", "developerContext"] { properties.remove(field); }
+            properties.insert("links".into(), group_links_schema());
+            properties.insert("description".into(), json!({"type":["string","null"],"maxLength":200100,
+                "description":"Living document, replaced in full. First paragraph is a short summary (up to 320 characters shown). Keep only current objective, constraints, decisions and unresolved work. Rewrite stale content after meaningful changes and before finishing. Never append a changelog, dated progress entries or an action history. Preserve user requirements and relevant context."}));
+        }
+        if legacy == "get_task" {
+            tool["description"] = json!("Read a Worktree Group: worktreeGroup.description is its current document, summary is its first paragraph, links contains multiple PR/context URLs. Also returns detailsRevision, project, legacy notes and source/writable worktree paths. Read before editing; maintain current context with update_worktree_group.");
+        }
+        if legacy == "search_tasks" {
+            tool["description"] = json!("Search Worktree Groups by title, current description, PR/context links, legacy notes, branches or repository/worktree paths. Returns {worktreeGroups:[...]} with project metadata and note excerpts.");
+        }
+        if legacy == "create_task" {
+            tool["description"] = json!("Create a Worktree Group only when explicitly requested, with transactional isolated worktrees, a current description and multiple PR/context links. Direct project work does not require a group. Preserve an explicit branch name exactly; omitted branch names derive from title. baseBranch selects the base for missing branches; existing branches are reused. startAgent defaults true using the caller provider and project permission setting; agentModel selects a CLI model and agentPrompt carries user constraints. Use startAgent:false for planning/backlog, explicit no-execution, or before a single start_worktree_group_agents batch. Inspect agentLaunch: retry failures using the existing groupId, never recreate it. The receiving agent implements directly and maintains current context without appending a history.");
+        }
+        if legacy == "update_task" {
+            tool["inputSchema"]["properties"]["icon"] = json!({"type":"string", "maxLength":64,
+                "description":"Named icon (layers, folder, code-2, square-terminal, rocket, database, globe, list-todo, git-branch), or emoji:<symbol>, e.g. emoji:🚀. Unicode symbols allow up to 32 characters."});
+            tool["description"] = json!("Update a Worktree Group title, icon, living description, complete links collection or color. Replace outdated context; never append a progress history. Update after meaningful changes and before finishing. Omitted fields stay unchanged; null clears description; [] clears links. Pass detailsRevision from get_worktree_group as expectedRevision, reread and reconcile conflicts. HTTP(S) links without credentials only.");
+        }
+        tool
+    }).collect()
+}
+
+fn legacy_tool_definitions() -> Vec<Value> {
     vec![
         read_tool(
             "get_current_context",
@@ -1081,7 +1277,7 @@ fn tool_definitions() -> Vec<Value> {
         ),
         read_tool(
             "list_projects",
-            "List Blackholes projects and their repositories.",
+            "List Blackholes projects and their repositories. Returns {projects:[...]}.",
             empty_schema(),
         ),
         read_tool(
@@ -1126,7 +1322,7 @@ fn tool_definitions() -> Vec<Value> {
         ),
         read_tool(
             "list_tasks",
-            "List tasks, optionally limited to a project.",
+            "List Worktree Groups, optionally limited to a project. Returns {worktreeGroups:[...]} with current description, summary and links.",
             json!({"type":"object","properties":{"projectId":{"type":"string"}}}),
         ),
         read_tool(
@@ -1151,8 +1347,13 @@ fn tool_definitions() -> Vec<Value> {
         ),
         destructive_tool(
             "delete_task",
-            "Delete a task record and its managed worktrees while preserving Git branches. Requires confirm=true and refuses active terminals or uncommitted changes.",
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"confirm":{"type":"boolean","const":true}},"required":["taskId","confirm"]}),
+            "Close one task through the running app using the same service as the UI. Requires confirm:true. Restored tabs close automatically; live terminals, uncommitted/ignored files and extra task files block by default. Explicit policies permit their removal. Protects the caller's task when identifiable. Removes managed worktrees and task folder, prunes origins, keeps branches by default. Returns deleted/blocked with reason, closedTerminals, Claude/Codex sessions, removedWorktrees, discardedExtraFiles and estimated allocated bytesFreed. A blocked result can contain partial cleanup; inspect it before retrying.",
+            close_schema(false),
+        ),
+        destructive_tool(
+            "close_tasks",
+            "Close 1–32 tasks independently through the updated running app and the UI's closure service. Requires confirm:true. Defaults: terminals:fail, uncommittedChanges:fail, extraFiles:fail, deleteBranches:false. Restored tabs without live processes close automatically. close_idle closes idle/attention terminals; working terminals require close_all. Signals owned process groups with SIGHUP then SIGKILL after 3 seconds. Caller terminal/task is protected when identifiable by env, cwd or PID ancestry; detached external clients can be unidentified. Deletes managed worktrees and task directories, prunes source repositories, preserves branches by default. Returns {results:[{taskId,status:deleted|blocked,reason,closedTerminals,sessions:[{agent,sessionId}],removedWorktrees,discardedExtraFiles,bytesFreed}],persistenceError}. Blocked tasks do not stop the rest; partial failures report completed cleanup. bytesFreed estimates allocated bytes, not volume free space.",
+            close_schema(true),
         ),
         write_tool(
             "add_task_repositories",
@@ -1428,5 +1629,71 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
             return Ok(Some(serde_json::from_slice(&payload)?));
         }
         return Ok(Some(serde_json::from_str(trimmed)?));
+    }
+}
+
+#[cfg(test)]
+mod closure_tests {
+    use super::*;
+
+    #[test]
+    fn group_aliases_translate_ids_without_changing_user_text() {
+        let mut arguments = json!({"groups":[{"groupId":"example", "prompt":"taskId and groups are plain text"}]});
+        reject_mixed_group_keys(&arguments).unwrap();
+        rename_group_keys(&mut arguments, false, false);
+        assert_eq!(arguments["tasks"][0]["taskId"], "example");
+        assert_eq!(arguments["tasks"][0]["prompt"], "taskId and groups are plain text");
+        assert!(reject_mixed_group_keys(&arguments).is_err());
+        let mut result = json!({"results":[{"taskId":"example"}],"tasks":[]});
+        rename_group_keys(&mut result, true, false);
+        assert_eq!(result["results"][0]["groupId"], "example");
+        assert!(result["worktreeGroups"].is_array());
+        let tools = tool_definitions();
+        let update = tools.iter().find(|tool| tool["name"] == "update_worktree_group").unwrap();
+        assert_eq!(update["inputSchema"]["required"], json!(["groupId"]));
+        assert!(update["inputSchema"]["properties"].get("links").is_some());
+        assert!(update["inputSchema"]["properties"].get("pullRequestUrl").is_none());
+        assert!(tools.iter().all(|tool| tool["name"] != "append_task_note" && tool["name"] != "create_task"));
+    }
+
+    #[test]
+    fn all_tool_results_have_object_structured_content() {
+        for value in [json!([]), json!([{"id":1}]), json!(null), json!(true), json!({"tasks":[]})] {
+            let result = tool_result(value, false);
+            assert!(result["structuredContent"].is_object());
+            let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(text, result["structuredContent"]);
+        }
+    }
+
+    #[test]
+    fn list_tools_return_named_object_envelopes_and_close_api_is_destructive() {
+        let root = std::env::temp_dir().join(format!("blackholes-mcp-test-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let paths = AppPaths {
+            database: root.join("db.sqlite"), session: root.join("session.json"),
+            task_workspaces: root.join("task-workspaces"), agent_profiles: root.join("profiles"),
+            default_projects: root.join("projects"), events_socket: root.join("events.sock"), data_dir: root.clone(),
+        };
+        {
+            // Disable legacy import before opening: never discover user data in tests.
+            rusqlite::Connection::open(&paths.database).unwrap().execute_batch(
+                "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO app_meta VALUES ('legacy-import-completed', 'test');"
+            ).unwrap();
+            let database = Database::open(&paths).unwrap();
+            let mut server = McpServer { paths, database, client_agent: None };
+            assert_eq!(server.call_tool("list_tasks", &json!({})).unwrap(), json!({"tasks":[]}));
+            assert_eq!(server.call_tool("list_projects", &json!({})).unwrap(), json!({"projects":[]}));
+            assert!(server.call_tool("close_tasks", &json!({"taskIds":[],"confirm":true})).is_err());
+            assert!(server.call_tool("delete_task", &json!({"taskId":Uuid::new_v4(),"confirm":false})).is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        for name in ["close_worktree_groups", "close_worktree_group"] {
+            let tool = tool_definitions().into_iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(tool["annotations"]["destructiveHint"], true);
+            assert_eq!(tool["inputSchema"]["properties"]["extraFiles"]["default"], "fail");
+            assert_eq!(tool["inputSchema"]["properties"]["terminals"]["default"], "fail");
+        }
     }
 }

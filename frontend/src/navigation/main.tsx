@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { GroupIcon } from "../shared/GroupIcon";
 import {
   ChevronRight,
   CircleDot,
@@ -136,14 +137,14 @@ const fallbackCopy: Copy = {
   working: "Trabajando",
   terminal: "Terminal",
   blankTerminal: "Terminal vacía",
-  tasks: "Tareas",
-  task: "Tarea",
+  tasks: "Grupos de worktrees",
+  task: "Grupo de worktrees",
   new: "Nuevo",
   toggle: "Expandir o contraer",
   options: "Opciones",
   closeTerminal: "Cerrar terminal",
   newTerminal: "Nueva terminal",
-  newTask: "Agregar tarea",
+  newTask: "Agregar grupo de worktrees",
   refreshProject: "Buscar repositorios nuevos",
   addToProject: "Agregar al proyecto",
   addRepository: "Agregar repositorio…",
@@ -151,8 +152,8 @@ const fallbackCopy: Copy = {
   editProject: "Editar proyecto",
   projectSettings: "Configuración del proyecto",
   removeProject: "Eliminar proyecto",
-  editTask: "Editar tarea",
-  removeTask: "Eliminar tarea",
+  editTask: "Editar grupo de worktrees",
+  removeTask: "Cerrar grupo",
 };
 
 const iconFor = (value?: string): LucideIcon => ({
@@ -348,7 +349,7 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
         onClick={() => postNative({ type: "select_task", workspace_id: workspaceId, task_id: task.id })}
       >
         <Chevron expanded={task.expanded} copy={copy} command={{ type: "toggle_task", task_id: task.id }} />
-        <span className="row-icon">{(() => { const Icon = iconFor(task.icon); return <Icon size={13} />; })()}</span>
+        <span className="row-icon"><GroupIcon value={task.icon} size={13} /></span>
         <span className="tree-label">{task.title}</span>
         {task.unseen && <span className="new-badge">{copy.new}</span>}
         <span className="row-actions">
@@ -610,8 +611,8 @@ function NavigationApp() {
           <SidebarScrollArea id="sidebar-agents-content" hidden={agentsCollapsed}
             label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
           {agentItems.length === 0 && <p className="agents-empty">{state?.language === "en"
-            ? "Start an agent from a project or task’s + menu."
-            : "Inicia un agente desde el menú + de un proyecto o tarea."}</p>}
+            ? "No active agents. Open a saved session from Projects or start one with +."
+            : "No hay agentes activos. Abre una sesión guardada desde Proyectos o inicia una con +."}</p>}
           <SortableAgentList items={agentItems} disabled={modalVisible} language={state?.language || "es"}
             onReorder={ids => {
               setState(previous => previous ? { ...previous, agent_order: ids } : previous);
@@ -627,7 +628,7 @@ function NavigationApp() {
               <span>{copy.projects}</span>
             </button>
             <span className="section-header__actions">
-              <button className="icon-button" type="button" aria-label={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} title={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} onClick={() => postNative({ type: "collapse_all" })}>
+              <button className="icon-button" type="button" aria-label={state?.language === "en" ? "Collapse all projects and worktree groups" : "Contraer todos los proyectos y grupos de worktrees"} title={state?.language === "en" ? "Collapse all projects and worktree groups" : "Contraer todos los proyectos y grupos de worktrees"} onClick={() => postNative({ type: "collapse_all" })}>
                 <ChevronsUp size={15} />
               </button>
               <button className="icon-button" type="button"

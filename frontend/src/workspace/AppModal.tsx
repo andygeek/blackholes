@@ -68,11 +68,25 @@ export function AppModal({ modal, language, onDismiss }: {
           else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
         }
       }}>
-      <h2 id="app-modal-title">{isTask ? (language === "es" ? "Crear tarea" : "Create task") : modal.title}</h2>
+      <h2 id="app-modal-title">{isTask ? (language === "es" ? "Crear grupo de worktrees" : "Create worktree group") : modal.title}</h2>
       {isEditProject ? <EditProjectForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isTask ? <CreateTaskForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isProject ? <CreateProjectForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : <>
         <strong>{modal.name}</strong>
         {modal.context && <span className="app-modal__context">{modal.context}</span>}
         <p id="app-modal-description">{modal.description}</p>
+        {modal.close_preview && <div style={{ maxHeight: "35vh", overflow: "auto", overflowWrap: "anywhere" }}>
+          <b>{language === "es" ? "Terminales que se cerrarán" : "Terminals to close"}</b>
+          <ul>{modal.close_preview.terminals.map(terminal => <li key={terminal.terminalId}>
+            {terminal.label} · {terminal.state} · {terminal.live
+              ? (language === "es" ? "proceso vivo" : "live process")
+              : (language === "es" ? "sin proceso" : "no process")}
+          </li>)}</ul>
+          <b>{language === "es" ? "Cambios y archivos ignorados que se borrarán" : "Changes and ignored files to discard"}</b>
+          {modal.close_preview.changes.map(change => <div key={change.path}>
+            <code>{change.path}</code><pre style={{ whiteSpace: "pre-wrap" }}>{change.changes}</pre>
+          </div>)}
+          <b>{language === "es" ? "Archivos extra que se borrarán" : "Extra files to discard"}</b>
+          <ul>{modal.close_preview.extraFiles.map(path => <li key={path}><code>{path}</code></li>)}</ul>
+        </div>}
         {modal.feedback?.error && <p className="app-modal__error" role="alert">{modal.feedback.error}</p>}
         <footer>
           <button type="button" className="app-modal__cancel" disabled={pending} data-initial-focus onClick={dismiss}>{modal.cancel_label}</button>

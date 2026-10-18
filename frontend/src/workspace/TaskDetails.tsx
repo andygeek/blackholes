@@ -1,101 +1,111 @@
-import { useEffect, useReducer } from "react";
-import { ExternalLink, GitPullRequest, Link, ListTodo, Save } from "lucide-react";
-import { createId, postNative } from "../shared/native";
+import { useEffect, useLayoutEffect, useReducer, useRef } from "react";
+import type { RefObject, TextareaHTMLAttributes } from "react";
+import { ArrowUpRight, Layers, Plus, X } from "lucide-react";
+import { postNative } from "../shared/native";
+import { GroupIcon } from "../shared/GroupIcon";
 import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
+import { GroupIconPicker } from "./GroupIconPicker";
+import { ModalSelect } from "./ModalSelect";
+import { draftChanged, editGroupDraft, getGroupDraft, incompleteDraft, receiveGroupSnapshot, reloadGroupDraft, retryGroupSave, saveGroupDraft, type GroupLink, type TaskMetadata } from "./groupDetailsState";
+export { receiveTaskDetailsSave } from "./groupDetailsState";
+export type { TaskMetadata } from "./groupDetailsState";
 
 type Language = "en" | "es";
 type Terminal = { id: string; label: string; agent: string };
-export type TaskMetadata = { title: string; description: string | null; acceptanceCriteria: string | null; pullRequestUrl: string | null; externalTaskUrl: string | null };
 export type TaskDetailsData = { language: Language; id: string; workspace_id: string; project: string; details: TaskMetadata; revision: string; legacy_note?: string | null; repositories: { id: string; name: string; branch: string }[]; terminals: Terminal[] };
-export type ProjectOverviewData = { language: Language; id: string; title: string; terminals: Terminal[]; tasks: { id: string; title: string }[]; repositories: { id: string; name: string }[] };
-type Draft = { values: TaskMetadata; base: TaskMetadata; revision: string; pending?: string; error?: string };
-const drafts = new Map<string, Draft>();
-const keys = ["title", "description", "acceptanceCriteria", "pullRequestUrl", "externalTaskUrl"] as const;
-const copy = (metadata: TaskMetadata): TaskMetadata => Object.fromEntries(keys.map(key => [key, metadata[key]])) as TaskMetadata;
-const changed = (draft: Draft) => keys.some(key => (draft.values[key] || "") !== (draft.base[key] || ""));
+export type ProjectOverviewData = { language: Language; id: string; title: string; terminals: Terminal[]; tasks: { id: string; title: string; icon: string }[]; repositories: { id: string; name: string }[] };
 const text = (language: Language, en: string, es: string) => language === "en" ? en : es;
-
-// Save acknowledgements also update drafts while another surface is visible.
-export function receiveTaskDetailsSave(event: { task_id: string; request_id: string; error?: string; details?: TaskMetadata; revision?: string }) {
-  const draft = drafts.get(event.task_id);
-  if (!draft || draft.pending !== event.request_id) return;
-  draft.pending = undefined;
-  draft.error = event.error;
-  if (!event.error && event.details && event.revision) {
-    draft.values = copy(event.details);
-    draft.base = copy(event.details);
-    draft.revision = event.revision;
-    postNative({ type: "task_details_dirty", task_id: event.task_id, dirty: false });
-  }
-  window.dispatchEvent(new Event("blackholes:task-details-saved"));
+const requestedFocus = new Set<string>();
+export function requestTaskDetailsEdit(id: string) {
+  requestedFocus.add(id);
+  window.dispatchEvent(new CustomEvent("blackholes:focus-group-title", { detail: id }));
+}
+function linkName(link: GroupLink) {
+  try {
+    const url = new URL(link.url);
+    const pr = url.pathname.match(/\/(?:pull|merge_requests)\/(\d+)/);
+    if (pr) return `${url.pathname.split("/").filter(Boolean)[1] || url.hostname} #${pr[1]}`;
+    return url.hostname.replace(/^www\./, "");
+  } catch { return link.url; }
 }
 
-function Sessions({ terminals, language }: { terminals: Terminal[]; language: Language }) {
-  return <section className="task-related"><h2>{text(language, "Sessions", "Sesiones")}</h2>
-    {terminals.length ? <div className="task-session-list">{terminals.map(terminal => <button key={terminal.id} type="button" onClick={() => postNative({ type: "focus_terminal", terminal_id: terminal.id })}>
-      <TerminalProviderIcon provider={terminal.agent} /><span>{terminal.label}</span>
-    </button>)}</div> : <p>{text(language, "Use the + menu in the sidebar to start a terminal, Claude or Codex.", "Usa el menú + de la barra lateral para abrir una terminal, Claude o Codex.")}</p>}
-  </section>;
+function SheetText({ inputRef, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { inputRef?: RefObject<HTMLTextAreaElement | null> }) {
+  const localRef = useRef<HTMLTextAreaElement>(null);
+  const ref = inputRef || localRef;
+  useLayoutEffect(() => {
+    const resize = () => { if (ref.current) { ref.current.style.height = "0"; ref.current.style.height = `${ref.current.scrollHeight}px`; } };
+    resize();
+    let width = ref.current?.parentElement?.clientWidth;
+    const observer = new ResizeObserver(entries => {
+      const next = entries[0]?.contentRect.width;
+      if (next !== width) { width = next; resize(); }
+    });
+    if (ref.current?.parentElement) observer.observe(ref.current.parentElement);
+    return () => observer.disconnect();
+  }, [props.value, ref]);
+  return <textarea {...props} ref={ref} rows={1} />;
+}
+
+function Sessions({ terminals, language, collapsible = false }: { terminals: Terminal[]; language: Language; collapsible?: boolean }) {
+  const content = terminals.length ? <div className="task-session-list">{terminals.map(terminal => <button key={terminal.id} type="button" onClick={() => postNative({ type: "focus_terminal", terminal_id: terminal.id })}>
+    <TerminalProviderIcon provider={terminal.agent} /><span>{terminal.label}</span>
+  </button>)}</div> : <p>{text(language, "Start an agent from the group’s + menu.", "Inicia un agente desde el menú + del grupo.")}</p>;
+  return collapsible ? <details className="task-related group-repositories"><summary>{text(language, "Sessions", "Sesiones")} <span>{terminals.length}</span></summary>{content}</details> : <section className="task-related"><h2>{text(language, "Sessions", "Sesiones")}</h2>{content}</section>;
 }
 
 export function TaskDetails({ data }: { data: TaskDetailsData }) {
   const [, redraw] = useReducer(value => value + 1, 0);
-  let draft = drafts.get(data.id);
-  if (!draft) {
-    draft = { values: copy(data.details), base: copy(data.details), revision: data.revision };
-    drafts.set(data.id, draft);
-  }
-  const current = draft;
-  const dirty = changed(current);
-  const conflict = current.revision !== data.revision && dirty;
+  const titleInput = useRef<HTMLTextAreaElement>(null);
+  const current = getGroupDraft(data.id, data.details, data.revision);
+  const dirty = draftChanged(current);
+  const incomplete = incompleteDraft(current);
   const t = (en: string, es: string) => text(data.language, en, es);
   useEffect(() => {
-    if (!changed(current) && !current.pending && current.revision !== data.revision) {
-      current.values = copy(data.details); current.base = copy(data.details); current.revision = data.revision;
-      redraw();
-    }
-  }, [data.revision, current]);
+    if (receiveGroupSnapshot(current, data.details, data.revision)) redraw();
+  }, [current, data.details, data.revision]);
   useEffect(() => {
     const update = () => redraw();
+    const focus = (event?: Event) => {
+      if (event && (event as CustomEvent<string>).detail !== data.id) return;
+      if (requestedFocus.delete(data.id)) titleInput.current?.focus();
+    };
+    focus();
     window.addEventListener("blackholes:task-details-saved", update);
-    return () => window.removeEventListener("blackholes:task-details-saved", update);
-  }, []);
-  const edit = (key: keyof TaskMetadata, value: string) => {
-    current.values = { ...current.values, [key]: value };
-    current.error = undefined;
-    postNative({ type: "task_details_dirty", task_id: data.id, dirty: changed(current) });
-    redraw();
-  };
-  const save = () => {
-    if (current.pending || !changed(current) || !current.values.title.trim()) return;
-    current.pending = createId(); current.error = undefined;
-    const patch = Object.fromEntries(keys.filter(key => (current.values[key] || "") !== (current.base[key] || "")).map(key => [key, current.values[key] || null]));
-    postNative({ type: "save_task_details", task_id: data.id, request_id: current.pending, patch: { ...patch, expectedRevision: current.revision } });
-    redraw();
-  };
-  const reset = () => {
-    current.values = copy(data.details); current.base = copy(data.details); current.revision = data.revision; current.error = undefined;
-    postNative({ type: "task_details_dirty", task_id: data.id, dirty: false }); redraw();
-  };
-  return <main className="workspace-page task-details-page"><div className="task-details-content">
-    <header className="task-details-heading"><span><ListTodo size={23} /></span><div><p>{data.project}</p><h1>{t("Task details", "Detalles de la tarea")}</h1></div></header>
-    <form onSubmit={event => { event.preventDefault(); save(); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); save(); } }}>
-      <fieldset disabled={Boolean(current.pending)}>
-        <label>{t("Title", "Título")}<input required maxLength={500} value={current.values.title} onChange={event => edit("title", event.target.value)} /></label>
-        <label>{t("Objective and description", "Objetivo y descripción")}<textarea rows={5} maxLength={100000} value={current.values.description || ""} placeholder={t("What should this task accomplish?", "¿Qué debe lograr esta tarea?")} onChange={event => edit("description", event.target.value)} /></label>
-        <label>{t("Acceptance criteria", "Criterios de aceptación")}<textarea rows={5} maxLength={100000} value={current.values.acceptanceCriteria || ""} placeholder={t("Conditions that must be met to consider the task complete.", "Condiciones que deben cumplirse para dar la tarea por terminada.")} onChange={event => edit("acceptanceCriteria", event.target.value)} /></label>
-        <div className="task-link-fields">{([['pullRequestUrl', t('Pull request', 'Pull request'), GitPullRequest], ['externalTaskUrl', t('External task', 'Tarea externa'), Link]] as const).map(([key, label, Icon]) => <label key={key}><span><Icon size={15} />{label}</span><div className="task-url-input"><input type="url" maxLength={4096} pattern="https?://.*" placeholder="https://…" value={current.values[key] || ""} onChange={event => edit(key, event.target.value)} />{current.values[key] && /^https?:\/\//i.test(current.values[key]!) && <button type="button" title={t("Open link", "Abrir enlace")} aria-label={`${t("Open", "Abrir")} ${label}`} onClick={() => postNative({ type: "open_url", url: current.values[key] })}><ExternalLink size={16} /></button>}</div></label>)}</div>
-      </fieldset>
-      {conflict && <p className="task-details-warning" role="status">{t("These details changed elsewhere. Your draft is preserved. Copy anything you want to keep before reloading.", "Estos datos cambiaron en otra sesión. Tu borrador está conservado. Copia lo que quieras mantener antes de recargar.")}</p>}
-      {current.error && <p className="task-details-warning" role="alert">{current.error}</p>}
-      <footer className="task-details-actions"><span aria-live="polite">{current.pending ? t("Saving…", "Guardando…") : dirty ? t("Unsaved changes", "Cambios sin guardar") : t("Saved", "Guardado")}</span>
-        {(dirty || current.error) && <button type="button" disabled={Boolean(current.pending)} onClick={reset}>{conflict ? t("Discard draft and reload", "Descartar borrador y recargar") : t("Discard changes", "Descartar cambios")}</button>}
-        <button type="submit" className="task-save" disabled={!dirty || Boolean(current.pending) || conflict || !current.values.title.trim()}><Save size={15} />{t("Save changes", "Guardar cambios")}</button>
-      </footer>
-    </form>
-    <Sessions terminals={data.terminals} language={data.language} />
-    <section className="task-related"><h2>{t("Repositories", "Repositorios")}</h2><ul>{data.repositories.map(repo => <li key={repo.id}><span>{repo.name}</span><code>{repo.branch}</code></li>)}</ul><div className="task-related-actions"><button onClick={() => postNative({ type: "add_task_repositories", task_id: data.id })}>{t("Add repositories…", "Agregar repositorios…")}</button><button onClick={() => postNative({ type: "remove_task_repositories", task_id: data.id })}>{t("Remove repositories…", "Quitar repositorios…")}</button></div></section>
-    {data.legacy_note?.trim() && <details className="task-legacy"><summary>{t("Previous notes", "Notas anteriores")}</summary><p>{t("Preserved as additional context. Copy relevant content into the fields above.", "Conservadas como contexto adicional. Copia el contenido relevante en los campos de arriba.")}</p><pre>{data.legacy_note}</pre></details>}
+    window.addEventListener("blackholes:focus-group-title", focus);
+    return () => {
+      window.removeEventListener("blackholes:task-details-saved", update);
+      window.removeEventListener("blackholes:focus-group-title", focus);
+      saveGroupDraft(data.id);
+    };
+  }, [data.id]);
+  const edit = (values: Partial<TaskMetadata>) => { editGroupDraft(data.id, current, values); redraw(); };
+  const editLink = (index: number, values: Partial<GroupLink>) => edit({ links: current.values.links.map((link, i) => i === index ? { ...link, ...values } : link) });
+  const status = current.pending ? t("Saving…", "Guardando…") : current.remote ? t("Updated elsewhere", "Actualizado en otra sesión") : current.error ? t("Could not save", "No se pudo guardar") : incomplete && dirty ? (incomplete === "title" ? t("Add a title to save", "Agrega un título para guardar") : t("Complete or remove the empty/invalid link", "Completa o quita el enlace vacío o inválido")) : dirty ? t("Unsaved changes", "Cambios sin guardar") : t("Saved", "Guardado");
+  return <main className="workspace-page task-details-page" onBlurCapture={event => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) saveGroupDraft(data.id);
+  }} onKeyDown={event => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); saveGroupDraft(data.id); }
+  }}><div className="task-details-content">
+    <header className="group-page-bar"><span><Layers size={15} />{data.project}<span className="group-breadcrumb">/ {t("Worktree Group", "Grupo de worktrees")}</span></span><span className="group-save-status" data-warning={Boolean(current.error || current.remote || (dirty && incomplete)) || undefined} role="status" aria-live="polite">{status}</span></header>
+    <article className="group-sheet">
+      <GroupIconPicker value={current.values.icon} language={data.language} onChange={icon => edit({ icon })} />
+      <SheetText inputRef={titleInput} className="group-title-input" required maxLength={500} aria-label={t("Title", "Título")} placeholder={t("Untitled group", "Grupo sin título")} value={current.values.title} onChange={event => edit({ title: event.target.value.replace(/[\r\n]+/g, " ") })} />
+      <SheetText className="group-document-input" maxLength={200100} aria-label={t("Current context", "Contexto actual")} placeholder={t("Write a short summary, then the context that matters now…", "Escribe un resumen breve y luego el contexto que importa ahora…")} value={current.values.description || ""} onChange={event => edit({ description: event.target.value })} />
+    </article>
+    {current.remote && <aside className="group-save-warning" role="alert"><p>{t("An agent updated this group. Your draft is preserved. Review the latest version before continuing; copy any draft text you want to keep before reloading.", "Un agente actualizó este grupo. Conservamos tu borrador. Revisa la versión actual; copia el texto que quieras mantener antes de recargar.")}</p><details><summary>{t("Latest version", "Versión actual")}</summary><strong>{current.remote.values.title}</strong><pre>{current.remote.values.description}</pre>{current.remote.values.links.map((link, i) => <p key={i}>{link.url}</p>)}</details><button type="button" disabled={Boolean(current.pending)} onClick={() => reloadGroupDraft(data.id, current, data.details, data.revision)}>{t("Discard draft and reload", "Descartar borrador y recargar")}</button></aside>}
+    {current.error && <aside className="group-save-warning" role="alert"><p>{current.error}</p>{!current.remote && <button type="button" onClick={() => retryGroupSave(data.id, current)}>{t("Retry save", "Reintentar guardado")}</button>}</aside>}
+    <section className="group-link-editor"><header><h2>{t("Links", "Enlaces")}</h2><button type="button" className="group-quiet-button" disabled={current.values.links.length >= 64} onClick={() => edit({ links: [...current.values.links, { kind: "context", url: "", label: null }] })}><Plus size={14} />{t("Add link", "Agregar enlace")}</button></header>
+      {!current.values.links.length && <p className="group-empty">{t("Pull requests, ClickUp, Slack or other context.", "Pull requests, ClickUp, Slack u otro contexto.")}</p>}
+      <div className="group-link-list">{current.values.links.map((link, index) => <div className="group-link-row" key={index}>
+        <ModalSelect label={t("Link type", "Tipo de enlace")} value={link.kind} options={[{ value: "pull_request", label: "Pull Request GitHub", description: "" }, { value: "context", label: t("Context", "Contexto"), description: "" }]} onValueChange={kind => editLink(index, { kind })} />
+        <input type="url" aria-label={`${t("URL", "URL")} ${index + 1}`} maxLength={4096} placeholder="https://…" value={link.url} onChange={event => editLink(index, { url: event.target.value })} />
+        <button type="button" className="group-link-action" aria-label={`${t("Open", "Abrir")} ${linkName(link)}`} title={linkName(link)} disabled={!/^https?:\/\//i.test(link.url)} onClick={() => postNative({ type: "open_url", url: link.url })}><ArrowUpRight size={15} /></button>
+        <button type="button" className="group-link-action" aria-label={`${t("Remove link", "Quitar enlace")} ${index + 1}`} onClick={() => edit({ links: current.values.links.filter((_, i) => i !== index) })}><X size={15} /></button>
+      </div>)}</div>
+    </section>
+    <Sessions terminals={data.terminals} language={data.language} collapsible />
+    <details className="task-related group-repositories"><summary>{t("Worktrees", "Worktrees")} <span>{data.repositories.length}</span></summary><ul>{data.repositories.map(repo => <li key={repo.id}><span>{repo.name}</span><code>{repo.branch}</code></li>)}</ul><div className="task-related-actions"><button onClick={() => postNative({ type: "add_task_repositories", task_id: data.id })}>{t("Add repositories…", "Agregar repositorios…")}</button><button onClick={() => postNative({ type: "remove_task_repositories", task_id: data.id })}>{t("Remove repositories…", "Quitar repositorios…")}</button></div></details>
+    {data.legacy_note?.trim() && <details className="task-legacy"><summary>{t("Previous notes", "Notas anteriores")}</summary><pre>{data.legacy_note}</pre></details>}
   </div></main>;
 }
 
@@ -103,7 +113,7 @@ export function ProjectOverview({ data }: { data: ProjectOverviewData }) {
   const t = (en: string, es: string) => text(data.language, en, es);
   return <main className="workspace-page task-details-page"><div className="task-details-content"><h1>{data.title}</h1>
     <Sessions terminals={data.terminals} language={data.language} />
-    <section className="task-related"><h2>{t("Tasks", "Tareas")}</h2><div className="task-session-list">{data.tasks.map(task => <button key={task.id} onClick={() => postNative({ type: "open_task_details", workspace_id: data.id, task_id: task.id })}><ListTodo size={16} /><span>{task.title}</span></button>)}</div>{!data.tasks.length && <p>{t("Create a task from the project’s + menu.", "Crea una tarea desde el menú + del proyecto.")}</p>}</section>
+    <section className="task-related"><h2>{t("Worktree Groups", "Grupos de worktrees")}</h2><div className="task-session-list">{data.tasks.map(task => <button key={task.id} onClick={() => postNative({ type: "open_task_details", workspace_id: data.id, task_id: task.id })}><GroupIcon value={task.icon || "layers"} size={16} /><span>{task.title}</span></button>)}</div>{!data.tasks.length && <p>{t("Create a group from the project’s + menu.", "Crea un grupo desde el menú + del proyecto.")}</p>}</section>
     <section className="task-related"><h2>{t("Repositories", "Repositorios")}</h2><div className="task-session-list">{data.repositories.map(repo => <button key={repo.id} onClick={() => postNative({ type: "open_project_repository", workspace_id: data.id, repository_id: repo.id })}>{repo.name}</button>)}</div></section>
   </div></main>;
 }

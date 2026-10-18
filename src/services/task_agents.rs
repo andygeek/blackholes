@@ -108,12 +108,12 @@ pub fn implementation_prompt(task: &ProjectTask, brief: Option<&str>) -> Result<
         bail!("The task brief is too large or contains NUL; pass a shorter prompt");
     }
     Ok(format!(
-        "Implement the existing Blackholes task \"{}\" (task id {}, project id {}).\n\
-         You are its assigned terminal agent. The task and its worktrees already exist. \
-         Do not create this task again or delegate it to another agent.\n\
+        "Implement the existing Blackholes Worktree Group \"{}\" (group id {}, project id {}).\n\
+         You are its assigned terminal agent. The group and its worktrees already exist. \
+         Do not create this group again or delegate it to another agent.\n\
          Read .blackholes-task-details.md, any legacy .blackholes-note.md, and AGENTS.md/CLAUDE.md in this workspace, then the \
-         attached repositories' instructions. Use get_current_context and get_task to \
-         confirm the task objective, acceptance criteria and links. Use update_task to keep those fields current. Work only in its attached worktrees. Preserve all user constraints, \
+         attached repositories' instructions. Use get_current_context and get_worktree_group to \
+         confirm the current description and links. After meaningful changes and before finishing, reread and use update_worktree_group with expectedRevision to replace stale context and maintain all PR/context links. The first paragraph is a short summary. Preserve requirements and unresolved work; never append a journal, dated entries or an action history. Work only in its attached worktrees. Preserve all user constraints, \
          including restrictions on tests, servers, and remote writes.\n\n\
          Implementation brief:\n{}\n\n\
          Show progress and the final result in this terminal. Do not send a completion \

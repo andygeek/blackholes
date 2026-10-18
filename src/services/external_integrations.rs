@@ -211,6 +211,9 @@ fn configure_codex(path: &Path, launcher: &Path) -> Result<bool> {
         .context("The blackholes MCP entry must be a table")?;
     server.insert("command", value(launcher.to_string_lossy().as_ref()));
     server.insert("args", value(toml_edit::Array::new()));
+    if server.get("tool_timeout_sec").is_none() {
+        server.insert("tool_timeout_sec", value(610));
+    }
     if server.get("env").is_none() {
         server.insert("env", Item::Table(Table::new()));
     }

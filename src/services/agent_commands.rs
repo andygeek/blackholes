@@ -27,10 +27,14 @@ fn read_frame(stream: &mut UnixStream) -> Result<String> {
 }
 
 pub fn send(paths: &AppPaths, message: &str) -> Result<Value> {
+    send_with_timeout(paths, message, Duration::from_secs(30))
+}
+
+pub fn send_with_timeout(paths: &AppPaths, message: &str, timeout: Duration) -> Result<Value> {
     let mut stream = UnixStream::connect(paths.data_dir.join("agent-commands.sock"))
-        .context("Cannot reach the running Blackholes app. Reopen the updated app before starting agents")?;
+        .context("Cannot reach the running Blackholes app. Open the updated app before sending commands")?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_read_timeout(Some(timeout))?;
     let frame = serde_json::to_string(message)?;
     if frame.len() as u64 + 1 > MAX_FRAME_BYTES {
         bail!("Agent command is too large");
@@ -64,8 +68,9 @@ pub fn listen(paths: &AppPaths) -> Result<flume::Receiver<AgentCommand>> {
                 stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                 let message: String = serde_json::from_str(&read_frame(&mut stream)?)?;
                 let (reply, response) = flume::bounded(1);
+                let timeout = if message.starts_with("close-tasks:") { 600 } else { 20 };
                 sender.send(AgentCommand { message, reply })?;
-                response.recv_timeout(Duration::from_secs(20))
+                response.recv_timeout(Duration::from_secs(timeout))
                     .context("The app did not confirm execution; check the destination before retrying")
             })();
             let response = result.unwrap_or_else(|error| json!({

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 pub const DEFAULT_PROJECT_ICON: &str = "layers";
-pub const DEFAULT_TASK_ICON: &str = "list-todo";
+pub const DEFAULT_TASK_ICON: &str = "layers";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -201,6 +201,24 @@ pub struct TaskSession {
     pub exited_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeGroupLinkKind {
+    PullRequest,
+    #[default]
+    Context,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeGroupLink {
+    pub url: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub kind: WorktreeGroupLinkKind,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectTask {
     pub id: Uuid,
@@ -213,6 +231,8 @@ pub struct ProjectTask {
     pub pull_request_url: Option<String>,
     #[serde(default)]
     pub external_task_url: Option<String>,
+    #[serde(default)]
+    pub links: Vec<WorktreeGroupLink>,
     pub icon: String,
     pub color: WorkspaceColor,
     pub sort_order: i64,

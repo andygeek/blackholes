@@ -1,3 +1,5 @@
+pub mod closure;
+
 use crate::paths::AppPaths;
 use crate::{
     model::{
@@ -77,6 +79,8 @@ pub struct CreateTaskRequest {
     pub acceptance_criteria: Option<String>,
     pub pull_request_url: Option<String>,
     pub external_task_url: Option<String>,
+    #[serde(default)]
+    pub links: Vec<crate::model::WorktreeGroupLink>,
     pub branch_name: Option<String>,
     pub branch_source: TaskBranchSource,
     /// Branch, tag or revision a task branch that does not exist yet is
@@ -245,10 +249,11 @@ impl TaskService {
     pub fn create(&self, workspace: &Workspace, request: CreateTaskRequest) -> Result<ProjectTask> {
         let title = super::task_details::text(Some(request.title.clone()), 500, "Title")?.context("Enter a task title")?;
         let title = title.as_str();
-        let description = super::task_details::text(request.description.clone(), 100_000, "Description")?;
+        let description = super::task_details::text(request.description.clone(), 200_100, "Description")?;
         let acceptance_criteria = super::task_details::text(request.acceptance_criteria.clone(), 100_000, "Acceptance criteria")?;
         let pull_request_url = super::task_details::link(request.pull_request_url.clone(), "Pull request link")?;
         let external_task_url = super::task_details::link(request.external_task_url.clone(), "External task link")?;
+        let links = super::task_details::validate_links(request.links.clone())?;
         let unique_ids: HashSet<_> = request.repository_ids.iter().copied().collect();
         if unique_ids.is_empty() {
             bail!("Choose at least one repository for the task");
@@ -350,6 +355,7 @@ impl TaskService {
             acceptance_criteria,
             pull_request_url,
             external_task_url,
+            links,
             icon: DEFAULT_TASK_ICON.into(),
             color: workspace.color,
             sort_order: 0,
@@ -590,111 +596,7 @@ impl TaskService {
         Ok(removed)
     }
 
-    pub fn remove(&self, task: &ProjectTask) -> Result<()> {
-        self.assert_managed_task_path(&task.worktree_root_path)?;
-        assert_task_repository_paths(task)?;
-        if task.sessions.iter().any(|session| {
-            !matches!(
-                session.state,
-                crate::model::SessionState::Exited | crate::model::SessionState::Restored
-            )
-        }) {
-            bail!("Close the task terminals before removing it");
-        }
-        for repository in &task.repositories {
-            if !git_output(&repository.worktree_path, ["status", "--porcelain"])?
-                .trim()
-                .is_empty()
-            {
-                bail!(
-                    "{} contains uncommitted changes",
-                    repository.worktree_path.display()
-                );
-            }
-        }
-        workspace_trust::revoke(
-            &self.agent_profiles,
-            &Self::trust_targets(&task.worktree_root_path, &task.repositories),
-        );
-        for repository in &task.repositories {
-            let source = repository_source_path(&repository.worktree_path)?;
-            run_git(
-                &source,
-                [
-                    "worktree",
-                    "remove",
-                    "--",
-                    path_text(&repository.worktree_path)?,
-                ],
-            )?;
-        }
-        if task.worktree_root_path.exists() {
-            fs::remove_dir_all(&task.worktree_root_path)?;
-        }
-        Ok(())
-    }
 
-    pub fn remove_permanently(&self, task: &ProjectTask) -> Result<()> {
-        self.assert_managed_task_path(&task.worktree_root_path)?;
-        assert_task_repository_paths(task)?;
-        // Drop the trust while the paths still resolve; once the directories
-        // are gone a symlinked parent could no longer be matched.
-        workspace_trust::revoke(
-            &self.agent_profiles,
-            &Self::trust_targets(&task.worktree_root_path, &task.repositories),
-        );
-
-        let mut repository_sources = Vec::new();
-        for repository in &task.repositories {
-            let source = repository_source_path(&repository.worktree_path).ok();
-            if let Some(source) = source.as_ref() {
-                let _ = run_git(
-                    source,
-                    [
-                        "worktree",
-                        "remove",
-                        "--force",
-                        "--force",
-                        "--",
-                        path_text(&repository.worktree_path)?,
-                    ],
-                );
-                repository_sources.push(source.clone());
-            }
-
-            if repository.worktree_path.exists() {
-                remove_directory_with_permission_repair(&repository.worktree_path, || {
-                    assert_managed_child(&task.worktree_root_path, &repository.worktree_path)
-                })
-                .with_context(|| {
-                    format!(
-                        "Could not delete task worktree {}",
-                        repository.worktree_path.display()
-                    )
-                })?;
-            }
-        }
-
-        if task.worktree_root_path.exists() {
-            remove_directory_with_permission_repair(&task.worktree_root_path, || {
-                self.assert_managed_task_path(&task.worktree_root_path)
-            })
-            .with_context(|| {
-                format!(
-                    "Could not delete task workspace {}",
-                    task.worktree_root_path.display()
-                )
-            })?;
-        }
-
-        repository_sources.sort();
-        repository_sources.dedup();
-        for source in repository_sources {
-            let _ = run_git(&source, ["worktree", "prune"]);
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(Clone)]
@@ -1150,11 +1052,14 @@ struct TaskManifest<'a> {
     task_id: Uuid,
     workspace_id: Uuid,
     title: &'a str,
+    icon: &'a str,
     repositories: &'a [TaskRepository],
     description: Option<&'a str>,
     acceptance_criteria: Option<&'a str>,
     pull_request_url: Option<&'a str>,
     external_task_url: Option<&'a str>,
+    links: Vec<crate::model::WorktreeGroupLink>,
+    summary: String,
 }
 
 fn write_task_files(
@@ -1167,7 +1072,10 @@ fn write_task_files(
 ) -> Result<()> {
     let task_instructions = ProjectTaskInstructionsService::read(workspace)?;
     let manifest = TaskManifest {
-        version: 2,
+        version: 3,
+        icon: details.map(|task| task.icon.as_str()).unwrap_or(DEFAULT_TASK_ICON),
+        links: details.map(super::task_details::links).unwrap_or_default(),
+        summary: details.map(super::task_details::summary).unwrap_or_default(),
         description: details.and_then(|task| task.description.as_deref()),
         acceptance_criteria: details.and_then(|task| task.acceptance_criteria.as_deref()),
         pull_request_url: details.and_then(|task| task.pull_request_url.as_deref()),
@@ -1186,13 +1094,13 @@ fn write_task_files(
         write_private_file(&task_root.join(super::task_details::DETAILS_FILE_NAME), super::task_details::markdown(task).as_bytes())?;
     }
     let mut context = format!(
-        "<!-- Generated by Blackholes. Do not edit this task-specific header. -->\n# Blackholes task context\n\n- Task: `{}`\n- Task ID: `{}`\n- Project: `{}`\n- Project ID: `{}`\n",
+        "<!-- Generated by Blackholes. Do not edit this group-specific header. -->\n# Blackholes Worktree Group context\n\n- Worktree Group: `{}`\n- Group ID: `{}`\n- Project: `{}`\n- Project ID: `{}`\n",
         markdown_inline(title),
         task_id,
         markdown_inline(workspace.label()),
         workspace.id,
     );
-    context.push_str("\nRead `.blackholes-task-details.md` for the objective, acceptance criteria and links. Use Blackholes MCP `get_task` for the latest values and `update_task` to change them. Read any legacy `.blackholes-note.md` as additional context.\n");
+    context.push_str("\nRead `.blackholes-task-details.md` for current context and links. Use MCP `get_worktree_group` and `update_worktree_group`. Keep the description current: first paragraph is a short summary; rewrite stale context after meaningful changes and before finishing. Preserve user requirements, constraints and unresolved work. Never append a progress log, dated updates or an action history. Maintain multiple PR/context URLs in `links`. Pass `detailsRevision` as `expectedRevision`; reread and reconcile conflicts. Read legacy `.blackholes-note.md` only as additional context.\n");
     if !task_instructions.trim().is_empty() {
         context.push('\n');
         context.push_str(task_instructions.trim_end());

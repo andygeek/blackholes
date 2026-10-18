@@ -40,7 +40,7 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
   const hiddenSelectedCount = filtered ? selected.filter(id => !visibleRepositories.some(repository => repository.id === id)).length : 0;
   const usesStartingPoint = source === "current" || createMissing;
   const branchSources = [
-    { value: "current" as const, label: tr("New task branch", "Nueva rama de tarea"), description: tr("Start from the current checkout.", "Parte de la rama actual de cada repositorio.") },
+    { value: "current" as const, label: tr("New worktree group branch", "Nueva rama de grupo de worktrees"), description: tr("Start from the current checkout.", "Parte de la rama actual de cada repositorio.") },
     { value: "local" as const, label: tr("Existing local branch", "Rama local existente"), description: tr("Continue a branch on this machine.", "Continúa una rama que ya está en tu equipo.") },
     { value: "remote" as const, label: tr("Branch from origin", "Rama de origin"), description: tr("Continue a remote branch locally.", "Continúa una rama remota en tu equipo.") },
   ];
@@ -88,7 +88,7 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
   return <form className="create-task-form" onSubmit={event => { event.preventDefault(); send(false); }} onChange={() => { setBranches(undefined); setError(""); }}>
     <p id="app-modal-description">{tr("Work in isolated worktrees for the repositories you choose.", "Trabaja en espacios aislados de los repositorios que elijas.")}</p>
     <fieldset disabled={pending !== null} className="project-modal-fields task-modal-fields">
-      <legend>{tr("Task settings", "Configuración de la tarea")}</legend>
+      <legend>{tr("Worktree Group settings", "Configuración del grupo de worktrees")}</legend>
       <label>{tr("Title", "Título")}
         <input data-initial-focus required value={title} onChange={event => setTitle(event.target.value)} placeholder={tr("e.g. Fix the login flow", "p. ej. Corregir el login")} />
       </label>
@@ -158,12 +158,12 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
               </div>;
             })}
             {!visibleRepositories.length && <div className="task-repository-empty" role="status">
-              {repositories.length ? <><Search size={22} aria-hidden="true" /><strong>{tr("No repositories found", "No se encontraron repositorios")}</strong><span>{tr("Try another name or clear the search.", "Prueba otro nombre o limpia la búsqueda.")}</span></> : <><FolderGit2 size={22} aria-hidden="true" /><span>{tr("Add repositories to the project before creating a task.", "Agrega repositorios al proyecto antes de crear una tarea.")}</span></>}
+              {repositories.length ? <><Search size={22} aria-hidden="true" /><strong>{tr("No repositories found", "No se encontraron repositorios")}</strong><span>{tr("Try another name or clear the search.", "Prueba otro nombre o limpia la búsqueda.")}</span></> : <><FolderGit2 size={22} aria-hidden="true" /><span>{tr("Add repositories to the project before creating a worktree group.", "Agrega repositorios al proyecto antes de crear un grupo de worktrees.")}</span></>}
             </div>}
           </div>
         </div>
         {!!repositories.length && <div className="task-repository-status" role="status">
-          <span>{filtered ? tr(`${visibleRepositories.length} of ${repositories.length} repositories`, `${visibleRepositories.length} de ${repositories.length} repositorios`) : tr("Select the repositories for this task.", "Selecciona los repositorios para esta tarea.")}</span>
+          <span>{filtered ? tr(`${visibleRepositories.length} of ${repositories.length} repositories`, `${visibleRepositories.length} de ${repositories.length} repositorios`) : tr("Select the repositories for this worktree group.", "Selecciona los repositorios para este grupo de worktrees.")}</span>
           {!!hiddenSelectedCount && <span>{tr(`${hiddenSelectedCount} selected outside this search`, `${hiddenSelectedCount} seleccionados fuera de esta búsqueda`)}</span>}
         </div>}
       </section>
@@ -179,7 +179,7 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
           <label className="task-branch-name">{source === "current" ? tr("Branch name", "Nombre de rama") : source === "local" ? tr("Local branch name", "Nombre de la rama local") : tr("Remote branch name", "Nombre de la rama remota")}
             {source === "current" && <span className="task-branch-optional">{tr("Optional", "Opcional")}</span>}
             <input value={branch} onChange={event => setBranch(event.target.value)} aria-required={source !== "current"}
-              placeholder={source === "current" ? tr("Generated from the task title", "Se genera a partir del título") : "feature/existing-work"} spellCheck={false} />
+              placeholder={source === "current" ? tr("Generated from the worktree group title", "Se genera a partir del título") : "feature/existing-work"} spellCheck={false} />
           </label>
           {source === "current" ? <ModalSelect label={tr("If this name already exists", "Si este nombre ya existe")}
             value={action} disabled={pending !== null} onValueChange={value => { setAction(value); clearBranchFeedback(); }}
@@ -221,7 +221,7 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
     <footer>
       <button type="button" className="app-modal__cancel" disabled={pending !== null} onClick={onDismiss}>{tr("Cancel", "Cancelar")}</button>
       <button type="submit" className="app-modal__primary" disabled={pending !== null || !title.trim() || !selected.length}>
-        {pending === "create" ? tr("Preparing worktrees…", "Preparando espacios…") : tr("Create task", "Crear tarea")}
+        {pending === "create" ? tr("Preparing worktrees…", "Preparando espacios…") : tr("Create worktree group", "Crear grupo de worktrees")}
       </button>
     </footer>
   </form>;

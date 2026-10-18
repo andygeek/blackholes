@@ -1,7 +1,7 @@
 use crate::{model::CodexProfile, paths::AppPaths};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use std::{
     env,
     fs::{self, OpenOptions},
@@ -78,8 +78,7 @@ fn forward_codex_session() -> Result<()> {
         "{CODEX_SESSION_EVENT_PREFIX}{}",
         serde_json::to_string(&payload)?
     );
-    let paths = AppPaths::discover()?;
-    UnixDatagram::unbound()?.send_to(message.as_bytes(), paths.events_socket)?;
+    UnixDatagram::unbound()?.send_to(message.as_bytes(), AppPaths::events_socket_path()?)?;
     Ok(())
 }
 
@@ -147,39 +146,19 @@ fn install_hook_in(codex_home: &Path, command: &str) -> Result<()> {
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
         .context("The Codex SessionStart hooks must be a JSON array")?;
-    session_start.retain(|entry| !is_managed_hook(entry));
-    session_start.push(json!({
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [{
-            "type": "command",
-            "command": command,
-            "timeout": 3
-        }]
-    }));
+    // No matcher: current Codex also emits SessionStart for forks, and
+    // future start sources should retain their resumable session ID too.
+    super::agent_hooks::upsert(session_start, MANAGED_HOOK_MARKER, command);
 
     let mut updated = serde_json::to_vec_pretty(&document)?;
     updated.push(b'\n');
     if updated == existing {
         return Ok(());
     }
-    write_atomically(codex_home, &hooks_path, &updated)
+    write_atomically(codex_home, &hooks_path, &existing, &updated)
 }
 
-fn is_managed_hook(entry: &Value) -> bool {
-    entry
-        .get("hooks")
-        .and_then(Value::as_array)
-        .is_some_and(|handlers| {
-            handlers.iter().any(|handler| {
-                handler
-                    .get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(|command| command.contains(MANAGED_HOOK_MARKER))
-            })
-        })
-}
-
-fn write_atomically(directory: &Path, destination: &Path, contents: &[u8]) -> Result<()> {
+fn write_atomically(directory: &Path, destination: &Path, expected: &[u8], contents: &[u8]) -> Result<()> {
     let temporary = directory.join(format!(".blackholes-codex-hook-{}.tmp", Uuid::new_v4()));
     let result = (|| {
         let mut file = OpenOptions::new()
@@ -189,6 +168,10 @@ fn write_atomically(directory: &Path, destination: &Path, contents: &[u8]) -> Re
             .open(&temporary)?;
         file.write_all(contents)?;
         file.sync_all()?;
+        let current = fs::read(destination).or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound { Ok(Vec::new()) } else { Err(error) }
+        })?;
+        if current != expected { bail!("Hook configuration changed during setup; retry later"); }
         fs::rename(&temporary, destination)?;
         Ok::<_, anyhow::Error>(())
     })();

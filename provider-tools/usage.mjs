@@ -66,7 +66,7 @@ async function claudeUsage() {
 }
 
 async function codexUsage() {
-  const child = spawn(installedAgentBinary("codex"), ["app-server", "--stdio"], {
+  const child = spawn(installedAgentBinary("codex"), ["app-server", "--listen", "stdio://"], {
     env: environment, stdio: ["pipe", "pipe", "pipe"], signal: abortController.signal,
   });
   const rpc = new JsonRpcProcess(child, { onRequest: async () => { throw new Error("Interactive requests disabled"); } });

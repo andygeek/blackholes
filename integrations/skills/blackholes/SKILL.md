@@ -1,28 +1,44 @@
 ---
 name: blackholes
-description: Use whenever the user mentions Blackholes as the local project and task manager, or asks to manage Blackholes projects, repositories, tasks, branches, worktrees, notes, or notifications. Prefer the Blackholes MCP over filesystem discovery and Computer Use. Never create a Blackholes task unless the user explicitly requests one.
+description: Use whenever the user mentions Blackholes as the local project and Worktree Group manager, or asks to manage its projects, groups (formerly tasks), repositories, branches, worktrees, context, terminals or notifications. Prefer the Blackholes MCP. Never create a Worktree Group unless explicitly requested.
 ---
 
 <!-- managed-by: blackholes-ai-integrations -->
 
 # Blackholes MCP
 
-Use the MCP server named `blackholes` as the primary interface for Blackholes requests.
+Use the MCP server named `blackholes` for Blackholes orchestration. Locate its tools before filesystem discovery or desktop control. Never use Computer Use for an operation exposed by the MCP. When changing Blackholes source code directly at the user's request, work in the selected checkout without creating a group.
 
-- Before searching the filesystem or controlling the desktop app, locate and use the Blackholes MCP tools.
-- Never use Computer Use for an operation exposed by the Blackholes MCP. Use UI control only when the user explicitly requests visual interaction that the MCP cannot perform.
-- When the user asks to create a project and provides only its name, call `create_project` with that name immediately. Do not ask for a path or technology.
-- Resolve projects and tasks with the MCP search tools before asking the user for internal IDs.
-- Call `create_task` only when the user explicitly asks to create a task in Blackholes. Do not infer task creation from a request to fix, build, inspect, or change code; from the current repository being managed by Blackholes; or from a mere mention of Blackholes as the product or project.
-- `create_task` starts a visible terminal agent by default (`startAgent:true`) with the calling provider and the project's terminal permission setting. Include user constraints in `agentPrompt` or the task description. For several tasks, create each with `startAgent:false`, then call `start_task_agents` once with their IDs and implementation briefs. Do not ask the user to open terminals or type prompts manually.
-- Set `startAgent:false` for planning-only requests, backlog preparation, or explicit instructions not to execute; do not launch these tasks afterwards. `start_task_agents` also starts existing tasks and retries failed launches. Both tools accept an optional provider; omit it to detect the caller. They also accept an optional model (`agentModel` in `create_task`, `model` in `start_task_agents`), passed to the CLI as `--model`; omit it to use the provider's default.
-- Inspect `agentLaunch` from creation and every batch result. `started` confirms a terminal launch, `reused` means an existing terminal was kept without resubmitting the prompt, and `error` identifies a failure. Creation can succeed while launching fails: retry the existing task ID, never recreate it. Do not duplicate successful launches or claim authentication/setup completed. Keep orchestration moving, but do not implement delegated tasks in the caller.
-- Without an explicit request to create a task, work in the checkout selected by the user or the current working directory and do not create a Blackholes task or worktree.
-- To open a terminal or run a local command in a project without a task, such as a dev server, call `open_project_terminal` with the `projectId`, an optional `repositoryId`, and the `command`. It types the command in a new visible shell; pass `reveal:true` when the user wants to see it now. Each call opens a new terminal, so do not retry a started launch.
-- When the user explicitly asks to work in an existing Blackholes task, resolve it first and make code changes only in the writable worktree paths returned by `get_task` or `get_current_context`; treat its original project repositories as read-only context.
-- Terminal agents show progress and final results in their terminals; completion notifications are not required. When a completion notification is explicitly requested, call `notify_task_ready` only after the work is finished and make it the final Blackholes tool call.
+## Projects and Worktree Groups
 
-If the Blackholes MCP is unavailable, explain that the local integration must be installed or repaired instead of silently falling back to filesystem or UI automation.
+- A Worktree Group contains one or more repository worktrees and branches, sessions and a current context document. The legacy name was task. Use Worktree Group terminology and the new tools; old task-named tools are compatibility aliases.
+- Use search tools to resolve names before asking for IDs. `list_worktree_groups` returns `{worktreeGroups:[...]}`; `get_worktree_group` takes `groupId` and returns `worktreeGroup`, `detailsRevision`, project and writable paths.
+- Call `create_worktree_group` only if the user explicitly asks to create a Blackholes group/task. A request to fix, inspect or build code, or the checkout being managed by Blackholes, does not authorize creating a group. Work directly in the intended checkout otherwise.
+- Creating a project from only a name needs no path or technology question: call `create_project`. Explicit source paths link repositories without moving their files.
+- Inside an existing group, change only its attached writable worktrees returned by MCP; original repositories are read-only context. Add/remove attached repositories with `add_worktree_group_repositories` / `remove_worktree_group_repositories`. Never construct worktrees manually.
 
-- Task titles open task details; project titles open a session overview. Use `get_task` to read the objective (`description`), `acceptance_criteria`, `pull_request_url`, and `external_task_url`. Update them with `update_task` using `description`, `acceptanceCriteria`, `pullRequestUrl`, and `externalTaskUrl`. Patch only changed fields; omission preserves a field and null clears it. Pass `detailsRevision` as `expectedRevision` when editing from a snapshot; on conflict reread and reconcile instead of overwriting. `create_task` accepts the same optional detail fields.
-- Task context is exported to `.blackholes-task-details.md` and `.blackholes-task.json`. These are generated files; update task fields through MCP. Legacy notes remain available as additional context. Prefer the structured task details over legacy note-writing tools.
+## Keep context current
+
+- Before implementation, read `get_current_context`, `get_worktree_group` and repository instructions. Read linked authoritative ClickUp, Slack, GitHub or other sources when needed.
+- `description` is a living document. Its first paragraph is the short summary (up to 320 characters shown). After meaningful changes and before finishing, reread the group and use `update_worktree_group` to REPLACE stale context. Preserve current requirements, user constraints, essential decisions and unresolved work.
+- NEVER append a changelog, dated updates, completed-action lists, a progress history or a journal. Remove obsolete context while preserving still-relevant information. Do not use legacy note-append tools for current context.
+- `links` is a collection of `{url, label?, kind}` entries, with kind `pull_request` or `context`. Keep multiple PRs and context sources (ClickUp, Slack, documents). Preserve relevant links, remove obsolete/duplicate entries. Recording a URL does not authorize remote writes.
+- Patch only changed fields. Omission preserves a field; `description:null` clears the document, and `links:[]` clears all links. A supplied links array replaces the whole collection. Pass `detailsRevision` as `expectedRevision`; on conflict reread and reconcile instead of blindly overwriting another agent.
+- `.blackholes-task-details.md` and `.blackholes-task.json` are generated compatibility filenames. Update context through MCP. Legacy `.blackholes-note.md` remains additional read-only context for new workflows.
+
+## Launch and navigation
+
+- `create_worktree_group` defaults to `startAgent:true`, launching a visible terminal with the calling provider and project permission setting. Include all user constraints in `agentPrompt` or description. Set `startAgent:false` for planning/backlog-only requests and explicit instructions not to start; do not launch them afterwards.
+- For an authorized batch, create each group with `startAgent:false`, then use `start_worktree_group_agents` once with `groups:[{groupId,prompt,agent?,model?}]` (1–8). Optional batch `agent` / `model` provide defaults; otherwise the caller/provider default applies.
+- Inspect creation `agentLaunch` and every batch result. `started` confirms a terminal launch; `reused` keeps an existing terminal without resubmitting; `error` is a failure. Retry failed launches on the existing group, never recreate it or duplicate successful launches. The receiving agent implements directly without redelegating.
+- `open_project_terminal` opens a plain project/repository shell and optionally runs one command without a group. It creates a new terminal every call: do not retry a started launch. Use `reveal:true` only when the user wants to see it now.
+- Use `open_worktree_group` / `open_project` only when asked to open/show/go to them. Terminal agents show progress and results in their terminals. Completion notifications are optional; if explicitly requested, call `notify_worktree_group_ready` after finishing, as the final Blackholes call.
+
+## Close groups
+
+- `close_worktree_groups` takes 1–32 `groupIds`; `close_worktree_group` takes one `groupId`. Both require `confirm:true`. Read details before destructive operations and honor the user's scope.
+- Restored tabs without live processes close automatically, returning Claude/Codex session IDs. `terminals` defaults to `fail`; `close_idle` allows idle/attention terminals, and `close_all` also allows working terminals. Caller groups are protected when identifiable; detached external clients can lack caller information.
+- `uncommittedChanges` and `extraFiles` default to `fail`; only explicitly choose `discard` within the user's authorization. Managed worktrees and the group folder are deleted to free disk; branches remain unless `deleteBranches:true`.
+- Inspect every deleted/blocked result, reason, partial cleanup, sessions and bytes freed. A blocked group does not stop other groups.
+
+If MCP orchestration is unavailable, explain that the local integration needs repair rather than silently replacing it with UI or filesystem mutations.

@@ -25,7 +25,7 @@ refresh; if neither is installed, both meters and their refresh button are hidde
 The first launch of each version opens the latest three releases in the central
 workspace, with the navigation sidebar still visible. The current version is
 expanded; use **View changes** to expand older versions. **All releases on GitHub**
-opens the complete online history. Selecting a project, task, repository, or
+opens the complete online history. Selecting a project, worktree group, repository, or
 terminal from the sidebar opens it directly.
 Use the **X** at the upper right to close them and return to your workspace;
 the dismissal is saved for that version. The small rocket icon beside the
@@ -92,7 +92,7 @@ options or GitHub imports. A repository's `…` menu offers removal with an expl
 confirmation and the exact affected path. Removing a link preserves the original;
 removing a managed repository moves its full folder to Trash (including uncommitted
 changes and environment files). Emptying Trash permanently deletes those data.
-Close project terminals and finish active agents first; repositories used by tasks
+Close project terminals and finish active agents first; repositories used by worktree groups
 or other projects and project root folders are protected. Existing project paths and custom project-root settings are
 preserved; changing the default is not a migration of previous workspaces.
 
@@ -102,7 +102,7 @@ and repeat to add sources from other locations. GitHub URLs can be added one at
 a time to the same list. Selected repositories are linked, copied, or cloned as
 requested. If none are selected, Blackholes creates a new Git repository inside
 the project container, using the container's name and an initial commit so it is
-ready for coding and task worktrees. The same project form is used
+ready for coding and worktree group worktrees. The same project form is used
 over native terminals and other workspace views without closing terminal sessions.
 The compact form reveals GitHub input on demand and keeps location details
 collapsed. Existing database-only links are materialized when project context is
@@ -114,26 +114,29 @@ treated as submitting an agent turn.
 
 Click the arrow or title of **Agents** or **Projects** to collapse that sidebar
 section independently. The other section uses the freed space. These choices
-persist across restarts, while project and task expansion remains unchanged.
-The separate collapse-all button still folds the individual projects and tasks.
+persist across restarts, while project and worktree group expansion remains unchanged.
+The separate collapse-all button still folds the individual projects and worktree groups.
 Section headers and the Settings footer use compact rows.
 
 Packaged apps send macOS notifications with Blackholes' own name and icon. The
 first notice requests notification permission if it has not been granted yet.
 Clicking a notice brings Blackholes forward, restores its minimized window, and
-opens the corresponding task or terminal. The destination
+opens the corresponding worktree group or terminal. The destination
 is kept in the notice so clicks can also be handled after relaunch, using normal
 session restoration. A notice for a removed destination still opens the app.
 Receiving a notice alone never changes the selected workspace. Bare development
 executables retain in-app notices and the attention sound, but do not send macOS
 notifications under Terminal's identity.
 
-The Agents section lists terminal agent sessions. Press and hold a card by its
+The Agents section lists only initialized agent terminals with live processes,
+including idle/working/attention sessions. Dormant restored or exited terminals
+stay out of this list. Saved sessions remain in Projects; activating one there
+starts its terminal and adds it to Agents. Press and hold a card by its
 icon or title, then drag to reorder the list. The cursor changes
 only once the hold activates reordering; the insertion marker and edge
 scrolling help with long lists. Keyboard users can focus a card and use
 `Option+Up` / `Option+Down`. The order survives app restarts and does not change
-project/task ownership or the project tree.
+project/group ownership or the project tree.
 
 Closing a terminal agent from Agents, the project tree or its terminal pane
 requires confirmation. It stops the terminal and removes it from session
@@ -144,24 +147,24 @@ Editing a project's visible name, icon and color uses that same shared modal,
 preserving the sidebar and current workspace beneath the backdrop. Appearance
 changes are saved only on confirmation; repository and folder names stay unchanged.
 
-`Cmd+O` searches projects, tasks and terminal sessions (including plain shells). Search by agent/provider name, terminal title, project, task or
-repository context. Terminal results open the existing session rather than creating a duplicate; project results open the session overview and task results open task details.
+`Cmd+O` searches projects, worktree groups and terminal sessions (including plain shells). Search by agent/provider name, terminal title, project, worktree group or
+repository context. Terminal results open the existing session rather than creating a duplicate; project results open the session overview and worktree group results open worktree group details.
 The palette accounts for the sidebar when centering and adapts to narrow windows.
 Its search input supports `Cmd+A`, `Cmd+C`, `Cmd+X`, and `Cmd+V` through the native clipboard.
 
-Use the `+` on a task or repository to open **Blank Terminal**, **Claude**, or
-**Codex**. A task’s `…` menu contains **Edit task** and **Delete task**. The double
-up-chevron above the project tree collapses all project and task accordions.
+Use the `+` on a worktree group or repository to open **Blank Terminal**, **Claude**, or
+**Codex**. A worktree group’s `…` menu contains **Edit group** and **Close group**. The double
+up-chevron above the project tree collapses all project and worktree group accordions.
 
-## Workspaces and task details
+## Workspaces and worktree group details
 
 - Organize projects with one or more Git repositories.
-- Create tasks with separate branches and worktrees for selected repositories.
+- Create worktree groups with separate branches and worktrees for selected repositories.
 - Launch, organize, and restore coding-agent sessions in visible terminals.
 - Configure project terminal permissions and agent instructions.
-- Connect external agents to project and task management through the Blackholes MCP.
+- Connect external agents to project and worktree group management through the Blackholes MCP.
 - Browse and edit files, inspect Git diffs, and search with `Cmd+O` and `Cmd+P`.
-- Keep a task objective, acceptance criteria, PR link, and external task link synchronized with agents through MCP.
+- Keep a living context document and multiple PR/ClickUp/Slack links synchronized with agents through MCP.
 - Run native terminals with tabs, splits, scrollback, and session restoration.
 
 Worktrees separate working files and branches. They are not containers or security sandboxes. The file workspace provides focused editing and diffs, not a full IDE or language-server environment.
@@ -223,29 +226,24 @@ unreadable, and non-UTF-8 text. It limits work to 50,000 indexed files, 256 MiB 
 text, 2,000 matches, and a bounded scan duration. The panel reports skipped files
 or limited results so a narrower query can be used. It does not modify files.
 
-### Task details and links
+### Worktree Group context and links
 
-Click a task's title or choose **Edit task** to open its details. Keep the objective
-in **Objective and description**, define completion conditions in **Acceptance
-criteria**, and add optional **Pull request** and **External task** links. The
-external link can point to ClickUp, Jira, GitHub Issues, or another HTTP(S) page;
-Blackholes stores the URL without fetching or synchronizing its contents.
+Click a group's title and type directly in its title or current context. Changes
+save automatically after a pause or when leaving the page; `Cmd+S` saves now.
+The header reports save status. Click the large icon to choose an emoji or a
+bundled icon. Links show **Pull Request GitHub** or **Context**, a URL and
+open/remove actions; no name field is needed. Drafts survive navigation and
+concurrent agent edits pause autosave for review. Agents replace stale context
+without appending a history. Sessions, worktrees and previous notes are collapsible.
 
-Use **Save changes** or `Cmd+S` while editing. Drafts survive navigation within
-the current app session. If an agent changes the same task while you are editing,
-the app preserves your draft and asks you to reconcile it with the latest values.
-The details page also lists sessions and attached repositories.
-
-There are no separate project/task notes rows. Project titles open a session
-overview. Existing task notes appear under **Previous notes**; project notes and
-all previous note files remain on disk. Keep project-wide context in project
-instructions. See [Task details and MCP](TASK-DETAILS.md) for fields, update
-semantics, and legacy compatibility.
+Project titles open a session overview. Existing notes remain preserved. See
+[Worktree Groups and MCP](TASK-DETAILS.md) for fields, update semantics, generated
+instructions and compatibility.
 
 ### Terminal agent permissions
 
 In **Project settings → Terminals**, enable **Start agents without permission
-prompts** to opt in for that project and its tasks. It is off by default and
+prompts** to opt in for that project and its worktree groups. It is off by default and
 saved locally per project. Blackholes reads it whenever it starts or restores
 a terminal agent, including after quitting and reopening the app. Existing
 Claude/Codex session IDs and profiles are preserved.
@@ -271,18 +269,18 @@ Application data lives in the macOS Application Support directory resolved by `s
 
 | Storage | Contents |
 |---|---|
-| `blackholes-local.db` | SQLite WAL database for projects, tasks, settings, and events |
+| `blackholes-local.db` | SQLite WAL database for projects, worktree groups, settings, and events |
 | `app-session.json` | Saved UI layout and terminal session metadata |
-| `task-workspaces/` | Task worktrees |
+| `task-workspaces/` | Worktree Group worktrees |
 | `agent-profiles/` | Legacy isolated provider profiles retained for existing sessions |
 
-Task details are stored with task records in SQLite and exported to `.blackholes-task-details.md` and `.blackholes-task.json` inside each managed task workspace. Previous Markdown notes and rich-block sidecars are preserved. Terminal output is not stored in SQLite.
+Worktree Group details are stored with worktree group records in SQLite and exported to `.blackholes-task-details.md` and `.blackholes-task.json` inside each managed worktree group workspace. Previous Markdown notes and rich-block sidecars are preserved. Terminal output is not stored in SQLite.
 Legacy built-in bot history, if present, is left on disk but is no longer read or
 modified. Existing provider conversation files remain managed by their CLIs.
 
 ## Computer account usage bar
 
-The bottom bar stays visible across terminals, project/task details, files, and
+The bottom bar stays visible across terminals, project/group details, files, and
 settings. It shows Claude and Codex plan usage from the computer's local CLI
 accounts, honoring their normal profile environment. It does not query legacy
 isolated Blackholes profiles used by previously saved sessions.
@@ -315,3 +313,15 @@ The right side shows the number of open terminal panes and the resident memory
 of the Blackholes process in MB, sampled every five seconds through macOS
 libproc. It excludes agent, shell, and WebKit subprocesses. An unavailable reading
 is shown as a dash, never as zero.
+
+### Close a completed Worktree Group
+
+**Close group** shows one confirmation listing the worktree group's terminals, worktree
+changes (including untracked and ignored files), and extra files at the worktree group
+root. Confirming permanently closes those terminals and deletes the listed
+worktrees/files and worktree group directory to reclaim disk. Git branches are preserved.
+Restorable Claude/Codex session IDs are retained in the local closure result.
+If the inventory changes during confirmation, review the worktree group again.
+
+For batches, the MCP `close_worktree_groups` tool accepts up to 32 worktree group IDs with explicit
+terminal/file policies. See [group closure policies and results](MCP.md#close-worktree-groups-and-reclaim-disk).

@@ -1,5 +1,6 @@
 mod git_history;
 mod source_control;
+mod task_closure;
 
 use super::{
     apply_native_theme,
@@ -106,6 +107,7 @@ pub struct TerminalHandle {
     pub master: SharedMasterPty,
     pub child: SharedChild,
     pub process_id: Option<u32>,
+    pub state: Arc<Mutex<SessionState>>,
 }
 
 #[derive(Clone)]
@@ -388,7 +390,7 @@ impl FileSaveOperation {
                         .repair_task_files(&workspace, &task)
                         .with_context(|| {
                             format!(
-                                "Could not copy the shared task instructions to task '{}'",
+                                "Could not copy the shared worktree group instructions to worktree group '{}'",
                                 task.title
                             )
                         })?;
@@ -568,6 +570,8 @@ pub struct BlackholesApp {
     project_modal_sources: Vec<PathBuf>,
     task_modal_request: Option<(Uuid, Uuid)>,
     task_removal_confirmation: Option<Uuid>,
+    task_removal_preview: Option<crate::services::tasks::closure::ClosePreview>,
+    closing_task_ids: HashSet<Uuid>,
     agent_removal_confirmation: Option<AgentRemovalTarget>,
     task_modal_submitting: bool,
     workspaces: Vec<Workspace>,
@@ -717,7 +721,7 @@ impl BlackholesApp {
             Vec::new()
         });
         let tasks = database.all_tasks().unwrap_or_else(|error| {
-            status = Some((format!("Could not load tasks: {error:#}"), true));
+            status = Some((format!("Could not load worktree groups: {error:#}"), true));
             Vec::new()
         });
         let mut session = database.load_session();
@@ -873,6 +877,8 @@ impl BlackholesApp {
             project_modal_sources: Vec::new(),
             task_modal_request: None,
             task_removal_confirmation: None,
+            task_removal_preview: None,
+            closing_task_ids: HashSet::new(),
             agent_removal_confirmation: None,
             task_modal_submitting: false,
             workspaces,
@@ -1287,7 +1293,7 @@ impl BlackholesApp {
             WorkspaceCommand::SaveTaskDetails { task_id, request_id, patch } => {
                 let result = self.tasks.iter().find(|task| task.id == task_id)
                     .and_then(|task| self.workspaces.iter().find(|workspace| workspace.id == task.workspace_id))
-                    .ok_or_else(|| anyhow::anyhow!("Task is no longer available"))
+                    .ok_or_else(|| anyhow::anyhow!("Worktree Group is no longer available"))
                     .and_then(|workspace| crate::services::task_details::update(&self.database, workspace, &TaskService::new(&self.paths), task_id, &patch));
                 match result {
                     Ok(task) => {
@@ -1538,12 +1544,27 @@ impl BlackholesApp {
             }
             NavigationCommand::ReorderAgents { ids } => {
                 let mut seen = HashSet::new();
-                self.session.agent_order = ids.into_iter().filter(|id| {
+                let requested: Vec<_> = ids.into_iter().filter(|id| {
                     let exists = if let Some(id) = id.strip_prefix("terminal:").and_then(|id| Uuid::parse_str(id).ok()) {
-                        self.session.terminals.iter().any(|terminal| terminal.id == id && terminal.agent != AgentKind::Shell)
+                        self.session.terminals.iter().any(|terminal| terminal.id == id && self.terminal_agent_is_active(terminal))
                     } else { false };
                     exists && seen.insert(id.clone())
                 }).collect();
+                // Reordering visible agents must retain the rank of dormant
+                // sessions so reactivation does not reset their placement.
+                let visible: HashSet<_> = requested.iter().cloned().collect();
+                let mut remaining = requested.into_iter();
+                let mut order = Vec::new();
+                for id in &self.session.agent_order {
+                    if visible.contains(id) {
+                        if let Some(next) = remaining.next() { order.push(next); }
+                    } else if id.strip_prefix("terminal:").and_then(|id| Uuid::parse_str(id).ok())
+                        .is_some_and(|id| self.session.terminals.iter().any(|terminal| terminal.id == id && terminal.agent != AgentKind::Shell)) {
+                        order.push(id.clone());
+                    }
+                }
+                order.extend(remaining);
+                self.session.agent_order = order;
                 self.persist_session();
                 self.hydrate_navigation(cx);
                 cx.notify();
@@ -1599,6 +1620,14 @@ impl BlackholesApp {
                 .unwrap_or_else(|| terminal.cwd.display().to_string()),
             "selected": active_terminal_id == Some(terminal.id),
         })
+    }
+
+    fn terminal_agent_is_active(&self, terminal: &TerminalDescriptor) -> bool {
+        terminal.agent != AgentKind::Shell
+            && !matches!(terminal.state, SessionState::Restored | SessionState::Exited)
+            && self.terminals.get(&terminal.id).is_some_and(|handle| {
+                matches!(handle.child.lock().try_wait(), Ok(None))
+            })
     }
 
     fn hydrate_navigation(&self, cx: &mut Context<Self>) {
@@ -1748,14 +1777,14 @@ impl BlackholesApp {
                     "working": "Working",
                     "terminal": "Terminal",
                     "blankTerminal": self.tr("Blank Terminal", "Terminal vacía"),
-                    "tasks": "Tasks",
-                    "task": "Task",
+                    "tasks": "Worktree Groups",
+                    "task": "Worktree Group",
                     "new": "New",
                     "toggle": "Expand or collapse",
                     "options": "Options",
                     "closeTerminal": "Close terminal",
                     "newTerminal": "New terminal",
-                    "newTask": "Add task",
+                    "newTask": "Add worktree group",
                     "refreshProject": "Find new repositories",
                     "addToProject": "Add to project",
                     "addRepository": "Add repository…",
@@ -1763,8 +1792,8 @@ impl BlackholesApp {
                     "editProject": "Edit project",
                     "projectSettings": "Project settings",
                     "removeProject": "Remove project",
-                    "editTask": "Edit task",
-                    "removeTask": "Delete task"
+                    "editTask": "Edit worktree group",
+                    "removeTask": "Close group"
                 }),
             ),
             Language::Spanish => (
@@ -1776,14 +1805,14 @@ impl BlackholesApp {
                     "working": "Trabajando",
                     "terminal": "Terminal",
                     "blankTerminal": self.tr("Blank Terminal", "Terminal vacía"),
-                    "tasks": "Tareas",
-                    "task": "Tarea",
+                    "tasks": "Grupos de worktrees",
+                    "task": "Grupo de worktrees",
                     "new": "Nuevo",
                     "toggle": "Expandir o contraer",
                     "options": "Opciones",
                     "closeTerminal": "Cerrar terminal",
                     "newTerminal": "Nueva terminal",
-                    "newTask": "Agregar tarea",
+                    "newTask": "Agregar grupo de worktrees",
                     "refreshProject": "Buscar repositorios nuevos",
                     "addToProject": "Agregar al proyecto",
                     "addRepository": "Agregar repositorio…",
@@ -1791,8 +1820,8 @@ impl BlackholesApp {
                     "editProject": "Editar proyecto",
                     "projectSettings": "Configuración del proyecto",
                     "removeProject": "Eliminar proyecto",
-                    "editTask": "Editar tarea",
-                    "removeTask": "Eliminar tarea"
+                    "editTask": "Editar grupo de worktrees",
+                    "removeTask": "Cerrar grupo"
                 }),
             ),
         };
@@ -1808,7 +1837,7 @@ impl BlackholesApp {
                 "projects_section_collapsed": self.session.projects_section_collapsed,
                 "agent_order": self.session.agent_order,
                 "terminal_agents": self.session.terminals.iter()
-                    .filter(|terminal| terminal.agent != AgentKind::Shell)
+                    .filter(|terminal| self.terminal_agent_is_active(terminal))
                     .map(|terminal| self.navigation_terminal(terminal, active_terminal_id))
                     .collect::<Vec<_>>(),
                 "projects": projects,
@@ -1857,7 +1886,7 @@ impl BlackholesApp {
         let task_instructions =
             ProjectTaskInstructionsService::read(workspace).unwrap_or_else(|error| {
                 errors.push(format!(
-                    "Could not read the shared task CLAUDE.md: {error:#}"
+                    "Could not read the shared worktree group CLAUDE.md: {error:#}"
                 ));
                 String::new()
             });
@@ -1908,7 +1937,7 @@ impl BlackholesApp {
         let terminals = self.session.terminals.iter().filter(|terminal| terminal.workspace_id == workspace_id)
             .map(|terminal| serde_json::json!({"id":terminal.id,"label":terminal.label,"agent":terminal.agent})).collect::<Vec<_>>();
         let tasks = self.tasks.iter().filter(|task|task.workspace_id == workspace_id)
-            .map(|task|serde_json::json!({"id":task.id,"title":task.title})).collect::<Vec<_>>();
+            .map(|task|serde_json::json!({"id":task.id,"title":task.title,"icon":task.icon})).collect::<Vec<_>>();
         self.dispatch_workspace_event(serde_json::json!({
             "type":"workspace_surface", "surface":"project-overview", "theme":app_theme_id(self.session.theme),
             "data":{"language":if self.session.language == Language::English {"en"} else {"es"},
@@ -1972,7 +2001,7 @@ impl BlackholesApp {
             };
             let file_name = match document.source {
                 FileDocumentSource::ProjectTaskInstructions(_) => self
-                    .tr("CLAUDE.md for tasks", "CLAUDE.md de tareas")
+                    .tr("CLAUDE.md for worktree groups", "CLAUDE.md de grupos de worktrees")
                     .to_string(),
                 _ => document
                     .path
@@ -1990,8 +2019,8 @@ impl BlackholesApp {
                     .to_string(),
                 FileDocumentSource::ProjectTaskInstructions(_) => self
                     .tr(
-                        "Shared body copied after each task's generated header",
-                        "Cuerpo compartido copiado después del encabezado generado de cada tarea",
+                        "Shared body copied after each worktree group's generated header",
+                        "Cuerpo compartido copiado después del encabezado generado de cada grupo de worktrees",
                     )
                     .to_string(),
                 FileDocumentSource::Repository => document
@@ -2156,8 +2185,8 @@ impl BlackholesApp {
             "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
             "data": {
                 "description": self.tr(
-                    "Open a project or task and use its + menu to start a terminal or coding agent.",
-                    "Abre un proyecto o una tarea y usa su menú + para iniciar una terminal o un agente de código."),
+                    "Open a project or worktree group and use its + menu to start a terminal or coding agent.",
+                    "Abre un proyecto o un grupo de worktrees y usa su menú + para iniciar una terminal o un agente de código."),
             },
         }), cx);
     }
@@ -2452,7 +2481,7 @@ impl BlackholesApp {
         self.next_quick_open_id = self.next_quick_open_id.wrapping_add(1);
         let id = self.next_quick_open_id;
         let placeholder = self
-            .tr("Search projects, tasks, agents and terminals…", "Buscar proyectos, tareas, agentes y terminales…")
+            .tr("Search projects, worktree groups, agents and terminals…", "Buscar proyectos, grupos de worktrees, agentes y terminales…")
             .to_string();
         let input_placeholder = placeholder.clone();
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(input_placeholder));
@@ -2619,8 +2648,8 @@ impl BlackholesApp {
             QuickOpenMode::Navigation => (
                 "⌘O",
                 self.tr(
-                    "Projects · Tasks · Agents · Terminals",
-                    "Proyectos · Tareas · Agentes · Terminales",
+                    "Projects · Worktree Groups · Agents · Terminals",
+                    "Proyectos · Grupos de worktrees · Agentes · Terminales",
                 ),
             ),
             QuickOpenMode::Files => (
@@ -2680,7 +2709,7 @@ impl BlackholesApp {
 
     fn navigation_quick_open_items(&self) -> Vec<QuickOpenItem> {
         let project_kind = self.tr("Project", "Proyecto").to_string();
-        let task_kind = self.tr("Task", "Tarea").to_string();
+        let task_kind = self.tr("Worktree Group", "Grupo de worktrees").to_string();
         let mut items = Vec::with_capacity(self.workspaces.len() + self.tasks.len());
 
         for workspace in &self.workspaces {
@@ -3604,7 +3633,7 @@ impl BlackholesApp {
             Ok(path) => path,
             Err(error) => {
                 self.set_status(
-                    format!("Could not prepare the shared task CLAUDE.md: {error:#}"),
+                    format!("Could not prepare the shared worktree group CLAUDE.md: {error:#}"),
                     true,
                     cx,
                 );
@@ -4268,7 +4297,7 @@ impl BlackholesApp {
                 self.tasks.iter().find(|task| task.id == task_id).cloned()
             })?;
         let (default_title, default_message) =
-            self.task_toast_text(&task, "Task ready", "Tarea lista");
+            self.task_toast_text(&task, "Worktree Group ready", "Grupo de worktrees lista");
         // A later announcement about the same task replaces the earlier one, so
         // the toast on screen always carries the most recent summary.
         self.app_toasts
@@ -4321,7 +4350,7 @@ impl BlackholesApp {
         if self.app_toasts.iter().any(|toast| toast.target == target) {
             return;
         }
-        let (title, message) = self.task_toast_text(task, "New task created", "Nueva tarea creada");
+        let (title, message) = self.task_toast_text(task, "New worktree group created", "Nueva grupo de worktrees creada");
         self.app_toasts.push(AppToast {
             target,
             title,
@@ -4630,7 +4659,7 @@ impl BlackholesApp {
         };
         if let Err(error) = ProjectTaskInstructionsService::write(&workspace, &content) {
             self.set_status(
-                format!("Could not save the shared task CLAUDE.md: {error:#}"),
+                format!("Could not save the shared worktree group CLAUDE.md: {error:#}"),
                 true,
                 cx,
             );
@@ -4658,7 +4687,7 @@ impl BlackholesApp {
                     .repair_task_files(&workspace, &task)
                     .with_context(|| {
                         format!(
-                            "Could not update the shared instructions for task '{}'",
+                            "Could not update the shared instructions for worktree group '{}'",
                             task.title
                         )
                     })?;
@@ -4671,7 +4700,7 @@ impl BlackholesApp {
             let _ = weak.update(cx, |app, cx| {
                 if let Err(error) = result {
                     app.set_status(
-                        format!("Could not update every task CLAUDE.md: {error:#}"),
+                        format!("Could not update every worktree group CLAUDE.md: {error:#}"),
                         true,
                         cx,
                     );
@@ -4899,17 +4928,17 @@ impl BlackholesApp {
                     .filter(|current| current.workspace_id == task.workspace_id)
                     .count() as i64;
                 if let Err(error) = self.database.upsert_task(&task) {
-                    self.set_status(format!("Could not save the task: {error:#}"), true, cx);
+                    self.set_status(format!("Could not save the worktree group: {error:#}"), true, cx);
                     return;
                 }
                 let task_id = task.id;
                 self.tasks.push(task);
                 // The user created this task from the app and is waiting on it.
                 self.reveal_new_task(task_id, true, cx);
-                self.set_status("Task workspace ready", false, cx);
+                self.set_status("Worktree Group workspace ready", false, cx);
             }
             Err(error) => {
-                self.set_status(format!("Could not create the task: {error:#}"), true, cx)
+                self.set_status(format!("Could not create the worktree group: {error:#}"), true, cx)
             }
         }
     }
@@ -4920,17 +4949,17 @@ impl BlackholesApp {
             Ok(task) => {
                 let task_id = task.id;
                 if let Err(error) = self.database.upsert_task(&task) {
-                    self.set_status(format!("Could not save the task: {error:#}"), true, cx);
+                    self.set_status(format!("Could not save the worktree group: {error:#}"), true, cx);
                     return;
                 }
                 if let Some(current) = self.tasks.iter_mut().find(|current| current.id == task.id) {
                     *current = task;
                 }
                 self.request_task_git_summaries(task_id, cx);
-                self.set_status("Task updated", false, cx);
+                self.set_status("Worktree Group updated", false, cx);
             }
             Err(error) => {
-                self.set_status(format!("Could not update the task: {error:#}"), true, cx)
+                self.set_status(format!("Could not update the worktree group: {error:#}"), true, cx)
             }
         }
     }
@@ -4952,7 +4981,7 @@ impl BlackholesApp {
             }
         };
         if let Err(error) = self.database.upsert_task(&task) {
-            self.set_status(format!("Could not save the task: {error:#}"), true, cx);
+            self.set_status(format!("Could not save the worktree group: {error:#}"), true, cx);
             return;
         }
         let task_id = task.id;
@@ -5020,14 +5049,6 @@ impl BlackholesApp {
         match result {
             Ok(()) => {
                 let removed_task = self.tasks.iter().find(|task| task.id == task_id).cloned();
-                if let Err(error) = self.database.remove_task(task_id) {
-                    self.set_status(
-                        format!("Could not remove the task record: {error:#}"),
-                        true,
-                        cx,
-                    );
-                    return;
-                }
                 let terminal_ids = self
                     .session
                     .terminals
@@ -5082,13 +5103,13 @@ impl BlackholesApp {
                 }
                 self.persist_session();
                 self.set_status(
-                    "Task, terminals, and worktrees removed; Git branches were preserved",
+                    "Worktree Group, terminals, and worktrees removed; Git branches were preserved",
                     false,
                     cx,
                 );
             }
             Err(error) => {
-                self.set_status(format!("Could not remove the task: {error:#}"), true, cx)
+                self.set_status(format!("Could not remove the worktree group: {error:#}"), true, cx)
             }
         }
     }
@@ -5444,8 +5465,8 @@ impl BlackholesApp {
             "¿Eliminar proyecto de Blackholes?",
         );
         let description = self.tr(
-            "The project, its tasks, and its terminals will be removed only from this application. Folders and files on disk will not be deleted.",
-            "El proyecto, sus tareas y sus terminales se quitarán únicamente de esta aplicación. Las carpetas y los archivos del disco no se eliminarán.",
+            "The project, its worktree groups, and its terminals will be removed only from this application. Folders and files on disk will not be deleted.",
+            "El proyecto, sus grupos de worktrees y sus terminales se quitarán únicamente de esta aplicación. Las carpetas y los archivos del disco no se eliminarán.",
         );
         let remove_label = self.tr("Remove project", "Eliminar proyecto");
         if self.show_terminal {
@@ -5502,6 +5523,7 @@ impl BlackholesApp {
         }
         self.task_modal_request = None;
         self.task_removal_confirmation = None;
+        self.task_removal_preview = None;
         self.agent_removal_confirmation = None;
         self.project_modal_request = None;
         self.project_appearance_request = None;
@@ -5572,7 +5594,7 @@ impl BlackholesApp {
                         let weak_submit = weak_confirm.clone();
                         dialog
                             .title("Remove project from Blackholes?")
-                            .child("Files on disk are preserved. Projects with task workspaces cannot be removed yet.")
+                            .child("Files on disk are preserved. Projects with worktree group workspaces cannot be removed yet.")
                             .button_props(DialogButtonProps::default().ok_text("Remove reference"))
                             .confirm()
                             .on_ok(move |_, _, cx| {
@@ -5598,6 +5620,7 @@ impl BlackholesApp {
 
     fn open_manage_task(&mut self, task: ProjectTask, _window: &mut Window, cx: &mut Context<Self>) {
         self.show_task_details_for(task.workspace_id, task.id, cx);
+        self.dispatch_workspace_event(serde_json::json!({"type":"task_details_edit", "task_id":task.id}), cx);
     }
 
     fn open_remove_task_confirmation(
@@ -5609,6 +5632,15 @@ impl BlackholesApp {
         let Some(task) = self.tasks.iter().find(|task| task.id == task_id) else {
             return;
         };
+        if !self.closing_task_ids.is_empty() { return; }
+        let preview = match TaskService::new(&self.paths).preview_close(task, &self.task_close_terminals(task_id)) {
+            Ok(preview) => preview,
+            Err(error) => {
+                self.set_status(format!("Could not inspect worktree group: {error:#}"), true, cx);
+                return;
+            }
+        };
+        self.task_removal_preview = Some(preview.clone());
         let language = self.session.language;
         let task_title = task.title.clone();
         let worktree_path = task.worktree_root_path.display().to_string();
@@ -5622,13 +5654,14 @@ impl BlackholesApp {
                 "modal": {
                     "kind": "remove_task", "task_id": task_id,
                     "over_terminal": self.show_terminal && !self.show_release_notes,
-                    "title": self.tr("Delete task and worktrees?", "¿Eliminar tarea y worktrees?"),
+                    "title": self.tr("Delete worktree group and worktrees?", "¿Eliminar grupo de worktrees y worktrees?"),
                     "name": task_title, "context": worktree_path,
+                    "close_preview": preview,
                     "description": self.tr(
-                        "All task terminals will be stopped. The worktree folder and any uncommitted changes inside it will be permanently deleted. Git branches are preserved.",
-                        "Se detendrán todas las terminales de la tarea. La carpeta del worktree y cualquier cambio sin confirmar dentro de ella se eliminarán permanentemente. Las ramas Git se conservarán.",
+                        "Delete the listed terminals, worktrees, changes and extra files permanently. Claude/Codex session IDs are kept in the closure result. Git branches are preserved.",
+                        "Eliminar permanentemente las terminales, worktrees, cambios y archivos extra listados. Los IDs de sesión de Claude/Codex se guardan en el resultado del cierre. Se conservan las ramas Git.",
                     ),
-                    "confirm_label": self.tr("Delete task", "Eliminar tarea"),
+                    "confirm_label": self.tr("Close Worktree Group", "Cerrar grupo de worktrees"),
                     "cancel_label": self.tr("Cancel", "Cancelar"),
                     "offset_x": if self.show_settings { 0.0 } else {
                         -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0)
@@ -5644,13 +5677,14 @@ impl BlackholesApp {
             cx.notify();
             return;
         }
+        let inventory = task_closure::confirmation_inventory(&preview);
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
             let weak_submit = weak.clone();
             dialog
                 .title(match language {
-                    Language::English => "Delete task and worktrees?",
-                    Language::Spanish => "¿Eliminar tarea y worktrees?",
+                    Language::English => "Delete worktree group and worktrees?",
+                    Language::Spanish => "¿Eliminar grupo de worktrees y worktrees?",
                 })
                 .w(px(520.))
                 .child(
@@ -5662,19 +5696,23 @@ impl BlackholesApp {
                                 .child(task_title.clone()),
                         )
                         .child(match language {
-                            Language::English => "All task terminals will be stopped. The worktree folder and any uncommitted changes inside it will be permanently deleted. Git branches are preserved.",
-                            Language::Spanish => "Se detendrán todas las terminales de la tarea. La carpeta del worktree y cualquier cambio sin confirmar dentro de ella se eliminarán permanentemente. Las ramas Git se conservarán.",
+                            Language::English => "Delete the listed terminals, worktrees, changes and extra files permanently. Claude/Codex session IDs are kept in the closure result. Git branches are preserved.",
+                            Language::Spanish => "Eliminar permanentemente las terminales, worktrees, cambios y archivos extra listados. Los IDs de sesión de Claude/Codex se guardan en el resultado del cierre. Se conservan las ramas Git.",
                         })
                         .child(
                             div()
                                 .text_size(px(11.))
                                 .text_color(rgb(0x8e97aa))
                                 .child(worktree_path.clone()),
+                        )
+                        .child(
+                            div().id("task-removal-inventory").max_h(px(300.))
+                                .overflow_y_scroll().child(inventory.clone()),
                         ),
                 )
                 .button_props(DialogButtonProps::default().ok_text(match language {
-                    Language::English => "Delete task",
-                    Language::Spanish => "Eliminar tarea",
+                    Language::English => "Delete worktree group",
+                    Language::Spanish => "Eliminar grupo de worktrees",
                 }))
                 .confirm()
                 .on_ok(move |_, _, cx| {
@@ -5686,59 +5724,19 @@ impl BlackholesApp {
     }
 
     fn start_remove_task(&mut self, task_id: Uuid, cx: &mut Context<Self>) -> bool {
-        let Some(task) = self.tasks.iter().find(|task| task.id == task_id).cloned() else {
-            return false;
+        use crate::services::tasks::closure::*;
+        let Some(expected) = self.task_removal_preview.take() else { return false; };
+        let request = CloseTasksRequest {
+            task_ids: vec![task_id], confirm: true,
+            options: CloseOptions { terminals: TerminalPolicy::CloseAll,
+                uncommitted_changes: FilePolicy::Discard, extra_files: FilePolicy::Discard,
+                delete_branches: false },
+            caller: CallerContext::default(),
         };
-
-        let terminal_ids = self
-            .session
-            .terminals
-            .iter()
-            .filter(|terminal| terminal.task_id == Some(task_id))
-            .map(|terminal| terminal.id)
-            .collect::<Vec<_>>();
-        for terminal_id in terminal_ids {
-            self.close_terminal_internal(terminal_id, false, cx);
+        match self.start_close_tasks(request, None, Some(expected), cx) {
+            Ok(()) => true,
+            Err(error) => { self.set_status(format!("Could not close worktree group: {error:#}"), true, cx); false }
         }
-
-        if self
-            .active_file
-            .as_ref()
-            .is_some_and(|document| document.root.starts_with(&task.worktree_root_path))
-        {
-            self.active_file = None;
-        }
-        if self
-            .file_explorer
-            .root
-            .as_ref()
-            .is_some_and(|root| root.starts_with(&task.worktree_root_path))
-        {
-            self.close_file_explorer(cx);
-        }
-
-        let task = self
-            .tasks
-            .iter()
-            .find(|task| task.id == task_id)
-            .cloned()
-            .unwrap_or(task);
-        let paths = self.paths.clone();
-        let background = cx
-            .background_executor()
-            .spawn(async move { TaskService::new(&paths).remove_permanently(&task) });
-        let weak = cx.weak_entity();
-        cx.spawn(async move |_, cx| {
-            let result = background.await;
-            let _ = weak.update(cx, |app, cx| app.finish_removed_task(task_id, result, cx));
-        })
-        .detach();
-        self.busy = Some(match self.session.language {
-            Language::English => "Deleting task worktrees…".into(),
-            Language::Spanish => "Eliminando worktrees de la tarea…".into(),
-        });
-        cx.notify();
-        true
     }
 
     fn open_add_task_repositories(
@@ -5771,7 +5769,7 @@ impl BlackholesApp {
             .collect::<Vec<_>>();
         if available.is_empty() {
             self.set_status(
-                "Every project repository is already attached to this task",
+                "Every project repository is already attached to this worktree group",
                 false,
                 cx,
             );
@@ -5779,7 +5777,7 @@ impl BlackholesApp {
         }
         let branch_name = task.branch().unwrap_or_default().to_string();
         if branch_name.is_empty() {
-            self.set_status("This task does not have a branch to reuse", true, cx);
+            self.set_status("This worktree group does not have a branch to reuse", true, cx);
             return;
         }
         let current_source_label = self.tr("Current HEAD", "HEAD actual");
@@ -5833,7 +5831,7 @@ impl BlackholesApp {
                         div()
                             .text_size(px(11.))
                             .text_color(rgb(0x8e97aa))
-                            .child("Task branch"),
+                            .child("Worktree Group branch"),
                     )
                     .child(
                         div()
@@ -6121,7 +6119,7 @@ impl BlackholesApp {
             let workspace_submit = workspace.clone();
             let paths_submit = paths.clone();
             dialog
-                .title("Add repositories to task")
+                .title("Add repositories to worktree group")
                 .w(px(680.))
                 .child(content.max_h(px(650.)).overflow_y_scrollbar().pr_2())
                 .button_props(DialogButtonProps::default().ok_text("Add"))
@@ -6215,8 +6213,8 @@ impl BlackholesApp {
         if task.repositories.len() < 2 {
             self.set_status(
                 self.tr(
-                    "A task keeps at least one repository; delete the whole task instead",
-                    "Una tarea conserva al menos un repositorio; elimina la tarea completa",
+                    "A worktree group keeps at least one repository; delete the whole worktree group instead",
+                    "Un grupo de worktrees conserva al menos un repositorio; cierra el grupo completo",
                 ),
                 true,
                 cx,
@@ -6237,8 +6235,8 @@ impl BlackholesApp {
             })
             .collect::<Vec<_>>();
         let dialog_title = self.tr(
-            "Remove repositories from task",
-            "Quitar repositorios de la tarea",
+            "Remove repositories from worktree group",
+            "Quitar repositorios del grupo de worktrees",
         );
         let submit_label = self.tr("Remove", "Quitar");
         let delete_branch_label = self.tr(
@@ -6478,7 +6476,7 @@ impl BlackholesApp {
         let workspace = self.workspaces.iter().find(|w| w.id == workspace_id).context("Project missing")?;
         if self.database.all_tasks()?.iter().any(|task| task.repositories.iter().any(|r|
             r.repository_id == repository_id)) {
-            anyhow::bail!("{}", self.tr("Remove this repository from its tasks first. Their worktrees must be preserved.", "Primero quita este repositorio de sus tareas. Es necesario proteger sus worktrees."));
+            anyhow::bail!("{}", self.tr("Remove this repository from its worktree groups first. Their worktrees must be preserved.", "Primero quita este repositorio de sus grupos de worktrees. Es necesario proteger sus worktrees."));
         }
         if self.session.terminals.iter().any(|terminal| terminal.workspace_id == workspace_id) {
             anyhow::bail!("{}", self.tr("Close this project's terminals before removing a repository.", "Cierra las terminales de este proyecto antes de eliminar un repositorio."));
@@ -6674,7 +6672,7 @@ impl BlackholesApp {
             return;
         };
         if workspace.repositories.is_empty() {
-            self.set_status("Add a Git repository before creating a task", true, cx);
+            self.set_status("Add a Git repository before creating a worktree group", true, cx);
             return;
         }
 
@@ -6691,9 +6689,9 @@ impl BlackholesApp {
                     "repositories": workspace.repositories.iter().map(|repository| serde_json::json!({
                         "id": repository.id, "name": repository.name,
                     })).collect::<Vec<_>>(),
-                    "title": self.tr("Create isolated task workspace", "Crear espacio aislado para la tarea"),
+                    "title": self.tr("Create isolated worktree group workspace", "Crear espacio aislado paral grupo de worktrees"),
                     "name": "", "description": "",
-                    "confirm_label": self.tr("Create task", "Crear tarea"),
+                    "confirm_label": self.tr("Create worktree group", "Crear grupo de worktrees"),
                     "cancel_label": self.tr("Cancel", "Cancelar"),
                     "offset_x": if self.show_settings { 0.0 } else {
                         -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0)
@@ -6710,7 +6708,7 @@ impl BlackholesApp {
             return;
         }
 
-        let title_label = self.tr("Task title", "Título de la tarea");
+        let title_label = self.tr("Worktree Group title", "Título del grupo de worktrees");
         let title_placeholder = self.tr("e.g. Fix the login flow", "p. ej. Corregir el login");
         let branch_label = self.tr("Branch name (optional)", "Nombre de rama (opcional)");
         let branch_placeholder = self.tr(
@@ -6719,8 +6717,8 @@ impl BlackholesApp {
         );
         let description_label = self.tr("Description (optional)", "Descripción (opcional)");
         let description_placeholder = self.tr(
-            "Short context for this task…",
-            "Contexto breve para esta tarea…",
+            "Short context for this worktree group…",
+            "Contexto breve para este grupo de worktrees…",
         );
         let repositories_label = self.tr("Repositories", "Repositorios");
         let setup_label = self.tr(
@@ -6749,10 +6747,10 @@ impl BlackholesApp {
         let reuse_label = self.tr("Reuse existing branch", "Reutilizar rama existente");
         let recreate_label = self.tr("Recreate from current HEAD", "Recrear desde el HEAD actual");
         let dialog_title = self.tr(
-            "Create isolated task workspace",
-            "Crear espacio aislado para la tarea",
+            "Create isolated worktree group workspace",
+            "Crear espacio aislado paral grupo de worktrees",
         );
-        let submit_label = self.tr("Create task", "Crear tarea");
+        let submit_label = self.tr("Create worktree group", "Crear grupo de worktrees");
         let copy_changes_label = self.tr(
             "Copy current local changes",
             "Copiar cambios locales actuales",
@@ -7154,6 +7152,7 @@ impl BlackholesApp {
                         .collect();
                     drop(draft);
                     let request = CreateTaskRequest {
+                        links: vec![],
                         acceptance_criteria: None,
                         pull_request_url: None,
                         external_task_url: None,
@@ -7210,7 +7209,7 @@ impl BlackholesApp {
         } else if check_only && request.branch_name.as_deref().unwrap_or_default().trim().is_empty() {
             Some(self.tr("Enter a branch name to check.", "Escribe una rama para comprobarla."))
         } else if !check_only && request.title.trim().is_empty() {
-            Some(self.tr("Enter a task title.", "Escribe un título para la tarea."))
+            Some(self.tr("Enter a worktree group title.", "Escribe un título paral grupo de worktrees."))
         } else { None };
         if let Some(error) = error {
             self.dispatch_workspace_event(serde_json::json!({
@@ -7432,6 +7431,7 @@ impl BlackholesApp {
         cx: &mut Context<Self>,
     ) -> Result<serde_json::Value> {
         request.validate()?;
+        if !self.closing_task_ids.is_empty() { anyhow::bail!("Wait for worktree group closure to finish"); }
         self.reload_external_data(cx);
         let source = request.source_terminal_id.and_then(|id| {
             self.session.terminals.iter().find(|terminal| terminal.id == id).cloned()
@@ -7488,7 +7488,7 @@ impl BlackholesApp {
         cx: &mut Context<Self>,
     ) -> Result<serde_json::Value> {
         let task = self.tasks.iter().find(|task| task.id == request.task_id)
-            .cloned().context("The task does not exist")?;
+            .cloned().context("The worktree group does not exist")?;
         if let Some(existing) = self.session.terminals.iter().find(|terminal| {
             terminal.task_id == Some(task.id) && terminal.agent == agent
                 && terminal.state != SessionState::Exited && self.terminals.contains_key(&terminal.id)
@@ -7498,12 +7498,12 @@ impl BlackholesApp {
                 "taskId": task.id, "terminalId": existing.id, "agent": agent,
                 "started": false, "reused": true,
                 "message": if source_terminal_id == Some(existing.id) {
-                    "This terminal already owns the task. Implement here; do not delegate to yourself."
-                } else { "A terminal for this task and agent is already open. No prompt was resubmitted." },
+                    "This terminal already owns the worktree group. Implement here; do not delegate to yourself."
+                } else { "A terminal for this worktree group and agent is already open. No prompt was resubmitted." },
             }));
         }
         if task.repositories.is_empty() || task.repositories.iter().any(|repository| !repository.worktree_path.is_dir()) {
-            anyhow::bail!("The task needs its attached worktrees before an agent can start");
+            anyhow::bail!("The worktree group needs its attached worktrees before an agent can start");
         }
         let prompt = implementation_prompt(&task, request.prompt.as_deref())?;
         let descriptor = TerminalDescriptor {
@@ -7535,14 +7535,14 @@ impl BlackholesApp {
         self.app_toasts.push(AppToast {
             target: AppToastTarget::Terminal { terminal_id: descriptor.id, agent },
             title: format!("{} · {}", agent.label(), task.title),
-            message: self.tr("Task terminal started. Click to follow its work.", "Terminal de la tarea iniciada. Haz clic para seguir el trabajo.").into(),
+            message: self.tr("Worktree Group terminal started. Click to follow its work.", "Terminal del grupo de worktrees iniciada. Haz clic para seguir el trabajo.").into(),
         });
         Ok(serde_json::json!({
             "taskId": task.id, "terminalId": descriptor.id, "agent": agent, "model": descriptor.model,
             "cwd": descriptor.cwd, "started": true, "reused": false,
             "skipPermissions": self.project_terminal_skip_permissions(task.workspace_id),
             "warning": persistence_warning,
-            "message": "Terminal launched with the task prompt. Provider authentication or first-run setup, if needed, is visible in that terminal.",
+            "message": "Terminal launched with the worktree group prompt. Provider authentication or first-run setup, if needed, is visible in that terminal.",
         }))
     }
 
@@ -7623,6 +7623,9 @@ impl BlackholesApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
+        if descriptor.task_id.is_some_and(|id| self.closing_task_ids.contains(&id)) {
+            anyhow::bail!("This worktree group is closing");
+        }
         if self.terminals.contains_key(&descriptor.id) {
             return Ok(());
         }
@@ -7719,6 +7722,7 @@ impl BlackholesApp {
                 master,
                 child: spawned.child,
                 process_id: spawned.process_id,
+                state: Arc::new(Mutex::new(descriptor.state)),
             },
         );
         Ok(())
@@ -7778,6 +7782,7 @@ impl BlackholesApp {
     }
 
     fn update_terminal_state(&mut self, terminal_id: Uuid, state: SessionState) {
+        if let Some(handle) = self.terminals.get(&terminal_id) { *handle.state.lock() = state; }
         if state != SessionState::Attention {
             self.app_toasts
                 .retain(|toast| toast.target.terminal_id() != Some(terminal_id));
@@ -8086,6 +8091,7 @@ impl BlackholesApp {
             }
         }
         if let Some((agent, state)) = agent_changed {
+            if let Some(handle) = self.terminals.get(&terminal_id) { *handle.state.lock() = state; }
             if agent == AgentKind::Shell {
                 self.app_toasts
                     .retain(|toast| toast.target.terminal_id() != Some(terminal_id));
@@ -8909,7 +8915,7 @@ impl BlackholesApp {
         let weak_close = weak;
         let file_name = match document.source {
             FileDocumentSource::ProjectTaskInstructions(_) => self
-                .tr("CLAUDE.md for tasks", "CLAUDE.md de tareas")
+                .tr("CLAUDE.md for worktree groups", "CLAUDE.md de grupos de worktrees")
                 .to_string(),
             _ => document
                 .path
@@ -8927,8 +8933,8 @@ impl BlackholesApp {
                 .to_string(),
             FileDocumentSource::ProjectTaskInstructions(_) => self
                 .tr(
-                    "Shared body copied after each task's generated header",
-                    "Cuerpo compartido copiado después del encabezado generado de cada tarea",
+                    "Shared body copied after each worktree group's generated header",
+                    "Cuerpo compartido copiado después del encabezado generado de cada grupo de worktrees",
                 )
                 .to_string(),
             FileDocumentSource::Repository => document
@@ -8971,7 +8977,7 @@ impl BlackholesApp {
                                 ))
                                 .child(explorer_mode_button(
                                     format!("project-settings-tasks-{workspace_id}"),
-                                    self.tr("Task CLAUDE.md", "CLAUDE.md de tareas"),
+                                    self.tr("Worktree Group CLAUDE.md", "CLAUDE.md de grupos de worktrees"),
                                     !project_selected,
                                     move |_, _, cx| {
                                         let _ = weak_task_instructions.update(cx, |app, cx| {
@@ -9371,7 +9377,7 @@ impl BlackholesApp {
             let weak_project_instructions = weak.clone();
             let weak_remove_project = weak.clone();
             let new_terminal_label = self.tr("New terminal", "Nueva terminal").to_string();
-            let add_task_label = self.tr("Add task", "Agregar tarea").to_string();
+            let add_task_label = self.tr("Add worktree group", "Agregar grupo de worktrees").to_string();
             let edit_project_label = self.tr("Edit project", "Editar proyecto").to_string();
             let project_settings_label = self
                 .tr("Project settings", "Configuración del proyecto")
@@ -9628,7 +9634,7 @@ impl BlackholesApp {
                         .text_size(px(10.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(0x737d90))
-                        .child(self.tr("TASKS", "TAREAS")),
+                        .child(self.tr("WORKTREE GROUPS", "GRUPOS DE WORKTREES")),
                 );
             }
 
@@ -9645,9 +9651,9 @@ impl BlackholesApp {
                 let weak_edit_task = weak.clone();
                 let weak_remove_task = weak.clone();
                 let task_to_edit = task.clone();
-                let edit_task_label = self.tr("Edit task", "Editar tarea").to_string();
-                let remove_task_label = self.tr("Delete task", "Eliminar tarea").to_string();
-                let task_menu_label = self.tr("Task options", "Opciones de la tarea").to_string();
+                let edit_task_label = self.tr("Edit worktree group", "Editar grupo de worktrees").to_string();
+                let remove_task_label = self.tr("Close Worktree Group", "Cerrar grupo de worktrees").to_string();
+                let task_menu_label = self.tr("Worktree Group options", "Opciones del grupo de worktrees").to_string();
                 let new_task_badge = self
                     .session
                     .unseen_task_ids
@@ -10222,8 +10228,8 @@ impl BlackholesApp {
         };
         let footer_label = match mode {
             QuickOpenMode::Navigation => self.tr(
-                    "Projects · Tasks · Agents · Terminals",
-                    "Proyectos · Tareas · Agentes · Terminales",
+                    "Projects · Worktree Groups · Agents · Terminals",
+                    "Proyectos · Grupos de worktrees · Agentes · Terminales",
             ),
             QuickOpenMode::Files => self.tr(
                 "Files from the selected repository",
@@ -10466,7 +10472,7 @@ impl Render for BlackholesApp {
                 Ok(note) => { self.task_legacy_notes.insert(task.id, note); }
                 Err(error) => {
                     self.task_legacy_notes.insert(task.id, String::new());
-                    self.status = Some((format!("Could not read previous task notes: {error:#}"), true));
+                    self.status = Some((format!("Could not read previous worktree group notes: {error:#}"), true));
                 }
             }
         }
@@ -11764,7 +11770,7 @@ fn project_icon_options(language: Language) -> Vec<(&'static str, &'static str, 
             ("rocket", "Rocket", AppIcon::Rocket),
             ("database", "Database", AppIcon::Database),
             ("globe", "Globe", AppIcon::Globe),
-            ("list-todo", "Tasks", AppIcon::ListTodo),
+            ("list-todo", "Worktree Groups", AppIcon::ListTodo),
             ("git-branch", "Branch", AppIcon::GitBranch),
         ],
         Language::Spanish => vec![
@@ -11775,7 +11781,7 @@ fn project_icon_options(language: Language) -> Vec<(&'static str, &'static str, 
             ("rocket", "Cohete", AppIcon::Rocket),
             ("database", "Base de datos", AppIcon::Database),
             ("globe", "Globo", AppIcon::Globe),
-            ("list-todo", "Tareas", AppIcon::ListTodo),
+            ("list-todo", "Grupos de worktrees", AppIcon::ListTodo),
             ("git-branch", "Rama", AppIcon::GitBranch),
         ],
     }
@@ -12103,6 +12109,9 @@ fn choice_button(
 }
 
 fn task_navigation_icon(task: &ProjectTask) -> AnyElement {
+    if let Some(emoji) = task.icon.strip_prefix("emoji:") {
+        return div().text_size(px(14.)).child(emoji.to_string()).into_any_element();
+    }
     Icon::new(project_icon_kind(&task.icon))
         .small()
         .into_any_element()
@@ -12220,6 +12229,21 @@ fn install_agent_command_bridge(paths: &AppPaths, window: &Window, cx: &mut Cont
     let window_handle = window.window_handle();
     cx.spawn(async move |this, cx| {
         while let Ok(command) = receiver.recv_async().await {
+            if let Some(payload) = command.message.strip_prefix("close-tasks:") {
+                let reply = command.reply.clone();
+                let result = this.update(cx, |app, cx| -> Result<()> {
+                    app.start_close_tasks(serde_json::from_str(payload)?, Some(reply), None, cx)
+                });
+                let error = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(format!("{error:#}")),
+                    Err(_) => Some("The app closed before handling worktree group closure".into()),
+                };
+                if let Some(error) = error {
+                    let _ = command.reply.send(serde_json::json!({ "accepted": false, "error": error }));
+                }
+                continue;
+            }
             let response = if let Some(payload) = command.message.strip_prefix("start-task-agents:") {
                 window_handle.update(cx, |_, window, cx| {
                     this.update(cx, |app, cx| -> Result<serde_json::Value> {

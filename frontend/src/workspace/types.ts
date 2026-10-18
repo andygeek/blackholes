@@ -4,6 +4,11 @@ export interface AppModalState {
   color_id?: string;
   icon_options?: { value: string; label: string }[];
   color_options?: { value: string; label: string; color: string }[];
+  close_preview?: {
+    terminals: { terminalId: string; label: string; state: string; live: boolean }[];
+    changes: { path: string; changes: string }[];
+    extraFiles: string[];
+  };
   terminal_id?: string;
   repository_id?: string;
   task_id?: string;

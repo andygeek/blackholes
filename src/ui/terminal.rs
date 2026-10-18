@@ -1,4 +1,5 @@
 mod native_glyph;
+mod program_status;
 mod unicode_strokes;
 
 use crate::model::AgentKind;
@@ -73,7 +74,9 @@ pub struct AgentTerminalSignal {
 
 enum FastTerminalEvent {
     Terminal(TerminalEvent),
+    PtyWrite(String),
     Agent(AgentTerminalSignal),
+    ProgramStatus(program_status::Event),
     AlternateScreen(bool),
 }
 
@@ -101,9 +104,9 @@ impl EventListener for FastEventProxy {
             Event::ClipboardStore(_, text) => self.send(TerminalEvent::ClipboardStore(text)),
             Event::ClipboardLoad(_, _) => self.send(TerminalEvent::ClipboardLoad),
             Event::Exit | Event::ChildExit(_) => self.send(TerminalEvent::Exit),
+            Event::PtyWrite(text) => { let _ = self.sender.try_send(FastTerminalEvent::PtyWrite(text)); }
             Event::Wakeup
             | Event::MouseCursorDirty
-            | Event::PtyWrite(_)
             | Event::ColorRequest(_, _)
             | Event::TextAreaSizeRequest(_)
             | Event::CursorBlinkingChange => {}
@@ -158,6 +161,7 @@ pub struct FastTerminalView {
     /// A press a TUI asked to receive, held back until we know whether the
     /// pointer moves. Released as a click, discarded once it becomes a drag.
     pending_mouse_report: Option<(MouseButton, Vec<u8>)>,
+    program_status_active: bool,
     agent_turn_pending: bool,
     agent_output_seen: bool,
     agent_settle_running: bool,
@@ -192,10 +196,16 @@ struct OscScanner {
     buffer: Vec<u8>,
     in_osc: bool,
     escape_pending: bool,
+    program_status: program_status::ProgramStatus,
+}
+
+enum OscEvent {
+    Agent(AgentTerminalSignal),
+    ProgramStatus(program_status::Event),
 }
 
 impl OscScanner {
-    fn scan(&mut self, bytes: &[u8], mut on_signal: impl FnMut(AgentTerminalSignal)) {
+    fn scan(&mut self, bytes: &[u8], mut on_signal: impl FnMut(OscEvent)) {
         for &byte in bytes {
             if !self.in_osc {
                 if self.escape_pending {
@@ -205,6 +215,8 @@ impl OscScanner {
                         self.buffer.clear();
                     } else if byte == b'\x1b' {
                         self.escape_pending = true;
+                    } else if byte == b'c' {
+                        on_signal(OscEvent::ProgramStatus(self.program_status.reset()));
                     }
                 } else if byte == b'\x1b' {
                     self.escape_pending = true;
@@ -240,9 +252,18 @@ impl OscScanner {
         }
     }
 
-    fn finish(&mut self, on_signal: &mut impl FnMut(AgentTerminalSignal)) {
-        if let Some(signal) = parse_agent_osc(&String::from_utf8_lossy(&self.buffer)) {
-            on_signal(signal);
+    fn finish(&mut self, on_signal: &mut impl FnMut(OscEvent)) {
+        let sequence = String::from_utf8_lossy(&self.buffer);
+        if sequence.starts_with("7501;") {
+            if let Some(event) = self.program_status.receive(&sequence) {
+                on_signal(OscEvent::ProgramStatus(event));
+            }
+        } else if sequence == "133;A" || sequence.starts_with("133;A;") {
+            on_signal(OscEvent::ProgramStatus(self.program_status.shell_prompt()));
+        } else if !self.program_status.active() {
+            if let Some(signal) = parse_agent_osc(&sequence) {
+                on_signal(OscEvent::Agent(signal));
+            }
         }
         self.buffer.clear();
         self.in_osc = false;
@@ -356,6 +377,8 @@ impl FastTerminalView {
         let parser_term = term.clone();
         let parser_revision = render_revision.clone();
         let protocol_event_tx = event_tx.clone();
+        let stdin_writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(writer)));
+        let protocol_writer = stdin_writer.clone();
         thread::Builder::new()
             .name("blackholes-pty-reader".into())
             .spawn(move || {
@@ -367,9 +390,23 @@ impl FastTerminalView {
                     match reader.read(&mut buffer) {
                         Ok(0) | Err(_) => break,
                         Ok(length) => {
-                            osc_scanner.scan(&buffer[..length], |signal| {
-                                let _ =
-                                    protocol_event_tx.try_send(FastTerminalEvent::Agent(signal));
+                            osc_scanner.scan(&buffer[..length], |event| {
+                                match event {
+                                    OscEvent::ProgramStatus(program_status::Event::Reply) => {
+                                        let mut writer = protocol_writer.lock();
+                                        let _ = writer.write_all(program_status::SUPPORT_REPLY);
+                                        let _ = writer.flush();
+                                    }
+                                    OscEvent::ProgramStatus(event) => {
+                                        // Wake the UI before applying backpressure: a full
+                                        // queue must not lose the authoritative working state.
+                                        let _ = repaint_tx.try_send(());
+                                        let _ = protocol_event_tx.send(FastTerminalEvent::ProgramStatus(event));
+                                    }
+                                    OscEvent::Agent(signal) => {
+                                        let _ = protocol_event_tx.try_send(FastTerminalEvent::Agent(signal));
+                                    }
+                                }
                             });
                             let mut term = parser_term.lock();
                             let was_alternate = term.mode().contains(TermMode::ALT_SCREEN);
@@ -438,7 +475,7 @@ impl FastTerminalView {
             renderer_measured: false,
             config,
             focus_handle,
-            stdin_writer: Arc::new(Mutex::new(Box::new(writer))),
+            stdin_writer,
             event_rx,
             _reader_task: reader_task,
             _focus_subscriptions: focus_subscriptions,
@@ -465,6 +502,7 @@ impl FastTerminalView {
             search_current: None,
             search_saved_selection: None,
             pending_mouse_report: None,
+            program_status_active: false,
             agent_turn_pending: false,
             agent_output_seen: false,
             agent_settle_running: false,
@@ -717,7 +755,7 @@ impl FastTerminalView {
     }
 
     fn record_output_activity(&mut self, cx: &mut Context<Self>) {
-        if !self.agent_turn_pending {
+        if !self.agent_turn_pending || self.program_status_active {
             return;
         }
         self.agent_output_seen = true;
@@ -1126,7 +1164,13 @@ impl FastTerminalView {
     fn process_events(&mut self, cx: &mut Context<Self>) {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
+                FastTerminalEvent::PtyWrite(text) => self.write(text.as_bytes()),
                 FastTerminalEvent::Agent(signal) => self.dispatch_agent_signal(signal, cx),
+                FastTerminalEvent::ProgramStatus(program_status::Event::Status { signal, active }) => {
+                    self.program_status_active = active;
+                    if let Some(signal) = signal { self.dispatch_agent_signal(signal, cx); }
+                }
+                FastTerminalEvent::ProgramStatus(program_status::Event::Reply) => {},
                 FastTerminalEvent::AlternateScreen(alternate) => {
                     if !alternate {
                         self.agent_turn_pending = false;

@@ -54,7 +54,7 @@ const LEGACY_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated 
 - Keep notes concise and developer-oriented.
 - Append only durable implementation context, non-obvious constraints, decisions, or essential acceptance checkpoints.
 "#;
-const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated Blackholes task workspace containing one or more repository worktrees.
+const PREVIOUS_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated Blackholes task workspace containing one or more repository worktrees.
 
 ## Required context
 
@@ -77,9 +77,25 @@ const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated
 - Patch only changed fields; omitted fields are preserved and null clears a field. Read `get_task` and pass its `detailsRevision` as `expectedRevision` when editing from a snapshot.
 - Keep the objective and acceptance criteria concise and current. The task details Markdown is generated; do not edit it directly.
 "#;
+const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated Blackholes Worktree Group containing one or more repository worktrees and branches.
+
+## Required context
+
+- Before working, read `.blackholes-task-details.md`, then use MCP `get_current_context` and `get_worktree_group` with the group ID above. Read legacy `.blackholes-note.md` only as additional context.
+- Read each attached repository's AGENTS.md / CLAUDE.md. Retrieve authoritative ClickUp, Slack, GitHub or other linked context with connected tools when needed.
+- Change only worktrees attached to this group. Original repositories are read-only context. Use `add_worktree_group_repositories` if another repository is needed; never create or copy worktrees manually.
+
+## Maintain the current context
+
+- The description is a living document, not a journal. Its first paragraph is a short summary of the current objective and state, shown in the UI (up to 320 characters).
+- After meaningful changes and before finishing, reread `get_worktree_group` and use `update_worktree_group` to REPLACE stale description content. Keep only the current objective, essential decisions, constraints and unresolved work. Preserve user requirements. Do not append dated entries, completed-action lists, a changelog or a progress history.
+- Maintain `links` as a collection of `{url, label, kind}` entries: `kind` is `pull_request` for each PR and `context` for ClickUp, Slack, documents or other sources. Support several PRs and context sources. Preserve relevant links and remove obsolete or duplicate entries. A link does not authorize remote changes.
+- Pass `detailsRevision` as `expectedRevision`. On conflict reread and reconcile; never overwrite another agent's update blindly. Omitted fields are preserved; `description:null` clears the document and `links:[]` clears all links.
+- Context Markdown and the manifest are generated. Update through MCP, never edit generated files directly. Do not use legacy note-append tools for current context.
+"#;
 const PROJECT_POLICY_START: &str = "<!-- BLACKHOLES PROJECT POLICY START -->";
 const PROJECT_POLICY_END: &str = "<!-- BLACKHOLES PROJECT POLICY END -->";
-const PROJECT_POLICY: &str = r#"# Blackholes project instructions
+const PREVIOUS_PROJECT_POLICY: &str = r#"# Blackholes project instructions
 
 ## Project context and linked repositories
 
@@ -100,6 +116,30 @@ When the Blackholes MCP is available:
 - If the work has associated pull requests or branches, read their metadata to identify the correct source. This does not require a Blackholes task. Do not push, comment, or change remote resources without an explicit request.
 - Assume an associated branch may belong to another person or contain unfinished work. Preserve existing changes and do not switch branches or move work into a task without the user's direction.
 - When isolation is chosen, use the requested source branch for local Blackholes worktrees. Direct project work remains valid when isolation is not requested or required by user-authored project instructions.
+- Only perform a remote mutation when the user explicitly requests that exact remote action in the current conversation. If the request is ambiguous, keep the operation local and ask before touching the remote system.
+"#;
+const PROJECT_POLICY: &str = r#"# Blackholes project instructions
+
+## Project context and linked repositories
+
+- This project's instructions and selected skills apply to all repositories registered to this project, including repositories outside this directory. Read each repository's own instructions as well; do not assume parent-directory instruction discovery covers linked repositories.
+- Repositories are available directly in this directory as folders or symbolic links. Use them from any terminal or coding agent without requiring Blackholes or its MCP. Resolve a symbolic link to see the original path. Direct edits through links affect the original working folders, including existing uncommitted work; links are not isolated copies.
+- Keep project-wide skills, notes and instructions in this project container. Do not install or copy them into linked repositories automatically. Removing a project reference must not delete linked files.
+
+## Required Blackholes orchestration
+
+When the Blackholes MCP is available:
+
+- When using the Blackholes integration, begin with `get_current_context`. Without that integration, work directly with this project's folders and symbolic links; do not require Blackholes to access repositories.
+- Interpret "create a worktree group" (or the legacy "create a task") as creating a local Blackholes Worktree Group. Use the Blackholes MCP for project, worktree group, repository, branch, and worktree orchestration.
+- Agents may inspect, review, edit, build, and test directly in the intended project repositories. Resolve the project and repositories through the MCP and respect the user's request, project instructions, selected permissions, and existing changes. A worktree group or worktree is not a prerequisite.
+- Worktree Groups and isolated worktrees are optional: use them when requested by the user, when working in an existing selected worktree group, or when user-authored project instructions require them. Creating implementation worktree groups through `create_worktree_group` starts visible terminal agents by default (`startAgent:true`) using the calling provider and each project's terminal permission setting. For a batch, create all worktree groups with `startAgent:false`, then call `start_worktree_group_agents` with `groups:[{groupId,prompt}]`. Use `startAgent:false` for planning-only/backlog requests or explicit instructions not to start. Terminal agents show results in their terminals; completion notifications are not required. For work without a requested worktree group, work directly in the intended project. Inside a worktree group, change only its attached worktrees. Preserve user constraints in the implementation prompt and do not recreate or redelegate an existing worktree group.
+- Do not create a task, issue, comment, branch, pull request, or any other remote resource in ClickUp, Jira, GitHub, GitLab, or another external system. A request to create a Blackholes worktree group is not authorization to mutate those systems.
+- External tools may be used only for read-only discovery needed to understand the worktree group, its linked pull requests, repositories, and branch names.
+- If the work has associated pull requests or branches, read their metadata to identify the correct source. This does not require a Blackholes worktree group. Do not push, comment, or change remote resources without an explicit request.
+- Assume an associated branch may belong to another person or contain unfinished work. Preserve existing changes and do not switch branches or move work into a worktree group without the user's direction.
+- When isolation is chosen, use the requested source branch for local Blackholes worktrees. Direct project work remains valid when isolation is not requested or required by user-authored project instructions.
+- Inside a Worktree Group, maintain its description and multiple PR/context links using `get_worktree_group` and `update_worktree_group`. Start the description with a short summary; replace stale context after meaningful changes and before finishing. Preserve requirements and unresolved work. Never append a journal, dated updates or an action history. Pass `detailsRevision` as `expectedRevision` and reconcile concurrent edits.
 - Only perform a remote mutation when the user explicitly requests that exact remote action in the current conversation. If the request is ambiguous, keep the operation local and ask before touching the remote system.
 "#;
 
@@ -247,7 +287,7 @@ impl ProjectTaskInstructionsService {
             "project task instruction",
             DEFAULT_PROJECT_TASK_INSTRUCTIONS,
         )?;
-        if fs::read_to_string(&path)?.trim() == LEGACY_PROJECT_TASK_INSTRUCTIONS.trim() {
+        if [LEGACY_PROJECT_TASK_INSTRUCTIONS.trim(), PREVIOUS_PROJECT_TASK_INSTRUCTIONS.trim()].contains(&fs::read_to_string(&path)?.trim()) {
             write_note(&root, PROJECT_TASK_INSTRUCTIONS_FILE_NAME, ".blackholes-task-claude", "project task instruction", DEFAULT_PROJECT_TASK_INSTRUCTIONS)?;
         }
         Ok(path)
@@ -380,6 +420,9 @@ fn merge_project_policy(existing: &str) -> Result<String> {
             // Migrate only known generated rules. The settings editor also lets users
             // customize this block, so replacing it wholesale would lose their rules.
             let mut policy = existing[start..end].to_string();
+            if policy.trim() == format!("{PROJECT_POLICY_START}\n{PREVIOUS_PROJECT_POLICY}").trim() {
+                return Ok(format!("{}{managed}{}", &existing[..start], &existing[end + PROJECT_POLICY_END.len()..]));
+            }
             let legacy_rules = [
                 ("- Tasks and isolated worktrees are optional: use them when requested by the user, when working in an existing selected task, or when user-authored project instructions require them. Creating implementation tasks through `create_task` starts visible terminal agents by default (`startAgent:true`) using the calling provider and each project's terminal permission setting. For a batch, create all tasks with `startAgent:false`, then call `start_task_agents` with their IDs and briefs; no extra delegation confirmation is needed. Use `startAgent:false` for planning-only/backlog requests, explicit instructions not to start, or before `handoff_to_agent` for specifically requested built-in Black Bots. Terminal agents show results in their terminals; completion notifications are not required. For project implementation without a task, the global agent normally hands off with `projectId`; the receiving project agent works directly. The agent of the selected task implements in its attached worktrees and must not delegate to itself or create the task again. Explicit requests to work directly or not delegate take precedence. If execution intent or destination is unclear, ask briefly. Preserve all user constraints in the handoff prompt. After a successful handoff, the sender stops implementing and reports the transfer; on failure, report it rather than silently taking over.", "- Tasks and isolated worktrees are optional:"),
                 ("- Global and project Black Bots may inspect, review, edit, build, and test directly in the intended project repositories. Resolve the project and repositories through the MCP and respect the user's request, project instructions, selected permissions, and existing changes. A task or worktree is not a prerequisite.", "- Agents may"),
@@ -423,7 +466,7 @@ fn merge_project_policy(existing: &str) -> Result<String> {
             for (legacy, current_prefix) in legacy_rules {
                 if let Some(current) = PROJECT_POLICY
                     .lines()
-                    .find(|line| line.starts_with(current_prefix))
+                    .find(|line| line.starts_with(current_prefix) || line.starts_with(&current_prefix.replace("Tasks", "Worktree Groups")))
                 {
                     policy = policy
                         .split_inclusive('\n')
@@ -710,4 +753,21 @@ fn ensure_note(
         .open(&path)?;
     file.write_all(initial_content.as_bytes())?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod current_context_tests {
+    use super::*;
+
+    #[test]
+    fn upgrades_only_the_known_previous_project_policy() {
+        let previous = format!("User introduction\n\n{PROJECT_POLICY_START}\n{PREVIOUS_PROJECT_POLICY}{PROJECT_POLICY_END}\n\nUser constraints");
+        let updated = merge_project_policy(&previous).unwrap();
+        assert!(updated.contains("update_worktree_group"));
+        assert!(updated.starts_with("User introduction"));
+        assert!(updated.ends_with("User constraints"));
+        assert_eq!(merge_project_policy(&updated).unwrap(), updated);
+        let custom = format!("{PROJECT_POLICY_START}\nMy custom project policy.\n{PROJECT_POLICY_END}");
+        assert_eq!(merge_project_policy(&custom).unwrap(), custom);
+    }
 }

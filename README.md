@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Blackholes</h1>
 <p align="center"><strong>Your workspace for coding agents, terminals, and Git worktrees.</strong></p>
-<p align="center">Run your installed agent CLIs side by side. Organize sessions by project and task, keep repositories together, and give every task its own working context.</p>
+<p align="center">Run your installed agent CLIs side by side. Organize sessions by project and worktree group, keep repositories together, and give every worktree group its own working context.</p>
 
 <p align="center">
   <a href="https://github.com/andygeek/blackholes/stargazers"><img src="https://img.shields.io/github/stars/andygeek/blackholes?style=flat" alt="GitHub stars" /></a>
@@ -15,10 +15,10 @@
 </p>
 
 <h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
-<p align="center">Current version: <a href="docs/releases/0.1.15.md">0.1.15</a></p>
+<p align="center">Current version: <a href="docs/releases/0.1.16.md">0.1.16</a></p>
 <p align="center">macOS 13+ · Apple Silicon · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
-[![Blackholes demo: creating tasks and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
+[![Blackholes demo: creating worktree groups and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
 
 [Watch the demo](https://blackholes.dev/videos/blackholes-demo.mp4) · Recordings show an earlier interface.
 
@@ -26,15 +26,15 @@
 
 | | |
 | --- | --- |
-| **Agent sessions**<br><br>Run Claude Code and Codex in native terminals, organized by project and task.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-demo.mp4) | [![Task agent sessions](docs/media/task-sessions.gif)](https://blackholes.dev/videos/blackholes-demo.mp4) |
-| **Multiple repositories**<br><br>Keep repositories together and create isolated Git worktrees for each task.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-repositories.mp4) | [![Project repositories](docs/media/project-repositories.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4) |
+| **Agent sessions**<br><br>Run Claude Code and Codex in native terminals, organized by project and worktree group.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-demo.mp4) | [![Worktree Group agent sessions](docs/media/task-sessions.gif)](https://blackholes.dev/videos/blackholes-demo.mp4) |
+| **Multiple repositories**<br><br>Keep repositories together and create isolated Git worktrees for each worktree group.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-repositories.mp4) | [![Project repositories](docs/media/project-repositories.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4) |
 
-- Task objectives, acceptance criteria, PR links, and external task links.
+- Worktree Groups with a living context document and multiple PR, ClickUp, Slack and other links.
 - Terminal sessions, file editing, and repository-wide text search.
 - Git staging, manual commits, history, commit diffs, and push.
 - Local Codex and Claude usage, refreshed every 10 minutes for installed providers.
 - The latest three releases in the workspace, with a shortcut beside the version and a link to the full history.
-- MCP tools to create tasks and launch agents from your existing clients.
+- MCP tools to create worktree groups and launch agents from your existing clients.
 
 ## Supported agents
 

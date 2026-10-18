@@ -204,11 +204,13 @@ impl Database {
         if let Some(existing) = existing {
             let current: ProjectTask = serde_json::from_str(&existing)?;
             saved.title = current.title;
+            saved.icon = current.icon;
             saved.color = current.color;
             saved.description = current.description;
             saved.acceptance_criteria = current.acceptance_criteria;
             saved.pull_request_url = current.pull_request_url;
             saved.external_task_url = current.external_task_url;
+            saved.links = current.links;
             saved.updated_at = saved.updated_at.max(current.updated_at);
         }
         let task = &saved;
@@ -274,6 +276,25 @@ impl Database {
             task_id,
             &serde_json::json!({ "id": task_id }),
         )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Preserve provider IDs/results in the same transaction that removes a
+    /// successfully closed task. A failed cleanup keeps its task record.
+    pub fn save_task_closure(&self, result: &super::tasks::closure::CloseTaskResult) -> Result<()> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO app_meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![format!("task-closure:{}", result.task_id), serde_json::to_string(result)?],
+        )?;
+        if result.status == "deleted" {
+            transaction.execute("DELETE FROM project_tasks WHERE id = ?1", [result.task_id.to_string()])?;
+            insert_event(&transaction, "task.removed", result.task_id,
+                &serde_json::json!({ "id": result.task_id }))?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -527,6 +548,7 @@ fn read_legacy_tasks(connection: &Connection) -> Result<Vec<ProjectTask>> {
                 acceptance_criteria: None,
                 pull_request_url: None,
                 external_task_url: None,
+                links: vec![],
                 icon: row
                     .get::<_, Option<String>>(4)?
                     .unwrap_or_else(|| DEFAULT_TASK_ICON.into()),
