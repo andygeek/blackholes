@@ -154,8 +154,9 @@ impl ProgramStatus {
                 kind: match record.state {
                     State::Idle => AgentTerminalSignalKind::Started,
                     State::Working => AgentTerminalSignalKind::Working,
-                    State::Blocked | State::Done | State::Error => {
-                        AgentTerminalSignalKind::Attention
+                    State::Done => AgentTerminalSignalKind::Completed,
+                    State::Blocked | State::Error => {
+                        AgentTerminalSignalKind::InputRequired
                     }
                 },
             })
@@ -237,7 +238,7 @@ mod tests {
         );
         let done = signal(status.receive("7501;state=done:app=claude-code"));
         assert_eq!(done.agent, Some(AgentKind::Claude));
-        assert_eq!(done.kind, AgentTerminalSignalKind::Attention);
+        assert_eq!(done.kind, AgentTerminalSignalKind::Completed);
         assert!(matches!(
             status.receive("7501;state=done:app=claude-code"),
             Some(Event::Status { signal: None, .. })
@@ -257,7 +258,7 @@ mod tests {
         ));
         let blocked = signal(status.receive("7501;state=idle:app=codex"));
         assert_eq!(blocked.agent, Some(AgentKind::Codex));
-        assert_eq!(blocked.kind, AgentTerminalSignalKind::Attention);
+        assert_eq!(blocked.kind, AgentTerminalSignalKind::InputRequired);
         assert_eq!(
             signal(status.receive("7501;state=clear:id=worker")).kind,
             AgentTerminalSignalKind::Started

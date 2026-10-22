@@ -25,6 +25,11 @@ pub enum NavigationCommand {
         #[serde(default)]
         commit: bool,
     },
+    SetSidebarAgentsFraction {
+        fraction: f32,
+        #[serde(default)]
+        commit: bool,
+    },
     ReorderAgents {
         ids: Vec<String>,
     },
@@ -134,6 +139,7 @@ pub fn set_visible(webview: &Entity<WebView>, visible: bool, cx: &mut App) {
 
 fn navigation_html() -> String {
     include_str!("../../assets/navigation/index.html")
+        .replace("{{APP_THEME_STYLES}}", include_str!("../../assets/theme.css"))
         .replace(
             "{{NAVIGATION_STYLES}}",
             include_str!("../../assets/navigation/styles.css"),

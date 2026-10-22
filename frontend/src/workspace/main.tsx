@@ -41,7 +41,7 @@ function WorkspaceApp() {
       if (!raw || typeof raw !== "object") return;
       const event = raw as WorkspaceEvent;
       if (event.theme) applyAppTheme(event.theme);
-      if (typeof event.sidebar_width === "number" && Number.isFinite(event.sidebar_width)) setSidebarWidth(event.sidebar_width);
+      if (typeof event.sidebar_width === "number" && Number.isFinite(event.sidebar_width) && event.sidebar_width > 0) setSidebarWidth(event.sidebar_width);
       if (event.language) {
         setLanguage(event.language);
         document.documentElement.lang = event.language;
@@ -94,7 +94,7 @@ function WorkspaceApp() {
   const quickOpenLayer = quickOpen && <QuickOpen state={quickOpen} />;
   if (overTerminal) return <>{modalLayer}{quickOpenLayer}</>;
   return <>
-    {surface && <WorkspaceSurface event={surface} />}
+    {surface && <WorkspaceSurface event={surface} sidebarWidth={sidebarWidth} />}
     {surface?.surface !== "settings" && !modal && !quickOpen && <SidebarResizeHandle width={sidebarWidth}
       left={0} hitWidth={8} edge="left" fixed label={language === "en" ? "Resize sidebar" : "Cambiar ancho del menú lateral"} />}
     {status && <button type="button" className={`workspace-status${status.error ? " is-error" : ""}`}

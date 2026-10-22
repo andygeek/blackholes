@@ -13,7 +13,7 @@ use crate::{
     assets::AppIcon,
     model::{
         AgentKind, AppSession, AppTheme, ClaudeSession, CodexSession, DockNode, DockTab, Language,
-        ProjectTask, SessionState, TaskSession, TerminalDescriptor, Workspace, WorkspaceColor,
+        ProjectTask, SessionState, TaskSession, TerminalDescriptor, TerminalNoticeKind, Workspace, WorkspaceColor,
         WorkspaceLayout, dock_key,
     },
     paths::AppPaths,
@@ -115,6 +115,7 @@ struct AppToast {
     target: AppToastTarget,
     title: String,
     message: String,
+    notice_kind: Option<TerminalNoticeKind>,
 }
 
 /// Payload of the `task-ready:` bridge message sent by the MCP server's
@@ -729,8 +730,18 @@ impl BlackholesApp {
         session
             .unseen_task_ids
             .retain(|task_id| tasks.iter().any(|task| task.id == *task_id));
+        session.terminal_attention_order.retain(|id| session.terminals.iter()
+            .any(|terminal| terminal.id == *id && terminal.agent != AgentKind::Shell));
+        session.terminal_attention_kinds.retain(|id, _| session.terminal_attention_order.contains(id));
 
         for terminal in &mut session.terminals {
+            // Migrate existing pending states before marking processes as restored.
+            if terminal.state == SessionState::Attention
+                && terminal.agent != AgentKind::Shell
+                && !session.terminal_attention_order.contains(&terminal.id)
+            {
+                session.terminal_attention_order.push(terminal.id);
+            }
             terminal.state = SessionState::Restored;
             let recorded_session_agent = match (
                 terminal.codex_session.is_some(),
@@ -918,6 +929,10 @@ impl BlackholesApp {
             status_revision: 0,
             busy: None,
         };
+        app.app_toasts = app.session.terminal_attention_order.iter().rev()
+            .filter_map(|id| app.session.terminals.iter().find(|terminal| terminal.id == *id))
+            .map(|terminal| app.terminal_attention_toast(terminal))
+            .collect();
         cx.spawn(async move |this, cx| {
             while let Ok(raw_command) = workspace_command_receiver.recv_async().await {
                 if workspace_window
@@ -1467,6 +1482,9 @@ impl BlackholesApp {
             NavigationCommand::Ready => self.hydrate_navigation(cx),
             NavigationCommand::ShowHome => self.show_home(cx),
             NavigationCommand::SetSidebarWidth { width, commit } => self.set_sidebar_width(width, commit, cx),
+            NavigationCommand::SetSidebarAgentsFraction { fraction, commit } => {
+                self.set_sidebar_agents_fraction(fraction, commit, cx)
+            }
             NavigationCommand::SetSidebarSectionCollapsed { section, collapsed } => {
                 match section {
                     SidebarSection::Agents => self.session.agents_section_collapsed = collapsed,
@@ -1598,36 +1616,52 @@ impl BlackholesApp {
         }
     }
 
+    fn terminal_notice_kind(&self, terminal_id: Uuid) -> Option<TerminalNoticeKind> {
+        self.session.terminal_attention_order.contains(&terminal_id).then(|| {
+            self.session.terminal_attention_kinds.get(&terminal_id).copied().unwrap_or_default()
+        })
+    }
+
     fn navigation_terminal(
         &self,
         terminal: &TerminalDescriptor,
         active_terminal_id: Option<Uuid>,
     ) -> serde_json::Value {
+        let workspace = self.workspaces.iter()
+            .find(|workspace| workspace.id == terminal.workspace_id);
+        let task = terminal.task_id
+            .and_then(|id| self.tasks.iter().find(|task| task.id == id));
+        let project_label = workspace.map(|workspace| workspace.label().to_string())
+            .unwrap_or_else(|| terminal.cwd.display().to_string());
         serde_json::json!({
             "id": terminal.id,
             "label": terminal.label,
             "agent": terminal.agent,
             "provider_label": terminal.agent.label(),
-            "context": self.workspaces.iter()
-                .find(|workspace| workspace.id == terminal.workspace_id)
-                .map(|workspace| {
-                    let project = workspace.label();
-                    terminal.task_id
-                        .and_then(|id| self.tasks.iter().find(|task| task.id == id))
-                        .map(|task| format!("{project}/{}", task.title))
-                        .unwrap_or_else(|| project.to_string())
-                })
-                .unwrap_or_else(|| terminal.cwd.display().to_string()),
+            "context": task.filter(|_| workspace.is_some())
+                .map(|task| format!("{project_label}/{}", task.title))
+                .unwrap_or_else(|| project_label.clone()),
+            "project_label": project_label,
+            "group_title": task.map(|task| &task.title),
+            "group_icon": task.map(|task| &task.icon),
+            "group_color": task.map(|task| workspace_color_css(task.color)),
+            "needs_attention": self.session.terminal_attention_order.contains(&terminal.id),
+            "attention_kind": self.terminal_notice_kind(terminal.id),
+            "attention_rank": self.session.terminal_attention_order.iter().position(|id| *id == terminal.id),
+            "working": terminal.agent != AgentKind::Shell
+                && terminal.state == SessionState::Working
+                && self.terminals.contains_key(&terminal.id),
             "selected": active_terminal_id == Some(terminal.id),
         })
     }
 
     fn terminal_agent_is_active(&self, terminal: &TerminalDescriptor) -> bool {
         terminal.agent != AgentKind::Shell
-            && !matches!(terminal.state, SessionState::Restored | SessionState::Exited)
-            && self.terminals.get(&terminal.id).is_some_and(|handle| {
-                matches!(handle.child.lock().try_wait(), Ok(None))
-            })
+            && (self.session.terminal_attention_order.contains(&terminal.id)
+                || (!matches!(terminal.state, SessionState::Restored | SessionState::Exited)
+                    && self.terminals.get(&terminal.id).is_some_and(|handle| {
+                        matches!(handle.child.lock().try_wait(), Ok(None))
+                    })))
     }
 
     fn hydrate_navigation(&self, cx: &mut Context<Self>) {
@@ -1775,6 +1809,8 @@ impl BlackholesApp {
                     "project": "Project",
                     "settings": "Settings",
                     "working": "Working",
+                    "needsAttention": "Needs your attention",
+                    "responseReady": "Response ready",
                     "terminal": "Terminal",
                     "blankTerminal": self.tr("Blank Terminal", "Terminal vacía"),
                     "tasks": "Worktree Groups",
@@ -1803,6 +1839,8 @@ impl BlackholesApp {
                     "project": "Proyecto",
                     "settings": "Configuración",
                     "working": "Trabajando",
+                    "needsAttention": "Necesita tu atención",
+                    "responseReady": "Respuesta lista",
                     "terminal": "Terminal",
                     "blankTerminal": self.tr("Blank Terminal", "Terminal vacía"),
                     "tasks": "Grupos de worktrees",
@@ -1834,6 +1872,7 @@ impl BlackholesApp {
                 "settings_selected": self.show_settings,
                 "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
                 "agents_section_collapsed": self.session.agents_section_collapsed,
+                "sidebar_agents_fraction": self.session.sidebar_agents_fraction.clamp(0.1, 0.9),
                 "projects_section_collapsed": self.session.projects_section_collapsed,
                 "agent_order": self.session.agent_order,
                 "terminal_agents": self.session.terminals.iter()
@@ -1861,7 +1900,6 @@ impl BlackholesApp {
                     "theme": app_theme_id(self.session.theme),
                     "projects_root": self.projects_root().display().to_string(),
                     "git_available": crate::services::projects::git_tools_available(),
-                    "sidebar_width": self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
                     "external_integrations": self.external_integrations,
                 }
             }),
@@ -4109,13 +4147,14 @@ impl BlackholesApp {
             else {
                 return;
             };
-            if terminal.claude_session.as_ref() == Some(&session)
+            if payload.state.is_none() && terminal.claude_session.as_ref() == Some(&session)
                 && terminal.agent == AgentKind::Claude
             {
                 return;
             }
             terminal.claude_session = Some(session);
             self.set_terminal_agent(payload.terminal_id, AgentKind::Claude);
+            self.handle_hook_terminal_state(payload.terminal_id, payload.state, payload.notice_kind, cx);
             self.persist_session();
             cx.notify();
             return;
@@ -4137,6 +4176,7 @@ impl BlackholesApp {
                 profile: payload.profile,
             });
             self.set_terminal_agent(payload.terminal_id, AgentKind::Codex);
+            self.handle_hook_terminal_state(payload.terminal_id, payload.state, payload.notice_kind, cx);
             self.persist_session();
             cx.notify();
             return;
@@ -4312,6 +4352,7 @@ impl BlackholesApp {
             target: AppToastTarget::Task { task_id },
             title,
             message,
+            notice_kind: None,
         };
         self.app_toasts.push(notification.clone());
         cx.notify();
@@ -4355,6 +4396,7 @@ impl BlackholesApp {
             target,
             title,
             message,
+            notice_kind: None,
         });
         cx.notify();
     }
@@ -5061,6 +5103,8 @@ impl BlackholesApp {
                         let _ = handle.child.lock().kill();
                     }
                 }
+                self.session.terminal_attention_order.retain(|id| !terminal_ids.contains(id));
+                self.session.terminal_attention_kinds.retain(|id, _| !terminal_ids.contains(id));
                 self.app_toasts.retain(|toast| {
                     toast
                         .target
@@ -7534,6 +7578,7 @@ impl BlackholesApp {
             .err().map(|error| format!("Terminal started but session persistence failed: {error:#}"));
         self.app_toasts.push(AppToast {
             target: AppToastTarget::Terminal { terminal_id: descriptor.id, agent },
+            notice_kind: None,
             title: format!("{} · {}", agent.label(), task.title),
             message: self.tr("Worktree Group terminal started. Click to follow its work.", "Terminal del grupo de worktrees iniciada. Haz clic para seguir el trabajo.").into(),
         });
@@ -7589,6 +7634,7 @@ impl BlackholesApp {
             // Like task launches, keep the caller's view and offer a shortcut instead.
             self.app_toasts.push(AppToast {
                 target: AppToastTarget::Terminal { terminal_id: descriptor.id, agent: AgentKind::Shell },
+                notice_kind: None,
                 title: format!("{} · {}", workspace.label(), descriptor.label),
                 message: self.tr("Terminal started. Click to open it.", "Terminal iniciada. Haz clic para abrirla.").into(),
             });
@@ -7655,7 +7701,7 @@ impl BlackholesApp {
                 })
                 .with_bell_callback(move |cx| {
                     let notification = weak_for_bell
-                        .update(cx, |app, cx| app.handle_agent_attention(terminal_id, cx))
+                        .update(cx, |app, cx| app.handle_agent_attention(terminal_id, None, cx))
                         .ok()
                         .flatten();
                     if let Some(notification) = notification {
@@ -7783,7 +7829,15 @@ impl BlackholesApp {
 
     fn update_terminal_state(&mut self, terminal_id: Uuid, state: SessionState) {
         if let Some(handle) = self.terminals.get(&terminal_id) { *handle.state.lock() = state; }
-        if state != SessionState::Attention {
+        if state == SessionState::Attention {
+            // Duplicate provider signals must not reshuffle an already pending notification.
+            if !self.session.terminal_attention_order.contains(&terminal_id) {
+                self.session.terminal_attention_order.insert(0, terminal_id);
+            }
+        } else if matches!(state, SessionState::Working | SessionState::Exited) {
+            // Idle means ready for input, not that the user has read the finished response.
+            self.session.terminal_attention_order.retain(|id| *id != terminal_id);
+            self.session.terminal_attention_kinds.remove(&terminal_id);
             self.app_toasts
                 .retain(|toast| toast.target.terminal_id() != Some(terminal_id));
         }
@@ -7816,6 +7870,11 @@ impl BlackholesApp {
     }
 
     fn set_terminal_agent(&mut self, terminal_id: Uuid, agent: AgentKind) {
+        if agent == AgentKind::Shell {
+            self.session.terminal_attention_order.retain(|id| *id != terminal_id);
+            self.session.terminal_attention_kinds.remove(&terminal_id);
+            self.app_toasts.retain(|toast| toast.target.terminal_id() != Some(terminal_id));
+        }
         if let Some(descriptor) = self
             .session
             .terminals
@@ -7841,6 +7900,35 @@ impl BlackholesApp {
                 session.agent = agent;
                 break;
             }
+        }
+    }
+
+    fn handle_hook_terminal_state(
+        &mut self,
+        terminal_id: Uuid,
+        state: Option<SessionState>,
+        notice_kind: Option<TerminalNoticeKind>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.terminals.contains_key(&terminal_id) {
+            return;
+        }
+        let kind = match state {
+            Some(SessionState::Idle) => AgentTerminalSignalKind::Started,
+            Some(SessionState::Working) => AgentTerminalSignalKind::Working,
+            Some(SessionState::Attention) => AgentTerminalSignalKind::Attention,
+            _ => return,
+        };
+        let notification = if state == Some(SessionState::Attention) {
+            self.handle_agent_attention(terminal_id, notice_kind, cx)
+        } else {
+            self.handle_agent_signal(terminal_id, AgentTerminalSignal { agent: None, kind }, cx)
+        };
+        if let Some(notification) = notification {
+            play_agent_attention_sound();
+            cx.background_executor().spawn(async move {
+                show_native_agent_notification(&notification);
+            }).detach();
         }
     }
 
@@ -7874,7 +7962,9 @@ impl BlackholesApp {
                 cx.notify();
                 None
             }
-            AgentTerminalSignalKind::Attention => self.handle_agent_attention(terminal_id, cx),
+            AgentTerminalSignalKind::Completed => self.handle_agent_attention(terminal_id, Some(TerminalNoticeKind::Completed), cx),
+            AgentTerminalSignalKind::InputRequired => self.handle_agent_attention(terminal_id, Some(TerminalNoticeKind::InputRequired), cx),
+            AgentTerminalSignalKind::Attention => self.handle_agent_attention(terminal_id, None, cx),
         }
     }
 
@@ -7956,6 +8046,7 @@ impl BlackholesApp {
     fn handle_agent_attention(
         &mut self,
         terminal_id: Uuid,
+        kind: Option<TerminalNoticeKind>,
         cx: &mut Context<Self>,
     ) -> Option<AppToast> {
         let descriptor = self
@@ -7969,21 +8060,38 @@ impl BlackholesApp {
             return None;
         }
 
+        let already_pending = self.session.terminal_attention_order.contains(&terminal_id);
+        let previous_kind = self.terminal_notice_kind(terminal_id);
+        let kind = kind.or(previous_kind).unwrap_or_default();
+        self.session.terminal_attention_kinds.insert(terminal_id, kind);
         self.refresh_terminal_repository_git_summary(terminal_id, cx);
         self.update_terminal_state(terminal_id, SessionState::Attention);
-        let target = AppToastTarget::Terminal {
-            terminal_id,
-            agent: descriptor.agent,
-        };
-        if self
-            .app_toasts
-            .iter()
-            .any(|toast| toast.target.terminal_id() == Some(terminal_id))
-        {
+        if already_pending && previous_kind == Some(kind) {
             cx.notify();
             return None;
         }
+        let notification = self.terminal_attention_toast(&descriptor);
+        if already_pending {
+            // Refine a generic bell into a known result without playing the attention sound twice.
+            if let Some(toast) = self.app_toasts.iter_mut()
+                .find(|toast| toast.target.terminal_id() == Some(terminal_id))
+            {
+                *toast = notification.clone();
+            }
+            cx.background_executor().spawn(async move {
+                show_native_agent_notification(&notification);
+            }).detach();
+            cx.notify();
+            return None;
+        }
+        // Replace startup shortcuts rather than letting one suppress the actual completion notice.
+        self.app_toasts.retain(|toast| toast.target.terminal_id() != Some(terminal_id));
+        self.app_toasts.push(notification.clone());
+        cx.notify();
+        Some(notification)
+    }
 
+    fn terminal_attention_toast(&self, descriptor: &TerminalDescriptor) -> AppToast {
         let context = descriptor
             .task_id
             .and_then(|task_id| {
@@ -7999,25 +8107,32 @@ impl BlackholesApp {
                     .map(|workspace| workspace.label().to_string())
             })
             .unwrap_or_else(|| descriptor.label.clone());
-        let (title, message) = match self.session.language {
-            Language::English => (
-                format!("{} needs your attention", descriptor.agent.label()),
-                format!("Waiting for your response in {context}"),
+        let kind = self.terminal_notice_kind(descriptor.id).unwrap_or_default();
+        let (title, message) = match (kind, self.session.language) {
+            (TerminalNoticeKind::Completed, Language::English) => (
+                format!("{} finished responding", descriptor.agent.label()),
+                format!("Response ready in {context}"),
             ),
-            Language::Spanish => (
-                format!("{} necesita tu atención", descriptor.agent.label()),
-                format!("Esperando tu respuesta en {context}"),
+            (TerminalNoticeKind::Completed, Language::Spanish) => (
+                format!("{} terminó de responder", descriptor.agent.label()),
+                format!("Respuesta lista en {context}"),
+            ),
+            (TerminalNoticeKind::InputRequired, Language::English) => (
+                format!("{} is waiting for you", descriptor.agent.label()),
+                format!("Response or permission needed in {context}"),
+            ),
+            (TerminalNoticeKind::InputRequired, Language::Spanish) => (
+                format!("{} está esperando tu respuesta", descriptor.agent.label()),
+                format!("Requiere tu respuesta o permiso en {context}"),
             ),
         };
 
-        let notification = AppToast {
-            target,
+        AppToast {
+            target: AppToastTarget::Terminal { terminal_id: descriptor.id, agent: descriptor.agent },
             title,
             message,
-        };
-        self.app_toasts.push(notification.clone());
-        cx.notify();
-        Some(notification)
+            notice_kind: Some(kind),
+        }
     }
 
     fn open_toast_target(
@@ -8093,6 +8208,8 @@ impl BlackholesApp {
         if let Some((agent, state)) = agent_changed {
             if let Some(handle) = self.terminals.get(&terminal_id) { *handle.state.lock() = state; }
             if agent == AgentKind::Shell {
+                self.session.terminal_attention_order.retain(|id| *id != terminal_id);
+                self.session.terminal_attention_kinds.remove(&terminal_id);
                 self.app_toasts
                     .retain(|toast| toast.target.terminal_id() != Some(terminal_id));
             }
@@ -8149,6 +8266,8 @@ impl BlackholesApp {
         };
 
         self.dismiss_release_notes();
+        self.session.terminal_attention_order.retain(|id| *id != terminal_id);
+        self.session.terminal_attention_kinds.remove(&terminal_id);
         self.app_toasts
             .retain(|toast| toast.target.terminal_id() != Some(terminal_id));
 
@@ -8338,6 +8457,16 @@ impl BlackholesApp {
         self.hydrate_active_workspace_surface(cx);
         self.hydrate_quick_open_overlay(cx);
         cx.notify();
+    }
+
+    fn set_sidebar_agents_fraction(&mut self, fraction: f32, commit: bool, cx: &mut Context<Self>) {
+        if !fraction.is_finite() { return; }
+        let fraction = fraction.clamp(0.1, 0.9);
+        if (self.session.sidebar_agents_fraction - fraction).abs() > 0.00001 {
+            self.session.sidebar_agents_fraction = fraction;
+            cx.notify();
+        }
+        if commit { self.persist_session(); }
     }
 
     fn set_sidebar_width(&mut self, width: f32, commit: bool, cx: &mut Context<Self>) {
@@ -9543,7 +9672,7 @@ impl BlackholesApp {
                         terminal_id,
                         terminal.label.clone(),
                         terminal.agent,
-                        terminal.state,
+                        self.terminal_notice_kind(terminal_id),
                         active_terminal_id == Some(terminal_id),
                         move |_, window, cx| {
                             let _ = weak_terminal
@@ -9602,7 +9731,7 @@ impl BlackholesApp {
                             terminal_id,
                             terminal.label.clone(),
                             terminal.agent,
-                            terminal.state,
+                            self.terminal_notice_kind(terminal_id),
                             active_terminal_id == Some(terminal_id),
                             move |_, window, cx| {
                                 let _ = weak_terminal.update(cx, |app, cx| {
@@ -9754,7 +9883,7 @@ impl BlackholesApp {
                             terminal_id,
                             terminal.label.clone(),
                             terminal.agent,
-                            terminal.state,
+                            self.terminal_notice_kind(terminal_id),
                             active_terminal_id == Some(terminal_id),
                             move |_, window, cx| {
                                 let _ = weak_terminal.update(cx, |app, cx| {
@@ -9828,7 +9957,7 @@ impl BlackholesApp {
                                 terminal_id,
                                 terminal.label.clone(),
                                 terminal.agent,
-                                terminal.state,
+                                self.terminal_notice_kind(terminal_id),
                                 active_terminal_id == Some(terminal_id),
                                 move |_, window, cx| {
                                     let _ = weak_terminal.update(cx, |app, cx| {
@@ -10080,6 +10209,19 @@ impl BlackholesApp {
                 close_color,
                 close_hover_background,
             ) = match target {
+                AppToastTarget::Terminal { agent, .. }
+                    if toast.notice_kind == Some(TerminalNoticeKind::InputRequired) => (
+                    agent_icon(agent),
+                    if agent == AgentKind::Codex { rgb(0x211d13) } else { rgb(0xfff8e8) },
+                    rgb(0x75633a),
+                    rgb(0x3a311e),
+                    rgb(0x493d24),
+                    rgb(0x9b8145),
+                    rgb(0xfff3d5),
+                    rgb(0xddcda9),
+                    rgb(0xd0bd96),
+                    rgb(0x5a492b),
+                ),
                 AppToastTarget::Terminal { agent, .. } => (
                     agent_icon(agent),
                     if agent == AgentKind::Codex {
@@ -11353,7 +11495,7 @@ fn terminal_tree_row(
     terminal_id: Uuid,
     label: String,
     agent: AgentKind,
-    _state: SessionState,
+    notice_kind: Option<TerminalNoticeKind>,
     selected: bool,
     on_select: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
     on_close: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
@@ -11362,6 +11504,7 @@ fn terminal_tree_row(
         .id(SharedString::from(format!(
             "sidebar-terminal-{terminal_id}"
         )))
+        .relative()
         .w_full()
         .min_w_0()
         .h(px(28.))
@@ -11383,6 +11526,13 @@ fn terminal_tree_row(
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0x242a35)))
         .on_click(on_select)
+        .when_some(notice_kind, |this, kind| {
+            this.child(div().absolute().top(px(3.)).right(px(3.))
+                .size(px(6.)).rounded_full().bg(match kind {
+                    TerminalNoticeKind::Completed => rgb(0x66ca91),
+                    TerminalNoticeKind::InputRequired => rgb(0xe2bd65),
+                }))
+        })
         .child(
             h_flex()
                 .flex_1()

@@ -30,6 +30,8 @@ import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
 import { SidebarResizeHandle } from "../shared/SidebarResizeHandle";
 import { SidebarScrollArea } from "./SidebarScrollArea";
 import { SortableAgentList } from "./SortableAgentList";
+import { ResizableSidebarSections } from "./ResizableSidebarSections";
+import { NavigationStatusIcon, type NoticeKind } from "./NavigationStatusIcon";
 import { postNative, type NativeCommand } from "../shared/native";
 import { applyAppTheme, type AppTheme } from "../shared/theme";
 
@@ -38,6 +40,8 @@ interface Copy {
   project: string;
   settings: string;
   working: string;
+  needsAttention: string;
+  responseReady: string;
   terminal: string;
   blankTerminal: string;
   tasks: string;
@@ -66,6 +70,14 @@ interface TerminalItem {
   selected: boolean;
   context: string;
   provider_label: string;
+  project_label: string;
+  group_title: string | null;
+  group_icon: string | null;
+  group_color: string | null;
+  needs_attention: boolean;
+  attention_kind: NoticeKind | null;
+  attention_rank: number | null;
+  working: boolean;
 }
 
 interface RepositoryItem {
@@ -110,6 +122,7 @@ interface NavigationState {
   copy: Copy;
   settings_selected: boolean;
   sidebar_width: number;
+  sidebar_agents_fraction: number;
   agents_section_collapsed: boolean;
   projects_section_collapsed: boolean;
   terminal_agents: TerminalItem[];
@@ -135,6 +148,8 @@ const fallbackCopy: Copy = {
   project: "Proyecto",
   settings: "Configuración",
   working: "Trabajando",
+  needsAttention: "Necesita tu atención",
+  responseReady: "Respuesta lista",
   terminal: "Terminal",
   blankTerminal: "Terminal vacía",
   tasks: "Grupos de worktrees",
@@ -175,22 +190,51 @@ const iconFor = (value?: string): LucideIcon => ({
   shell: SquareTerminal,
 }[value || ""] || Layers3);
 
+const terminalNotice = (terminal: TerminalItem): NoticeKind | null => terminal.needs_attention
+  ? terminal.attention_kind ?? "input-required" : null;
+
+const noticeLabel = (notice: NoticeKind | null, copy: Copy) => notice === "completed"
+  ? copy.responseReady : notice === "input-required" ? copy.needsAttention : "";
+
+const terminalStatus = (terminal: TerminalItem, copy: Copy) => noticeLabel(terminalNotice(terminal), copy)
+  || (terminal.working ? copy.working : "");
+
+function pendingNotice(terminals: TerminalItem[]): NoticeKind | null {
+  let result: NoticeKind | null = null;
+  for (const terminal of terminals) {
+    if (terminal.agent === "shell") continue;
+    const notice = terminalNotice(terminal);
+    if (notice === "input-required") return notice;
+    if (notice) result = notice;
+  }
+  return result;
+}
+
+const taskTerminals = (task: TaskItem) => [...task.terminals, ...task.repositories.flatMap(repository => repository.terminals)];
+
 function TerminalAgentRow({ terminal, copy, onOpen }: { terminal: TerminalItem; copy: Copy; onOpen(terminal: TerminalItem): void }) {
+  const status = terminalStatus(terminal, copy);
   const preview = terminal.label === terminal.provider_label
     ? terminal.provider_label
     : `${terminal.provider_label} · ${terminal.label}`;
   return (
-    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}`}>
+    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}${terminal.needs_attention ? " needs-attention" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}`}>
       <button type="button" className="agent-open"
         aria-current={terminal.selected ? "true" : undefined}
-        aria-label={`${terminal.context} · ${preview}`}
-        title={`${terminal.context}\n${preview}`}
+        aria-label={`${terminal.context} · ${preview}${status ? ` · ${status}` : ""}`}
+        title={`${terminal.context}\n${preview}${status ? `\n${status}` : ""}`}
         onClick={() => onOpen(terminal)}>
-        <span className="terminal-agent-avatar">
+        <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working} large>
           <TerminalProviderIcon provider={terminal.agent} />
-        </span>
+        </NavigationStatusIcon>
         <span className="agent-copy">
-          <span className="agent-name-line"><span className="agent-name">{terminal.context}</span></span>
+          <span className="agent-name-line"><span className="agent-name">
+            {terminal.group_title ? <>
+              {terminal.project_label}/<span className="agent-group-icon" style={{ color: terminal.group_color || undefined }}>
+                <GroupIcon value={terminal.group_icon || "layers"} size={12} />
+              </span>{terminal.group_title}
+            </> : terminal.context}
+          </span></span>
           <span className="agent-preview">{preview}</span>
         </span>
       </button>
@@ -248,17 +292,19 @@ function Changes({ item }: { item: RepositoryItem }) {
 }
 
 function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; copy: Copy; indentation: number }) {
+  const status = terminalStatus(terminal, copy);
   return (
     <button
       type="button"
-      className={`tree-leaf tree-indent-${indentation}${terminal.selected ? " is-selected" : ""}`}
+      className={`tree-leaf terminal-tree-leaf tree-indent-${indentation}${terminal.selected ? " is-selected" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}`}
       id={`nav-terminal-${terminal.id}`}
-      aria-label={terminal.label}
+      aria-label={`${terminal.label}${status ? ` · ${status}` : ""}`}
+      title={`${terminal.label}${status ? ` · ${status}` : ""}`}
       onClick={() => postNative({ type: "focus_terminal", terminal_id: terminal.id })}
     >
-      <span className="agent-kind-icon-wrap">
+      <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working}>
         <TerminalProviderIcon provider={terminal.agent} />
-      </span>
+      </NavigationStatusIcon>
       <span className="tree-label">
         <span className="agent-name-line">
           <span className="tree-label">{terminal.label}</span>
@@ -338,6 +384,8 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
   copy: Copy;
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
+  const notice = pendingNotice(taskTerminals(task));
+  const status = noticeLabel(notice, copy);
   return (
     <>
       <button
@@ -345,11 +393,12 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
         className={`tree-row tree-indent-1${task.selected ? " is-selected" : ""}`}
         id={`nav-task-${task.id}`}
         style={{ "--row-color": task.color } as React.CSSProperties}
-        aria-label={task.title}
+        aria-label={`${task.title}${status ? ` · ${status}` : ""}`}
+        title={`${task.title}${status ? ` · ${status}` : ""}`}
         onClick={() => postNative({ type: "select_task", workspace_id: workspaceId, task_id: task.id })}
       >
         <Chevron expanded={task.expanded} copy={copy} command={{ type: "toggle_task", task_id: task.id }} />
-        <span className="row-icon"><GroupIcon value={task.icon} size={13} /></span>
+        <NavigationStatusIcon notice={notice}><GroupIcon value={task.icon} size={13} /></NavigationStatusIcon>
         <span className="tree-label">{task.title}</span>
         {task.unseen && <span className="new-badge">{copy.new}</span>}
         <span className="row-actions">
@@ -397,6 +446,12 @@ function ProjectBlock({ project, copy, openMenu }: {
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
   const Icon = iconFor(project.icon);
+  const notice = pendingNotice([
+    ...project.terminals,
+    ...project.repositories.flatMap(repository => repository.terminals),
+    ...project.tasks.flatMap(taskTerminals),
+  ]);
+  const status = noticeLabel(notice, copy);
   return (
     <section className="project-block">
       <button
@@ -404,11 +459,12 @@ function ProjectBlock({ project, copy, openMenu }: {
         className={`tree-row${project.selected ? " is-selected" : ""}`}
         id={`nav-project-${project.id}`}
         style={{ "--row-color": project.color } as React.CSSProperties}
-        aria-label={project.label}
+        aria-label={`${project.label}${status ? ` · ${status}` : ""}`}
+        title={`${project.label}${status ? ` · ${status}` : ""}`}
         onClick={() => postNative({ type: "select_project", workspace_id: project.id })}
       >
         <Chevron expanded={project.expanded} copy={copy} command={{ type: "toggle_project", workspace_id: project.id }} />
-        <span className="row-icon"><Icon size={13} /></span>
+        <NavigationStatusIcon notice={notice}><Icon size={13} /></NavigationStatusIcon>
         <span className="tree-label">{project.label}</span>
         <span className="row-actions">
           <RowAction
@@ -583,12 +639,18 @@ function NavigationApp() {
     postNative({ type: "focus_terminal", terminal_id: terminal.id });
   };
   const agentRanks = new Map((state?.agent_order || []).map((id, index) => [id, index]));
-  const agentItems = [
-    ...(state?.terminal_agents || []).map(terminal => ({
-      id: `terminal:${terminal.id}`, label: `${terminal.context} · ${terminal.provider_label}`,
-      content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} />,
-    })),
-  ].sort((a, b) => (agentRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (agentRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+  const manualAgentOrder = [...(state?.terminal_agents || [])].sort((a, b) =>
+    (agentRanks.get(`terminal:${a.id}`) ?? Number.MAX_SAFE_INTEGER) - (agentRanks.get(`terminal:${b.id}`) ?? Number.MAX_SAFE_INTEGER));
+  const agentsNotice = agentsCollapsed ? pendingNotice(state?.terminal_agents || []) : null;
+  const agentItems = [...manualAgentOrder].sort((a, b) =>
+    Number(b.needs_attention) - Number(a.needs_attention)
+      || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER) : 0)
+  ).map(terminal => ({
+    id: `terminal:${terminal.id}`, label: `${terminal.context} · ${terminal.provider_label}`,
+    reorderable: !terminal.needs_attention,
+    statusLabel: terminal.attention_kind === "completed" ? copy.responseReady : copy.needsAttention,
+    content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} />,
+  }));
 
   return (
     <aside className="sidebar" aria-label="Blackholes">
@@ -598,14 +660,18 @@ function NavigationApp() {
           BLACKHOLES
         </button>
       </header>
-      <div className="sidebar-sections" inert={modalVisible}
-        data-agents-collapsed={agentsCollapsed} data-projects-collapsed={projectsCollapsed}>
+      <ResizableSidebarSections fraction={state?.sidebar_agents_fraction ?? .4}
+        agentsCollapsed={agentsCollapsed} projectsCollapsed={projectsCollapsed} disabled={modalVisible}
+        label={state?.language === "en" ? "Drag up or down to resize Agents and Projects" : "Arrastra arriba o abajo para ajustar Agentes y Proyectos"}
+        onResize={(fraction, commit) => postNative({ type: "set_sidebar_agents_fraction", fraction, commit })}>
         <section className="agents-shell" aria-label={agentsLabel}>
           <header className="section-header">
             <button className="section-toggle" type="button" aria-expanded={!agentsCollapsed}
+              aria-label={`${agentsLabel}${agentsNotice ? ` · ${noticeLabel(agentsNotice, copy)}` : ""}`}
               aria-controls="sidebar-agents-content" onClick={() => setSectionCollapsed("agents", !agentsCollapsed)}>
               <ChevronRight size={14} aria-hidden="true" />
               <span>{agentsLabel}</span>
+              {agentsNotice && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${agentsNotice === "input-required" ? " is-awaiting-input" : ""}`} />}
             </button>
           </header>
           <SidebarScrollArea id="sidebar-agents-content" hidden={agentsCollapsed}
@@ -615,8 +681,14 @@ function NavigationApp() {
             : "No hay agentes activos. Abre una sesión guardada desde Proyectos o inicia una con +."}</p>}
           <SortableAgentList items={agentItems} disabled={modalVisible} language={state?.language || "es"}
             onReorder={ids => {
-              setState(previous => previous ? { ...previous, agent_order: ids } : previous);
-              postNative({ type: "reorder_agents", ids });
+              const pending = new Set(manualAgentOrder.filter(terminal => terminal.needs_attention).map(terminal => `terminal:${terminal.id}`));
+              const reordered = ids.filter(id => !pending.has(id));
+              let index = 0;
+              // Notification priority never overwrites the saved positions of pending agents.
+              const order = manualAgentOrder.map(terminal =>
+                pending.has(`terminal:${terminal.id}`) ? `terminal:${terminal.id}` : reordered[index++]);
+              setState(previous => previous ? { ...previous, agent_order: order } : previous);
+              postNative({ type: "reorder_agents", ids: order });
             }} />
           </SidebarScrollArea>
         </section>
@@ -656,7 +728,7 @@ function NavigationApp() {
           </nav>
           </SidebarScrollArea>
         </section>
-      </div>
+      </ResizableSidebarSections>
       <footer className="sidebar-footer" inert={modalVisible}>
         <button
           type="button"

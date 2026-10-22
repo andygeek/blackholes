@@ -1,4 +1,7 @@
-use crate::{model::ClaudeProfile, paths::AppPaths};
+use crate::{
+    model::{ClaudeProfile, SessionState, TerminalNoticeKind},
+    paths::AppPaths,
+};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -14,11 +17,15 @@ use uuid::Uuid;
 const CLAUDE_SESSION_EVENT_PREFIX: &str = "claude-session:";
 const MANAGED_HOOK_MARKER: &str = "blackholes-claude-session-hook";
 const MAXIMUM_SETTINGS_FILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAXIMUM_HOOK_INPUT_BYTES: u64 = 64 * 1024;
+const MAXIMUM_HOOK_INPUT_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct ClaudeHookInput {
     session_id: String,
+    #[serde(default)]
+    hook_event_name: String,
+    #[serde(default)]
+    notification_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -27,6 +34,10 @@ pub struct ClaudeSessionBridgePayload {
     pub terminal_id: Uuid,
     pub session_id: String,
     pub profile: ClaudeProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<SessionState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_kind: Option<TerminalNoticeKind>,
 }
 
 pub fn install_claude_session_hooks() -> Result<()> {
@@ -73,6 +84,21 @@ fn forward_claude_session() -> Result<()> {
         terminal_id,
         session_id: hook.session_id,
         profile: active_claude_profile(),
+        state: if hook.hook_event_name == "Notification"
+            && hook.notification_type.as_deref().is_some_and(|kind| {
+                !matches!(kind, "permission_prompt" | "idle_prompt" | "elicitation_dialog")
+            })
+        {
+            None
+        } else {
+            super::agent_hooks::terminal_state(&hook.hook_event_name)
+        },
+        // An idle reminder must not turn an already completed response yellow.
+        notice_kind: if hook.notification_type.as_deref() == Some("idle_prompt") {
+            None
+        } else {
+            super::agent_hooks::notice_kind(&hook.hook_event_name)
+        },
     };
     let message = format!(
         "{CLAUDE_SESSION_EVENT_PREFIX}{}",
@@ -142,13 +168,20 @@ fn install_hooks_in(claude_home: &Path, command: &str) -> Result<()> {
         .as_object_mut()
         .context("The Claude hooks field must be a JSON object")?;
 
-    for event in ["SessionStart", "UserPromptSubmit"] {
+    for event in [
+        "SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "PermissionRequest", "Notification", "PreToolUse",
+    ] {
         let handlers = hooks
             .entry(event)
             .or_insert_with(|| Value::Array(Vec::new()))
             .as_array_mut()
             .with_context(|| format!("The Claude {event} hooks must be a JSON array"))?;
         super::agent_hooks::upsert(handlers, MANAGED_HOOK_MARKER, command);
+        if event == "PreToolUse" {
+            if let Some(group) = handlers.last_mut() {
+                group["matcher"] = Value::String("^(AskUserQuestion|ExitPlanMode)$".into());
+            }
+        }
     }
 
     let mut updated = serde_json::to_vec_pretty(&document)?;

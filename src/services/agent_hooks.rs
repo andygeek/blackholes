@@ -1,5 +1,28 @@
 //! Session tracking is observational: it must never delay a provider's turn.
+use crate::model::{SessionState, TerminalNoticeKind};
 use serde_json::{Value, json};
+
+/// Only lifecycle metadata crosses the app bridge; prompts and tool results stay in the CLI.
+pub(super) fn terminal_state(event: &str) -> Option<SessionState> {
+    match event {
+        "SessionStart" => Some(SessionState::Idle),
+        "UserPromptSubmit" => Some(SessionState::Working),
+        "Stop" | "StopFailure" | "PermissionRequest" | "Notification" | "Interrupt" | "PreToolUse" => {
+            Some(SessionState::Attention)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn notice_kind(event: &str) -> Option<TerminalNoticeKind> {
+    match event {
+        "Stop" => Some(TerminalNoticeKind::Completed),
+        "StopFailure" | "PermissionRequest" | "Notification" | "Interrupt" | "PreToolUse" => {
+            Some(TerminalNoticeKind::InputRequired)
+        }
+        _ => None,
+    }
+}
 
 pub(super) fn upsert(groups: &mut Vec<Value>, marker: &str, command: &str) {
     groups.retain_mut(|group| {

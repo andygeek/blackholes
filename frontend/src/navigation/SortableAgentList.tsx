@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-interface AgentEntry { id: string; label: string; content: ReactNode }
+interface AgentEntry { id: string; label: string; content: ReactNode; reorderable?: boolean; statusLabel?: string }
 interface DropTarget { id: string; after: boolean }
 interface Drag { id: string; pointer: number; startX: number; startY: number; x: number; y: number; active: boolean; moved: boolean }
 
@@ -27,7 +27,7 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
     const bounds = viewport?.getBoundingClientRect();
     let next: DropTarget | null = null;
     if (bounds && current.x >= bounds.left && current.x <= bounds.right && current.y >= bounds.top && current.y <= bounds.bottom) {
-      const rows = [...list.current.querySelectorAll<HTMLElement>("[data-agent-id]")];
+      const rows = [...list.current.querySelectorAll<HTMLElement>('[data-agent-reorderable="true"]')];
       // Include row gaps and the end of the list as valid insertion positions.
       const row = rows.find(row => {
         const rect = row.getBoundingClientRect();
@@ -57,7 +57,7 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
   }, [disabled]);
 
   useEffect(() => {
-    if (drag.current && !items.some(item => item.id === drag.current?.id)) cancel();
+    if (drag.current && !items.some(item => item.id === drag.current?.id && item.reorderable !== false)) cancel();
   }, [items]);
 
   useEffect(() => {
@@ -114,6 +114,7 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
       const button = (event.target as Element).closest(".agent-open");
       const row = button?.closest<HTMLElement>("[data-agent-id]");
       if (!row) return; // The X remains a normal confirmation button, never a drag handle.
+      if (!items.some(item => item.id === row.dataset.agentId && item.reorderable !== false)) return;
       cancel();
       const current: Drag = { id: row.dataset.agentId!, pointer: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false, moved: false };
       drag.current = current;
@@ -162,16 +163,18 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
     onKeyDown={event => {
       if (disabled || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key) || !(event.target as Element).closest(".agent-open")) return;
       const id = (event.target as Element).closest<HTMLElement>("[data-agent-id]")?.dataset.agentId;
-      if (!id) return;
+      if (!id || !items.some(item => item.id === id && item.reorderable !== false)) return;
       event.preventDefault();
       event.stopPropagation();
       const ids = items.map(item => item.id);
       const index = ids.indexOf(id), next = index + (event.key === "ArrowUp" ? -1 : 1);
-      if (next >= 0 && next < ids.length) { [ids[index], ids[next]] = [ids[next], ids[index]]; commit(ids, id); }
+      if (next >= 0 && next < ids.length && items[next].reorderable !== false) { [ids[index], ids[next]] = [ids[next], ids[index]]; commit(ids, id); }
     }}>
-    {items.map(item => <div key={item.id} data-agent-id={item.id}
+    {items.map(item => <div key={item.id} data-agent-id={item.id} data-agent-reorderable={item.reorderable !== false}
       className={`sortable-agent${dragging === item.id ? " is-dragging" : ""}${target?.id === item.id && target.id !== dragging ? target.after ? " drop-after" : " drop-before" : ""}`}
-      title={language === "es" ? "Mantén pulsado y arrastra para ordenar · ⌥↑ / ⌥↓" : "Press and hold, then drag to reorder · ⌥↑ / ⌥↓"}>
+      title={item.reorderable === false
+        ? `${item.statusLabel || ""} · ${language === "es" ? "Ordenado por notificación más reciente" : "Sorted by newest notification"}`
+        : language === "es" ? "Mantén pulsado y arrastra para ordenar · ⌥↑ / ⌥↓" : "Press and hold, then drag to reorder · ⌥↑ / ⌥↓"}>
       {item.content}
     </div>)}
     <span className="agent-order-announcement" role="status" aria-live="polite">{announcement}</span>

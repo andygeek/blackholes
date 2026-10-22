@@ -63,6 +63,8 @@ gpui::actions!(blackholes_terminal, [SendTab, SendBackTab, SendSpace]);
 pub enum AgentTerminalSignalKind {
     Started,
     Working,
+    Completed,
+    InputRequired,
     Attention,
 }
 
@@ -293,8 +295,10 @@ fn parse_agent_osc(sequence: &str) -> Option<AgentTerminalSignal> {
             "prompt_submit" | "tool_start" | "post_tool_use" | "tool_complete" => {
                 AgentTerminalSignalKind::Working
             }
-            "stop" | "stop_failure" | "permission_request" | "idle_prompt" | "question"
-            | "elicitation_dialog" => AgentTerminalSignalKind::Attention,
+            "stop" => AgentTerminalSignalKind::Completed,
+            "idle_prompt" => AgentTerminalSignalKind::Attention,
+            "stop_failure" | "permission_request" | "question"
+            | "elicitation_dialog" => AgentTerminalSignalKind::InputRequired,
             _ => return None,
         };
         // Structured Warp events are useful lifecycle signals, but their `agent` field is not
@@ -722,7 +726,7 @@ impl FastTerminalView {
                 self.agent_output_seen = false;
                 self.last_agent_output = None;
             }
-            AgentTerminalSignalKind::Attention => {
+            AgentTerminalSignalKind::Attention | AgentTerminalSignalKind::Completed | AgentTerminalSignalKind::InputRequired => {
                 self.agent_turn_pending = false;
                 self.agent_output_seen = false;
                 self.last_agent_output = None;

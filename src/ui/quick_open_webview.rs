@@ -60,6 +60,7 @@ pub fn focus(webview: &Entity<WebView>, cx: &mut App) {
 
 fn quick_open_html() -> String {
     include_str!("../../assets/quick-open/index.html")
+        .replace("{{APP_THEME_STYLES}}", include_str!("../../assets/theme.css"))
         .replace(
             "{{QUICK_OPEN_STYLES}}",
             include_str!("../../assets/quick-open/styles.css"),

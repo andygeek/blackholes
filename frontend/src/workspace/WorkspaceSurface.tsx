@@ -73,7 +73,6 @@ export interface SettingsData {
       skill_warning?: string | null;
     }>;
   };
-  sidebar_width: number;
 }
 
 export interface ProjectSettingsData {
@@ -303,7 +302,7 @@ function PreferenceSelect({ label, choices, value, onChange }: {
   </span>;
 }
 
-function SettingsView({ data }: { data: SettingsData }) {
+function SettingsView({ data, sidebarWidth }: { data: SettingsData; sidebarWidth: number }) {
   const language = data.language;
   const [activePage, setActivePage] = useState<PreferencePage>("general");
   const [query, setQuery] = useState("");
@@ -398,8 +397,8 @@ function SettingsView({ data }: { data: SettingsData }) {
   }) : pages.filter((page) => page.id === activePage);
   const active = pages.find((page) => page.id === activePage)!;
 
-  return <main className="workspace-page settings-page preferences-layout" style={{ gridTemplateColumns: `${data.sidebar_width}px minmax(0, 1fr)` }}>
-    <SidebarResizeHandle width={data.sidebar_width} left={data.sidebar_width - 6} edge="center" label={t(language, "Resize sidebar", "Cambiar ancho del menú lateral")} />
+  return <main className="workspace-page settings-page preferences-layout" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
+    <SidebarResizeHandle width={sidebarWidth} left={sidebarWidth - 6} edge="center" label={t(language, "Resize sidebar", "Cambiar ancho del menú lateral")} />
     <aside className="preferences-sidebar">
       <div className="preferences-sidebar__scroll">
       <button type="button" className="preferences-back" onClick={() => postNative({ type: "close_settings" })}><ArrowLeft size={16} />{t(language, "Back to app", "Volver a la app")}</button>
@@ -686,7 +685,7 @@ function WorkbenchView({ data }: { data: WorkbenchData }) {
   );
 }
 
-export function WorkspaceSurface({ event }: { event: WorkspaceSurfaceEvent }) {
+export function WorkspaceSurface({ event, sidebarWidth }: { event: WorkspaceSurfaceEvent; sidebarWidth: number }) {
   if (event.surface === "release-notes") return <ReleaseNotes data={event.data as ReleaseNotesData} />;
   if (event.surface === "home") {
     const data = event.data as HomeData;
@@ -700,7 +699,7 @@ export function WorkspaceSurface({ event }: { event: WorkspaceSurfaceEvent }) {
       </ul>
     </div></div></main>;
   }
-  if (event.surface === "settings") return <SettingsView data={event.data as SettingsData} />;
+  if (event.surface === "settings") return <SettingsView data={event.data as SettingsData} sidebarWidth={sidebarWidth} />;
   if (event.surface === "project-settings") return <ProjectSettingsView data={event.data as ProjectSettingsData} />;
   if (event.surface === "task-details") return <TaskDetails key={(event.data as TaskDetailsData).id} data={event.data as TaskDetailsData} />;
   if (event.surface === "project-overview") return <ProjectOverview data={event.data as ProjectOverviewData} />;

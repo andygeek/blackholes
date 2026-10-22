@@ -231,6 +231,7 @@ pub fn focus(webview: &Entity<WebView>, window: &mut Window, cx: &mut App) -> Re
 fn workspace_html() -> String {
     let logo = STANDARD.encode(include_bytes!("../../assets/app-logo-transparent.png"));
     include_str!("../../assets/workspace/index.html")
+        .replace("{{APP_THEME_STYLES}}", include_str!("../../assets/theme.css"))
         .replace(
             "{{WORKSPACE_BASE_STYLES}}",
             include_str!("../../assets/workspace/styles.css"),

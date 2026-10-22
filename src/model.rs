@@ -147,6 +147,14 @@ pub enum SessionState {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum TerminalNoticeKind {
+    Completed,
+    #[default]
+    InputRequired,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CodexProfile {
     #[default]
     Default,
@@ -345,11 +353,18 @@ pub struct AppSession {
     /// Mixed built-in/terminal agent order in the Agents section; independent of the project tree.
     #[serde(default)]
     pub agent_order: Vec<String>,
+    /// Unacknowledged terminal notifications, newest first, including restored sessions.
+    #[serde(default)]
+    pub terminal_attention_order: Vec<Uuid>,
+    #[serde(default)]
+    pub terminal_attention_kinds: std::collections::HashMap<Uuid, TerminalNoticeKind>,
     pub docks: std::collections::HashMap<String, DockState>,
     pub language: Language,
     #[serde(default)]
     pub theme: AppTheme,
     pub sidebar_width: f32,
+    #[serde(default = "default_sidebar_agents_fraction")]
+    pub sidebar_agents_fraction: f32,
     #[serde(default)]
     pub agents_section_collapsed: bool,
     #[serde(default)]
@@ -357,6 +372,8 @@ pub struct AppSession {
     #[serde(default)]
     pub last_seen_release_version: Option<String>,
 }
+
+fn default_sidebar_agents_fraction() -> f32 { 0.4 }
 
 impl Default for AppSession {
     fn default() -> Self {
@@ -370,10 +387,13 @@ impl Default for AppSession {
             unseen_task_ids: Vec::new(),
             terminals: Vec::new(),
             agent_order: Vec::new(),
+            terminal_attention_order: Vec::new(),
+            terminal_attention_kinds: Default::default(),
             docks: Default::default(),
             language: Language::English,
             theme: AppTheme::Dark,
             sidebar_width: 260.0,
+            sidebar_agents_fraction: default_sidebar_agents_fraction(),
             agents_section_collapsed: false,
             projects_section_collapsed: false,
             last_seen_release_version: None,

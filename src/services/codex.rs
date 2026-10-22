@@ -1,4 +1,7 @@
-use crate::{model::CodexProfile, paths::AppPaths};
+use crate::{
+    model::{CodexProfile, SessionState, TerminalNoticeKind},
+    paths::AppPaths,
+};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -14,11 +17,13 @@ use uuid::Uuid;
 const CODEX_SESSION_EVENT_PREFIX: &str = "codex-session:";
 const MANAGED_HOOK_MARKER: &str = "blackholes-codex-session-hook";
 const MAXIMUM_HOOK_FILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAXIMUM_HOOK_INPUT_BYTES: u64 = 64 * 1024;
+const MAXIMUM_HOOK_INPUT_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct CodexHookInput {
     session_id: String,
+    #[serde(default)]
+    hook_event_name: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -27,6 +32,10 @@ pub struct CodexSessionBridgePayload {
     pub terminal_id: Uuid,
     pub session_id: String,
     pub profile: CodexProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<SessionState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_kind: Option<TerminalNoticeKind>,
 }
 
 pub fn install_codex_session_hooks() -> Result<()> {
@@ -73,6 +82,8 @@ fn forward_codex_session() -> Result<()> {
         terminal_id,
         session_id: hook.session_id,
         profile: active_codex_profile(),
+        state: super::agent_hooks::terminal_state(&hook.hook_event_name),
+        notice_kind: super::agent_hooks::notice_kind(&hook.hook_event_name),
     };
     let message = format!(
         "{CODEX_SESSION_EVENT_PREFIX}{}",
@@ -141,14 +152,17 @@ fn install_hook_in(codex_home: &Path, command: &str) -> Result<()> {
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .context("The Codex hooks field must be a JSON object")?;
-    let session_start = hooks
-        .entry("SessionStart")
-        .or_insert_with(|| Value::Array(Vec::new()))
-        .as_array_mut()
-        .context("The Codex SessionStart hooks must be a JSON array")?;
-    // No matcher: current Codex also emits SessionStart for forks, and
-    // future start sources should retain their resumable session ID too.
-    super::agent_hooks::upsert(session_start, MANAGED_HOOK_MARKER, command);
+    for event in [
+        "SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest", "Interrupt",
+    ] {
+        let handlers = hooks
+            .entry(event)
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .with_context(|| format!("The Codex {event} hooks must be a JSON array"))?;
+        // No matcher: track every start source without changing the CLI's decisions.
+        super::agent_hooks::upsert(handlers, MANAGED_HOOK_MARKER, command);
+    }
 
     let mut updated = serde_json::to_vec_pretty(&document)?;
     updated.push(b'\n');

@@ -1,0 +1,32 @@
+/* Shared chrome colors for every embedded app surface. */
+:root {
+  --app-background: #0c0e12;
+  --app-sidebar: #111318;
+  --app-surface: #1c1f25;
+  --app-surface-raised: #20252e;
+  --app-hover: #242a35;
+  --app-selected: #29364f;
+  --app-border: #252a33;
+  --app-text: #e5e9f0;
+  --app-muted: #8e97aa;
+  --app-subtle: #737d90;
+  --app-accent: #8197d5;
+  --app-focus: #708acb;
+  --app-danger: #e57883;
+}
+
+:root[data-theme="light"] {
+  --app-background: #f6f7fa;
+  --app-sidebar: #f4f6fa;
+  --app-surface: #ffffff;
+  --app-surface-raised: #ffffff;
+  --app-hover: #e9edf4;
+  --app-selected: #dfe8fb;
+  --app-border: #dce1e9;
+  --app-text: #18212f;
+  --app-muted: #697386;
+  --app-subtle: #8490a2;
+  --app-accent: #5574ba;
+  --app-focus: #5574ba;
+  --app-danger: #c7475a;
+}

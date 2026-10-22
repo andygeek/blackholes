@@ -39,18 +39,18 @@ function content(notes: string) {
   });
 }
 
-function ReleaseCard({ release, current, es }: { release: Release; current: boolean; es: boolean }) {
+function ReleaseEntry({ release, current, es }: { release: Release; current: boolean; es: boolean }) {
   const [expanded, setExpanded] = useState(current);
   const { summary, changes } = releaseContent(release.notes);
   const bodyId = `release-${release.version}`;
-  return <li className={`release-card${current ? " is-current" : ""}`}>
+  return <li className="release-entry">
     <article aria-labelledby={`${bodyId}-title`}>
-      <div className="release-card-heading">
+      <div className="release-entry-heading">
         <h2 id={`${bodyId}-title`}>v{release.version}</h2>
-        {current && <span className="release-current-badge">{es ? "Versión actual" : "Current version"}</span>}
+        {current && <span className="release-current-label">{es ? "Versión actual" : "Current version"}</span>}
       </div>
-      <p className="release-card-summary">{inline(summary)}</p>
-      <button type="button" className="release-card-toggle" aria-expanded={expanded} aria-controls={bodyId}
+      <p className="release-entry-summary">{inline(summary)}</p>
+      <button type="button" className="release-entry-toggle" aria-expanded={expanded} aria-controls={bodyId}
         onClick={() => setExpanded(value => !value)}>
         {expanded ? (es ? "Ocultar cambios" : "Hide changes") : (es ? "Ver cambios" : "View changes")}
         <ChevronDown size={14} aria-hidden="true" />
@@ -74,7 +74,7 @@ export function ReleaseNotes({ data }: { data: ReleaseNotesData }) {
     </header>
     <div className="release-notes-content">
       <div className="release-notes-intro">
-        <div className="release-notes-emblem"><Rocket size={23} strokeWidth={1.6} aria-hidden="true" /></div>
+        <Rocket className="release-notes-emblem" size={28} strokeWidth={1.6} aria-hidden="true" />
         <h1 id="release-notes-title">{es ? "Cada versión, un poco mejor." : "A little better with every release."}</h1>
         <p>{es ? "Descubre los últimos cambios de Blackholes." : "Catch up on the latest changes in Blackholes."}</p>
         <a className="release-history-link" href={historyUrl}
@@ -83,7 +83,7 @@ export function ReleaseNotes({ data }: { data: ReleaseNotesData }) {
         </a>
       </div>
       <ol className="release-history" aria-label={es ? "Últimas versiones" : "Recent releases"}>
-        {data.releases.map(release => <ReleaseCard key={release.version} release={release}
+        {data.releases.map(release => <ReleaseEntry key={release.version} release={release}
           current={release.version === data.version} es={es} />)}
       </ol>
       <p className="release-notes-hint">{es

@@ -1,28 +1,19 @@
 :root {
   color-scheme: dark;
-  --background: #090a0d;
-  --surface: #26272a;
-  --surface-user: #5d5f63;
-  --surface-raised: #303135;
-  --border: #4a4c52;
-  --text: #f1f2f5;
-  --muted: #96989f;
-  --accent: #8f73ff;
-  --danger: #ff8295;
+  --background: var(--app-background);
+  --surface: var(--app-surface);
+  --surface-user: var(--app-hover);
+  --surface-raised: var(--app-surface-raised);
+  --border: var(--app-border);
+  --text: var(--app-text);
+  --muted: var(--app-muted);
+  --accent: var(--app-accent);
+  --danger: var(--app-danger);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --background: #f6f7fa;
-  --surface: #ffffff;
-  --surface-user: #e3e7ee;
-  --surface-raised: #ffffff;
-  --border: #cbd2dc;
-  --text: #18212f;
-  --muted: #697386;
-  --accent: #6f52d9;
-  --danger: #c7475a;
 }
 
 * {
@@ -234,16 +225,16 @@ button {
 }
 
 .app-modal {
-  --modal-focus-border: #8197d599;
-  --modal-field-background: #181a1e;
-  --modal-field-border: #484b54;
-  --modal-field-placeholder: #858a96;
+  --modal-focus-border: var(--app-focus);
+  --modal-field-background: var(--app-background);
+  --modal-field-border: var(--app-border);
+  --modal-field-placeholder: var(--app-subtle);
   width: min(100%, 480px);
   padding: 23px 24px 22px;
-  border: 1px solid #3e424b;
+  border: 1px solid var(--app-border);
   border-radius: 12px;
-  background: #202226;
-  color: #f1f2f5;
+  background: var(--app-surface);
+  color: var(--app-text);
   box-shadow: 0 22px 58px rgba(0, 0, 0, .48);
   max-height: calc(100dvh - 56px);
   overflow-y: auto;
