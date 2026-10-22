@@ -15,7 +15,7 @@
 </p>
 
 <h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
-<p align="center">Current version: <a href="docs/releases/0.1.16.md">0.1.16</a></p>
+<p align="center">Current version: <a href="docs/releases/0.1.17.md">0.1.17</a></p>
 <p align="center">macOS 13+ · Apple Silicon · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 [![Blackholes demo: creating worktree groups and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
@@ -31,6 +31,7 @@
 
 - Worktree Groups with a living context document and multiple PR, ClickUp, Slack and other links.
 - Terminal sessions, file editing, and repository-wide text search.
+- Green and yellow agent notifications, working indicators, and a resizable Agents/Projects split.
 - Git staging, manual commits, history, commit diffs, and push.
 - Local Codex and Claude usage, refreshed every 10 minutes for installed providers.
 - The latest three releases in the workspace, with a shortcut beside the version and a link to the full history.

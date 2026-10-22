@@ -311,7 +311,7 @@ button:focus-visible {
 }
 .agents-shell { border-bottom: 1px solid var(--border); }
 
-.tree-row.is-revealed, .tree-leaf.is-revealed { background: var(--surface-selected); box-shadow: inset 3px 0 0 #8197d5; }
+.tree-row.is-revealed, .tree-leaf.is-revealed { background: var(--surface-selected); }
 .tree-row[id] { scroll-margin-block: 48px; }
 
 .section-header {
@@ -400,17 +400,16 @@ button:focus-visible {
 :root[data-theme="light"] .terminal-agent-card.needs-attention.is-selected,
 .terminal-agent-card.needs-attention.is-selected { background: var(--notice-hover); }
 .terminal-agent-card.needs-attention .agent-name { color: var(--notice-color); }
-.navigation-status-icon { position: relative; overflow: visible; --notice-color: var(--active); --status-dot-size: 6px; }
+.navigation-status-icon { position: relative; overflow: visible; --notice-color: var(--active); --status-dot-size: 6px; --status-spinner-size: 14px; }
 .navigation-status-icon.is-awaiting-input, .agents-summary-dot.is-awaiting-input { --notice-color: var(--waiting); }
 .navigation-status-artwork { display: grid; width: 100%; height: 100%; place-items: center; transition: opacity 120ms ease; }
 .navigation-status-icon.has-notice .navigation-status-artwork { opacity: .4; }
 .navigation-status-icon.is-working .navigation-status-artwork { opacity: .25; }
-.terminal-agent-avatar.navigation-status-icon { --status-dot-size: 8px; }
+.terminal-agent-avatar.navigation-status-icon { --status-dot-size: 8px; --status-spinner-size: 18px; }
 .navigation-status-dot { position: absolute; top: -1px; right: -1px; display: block; width: var(--status-dot-size, 6px); height: var(--status-dot-size, 6px); flex: none; border-radius: 50%; background: var(--notice-color, var(--active)); box-shadow: 0 0 0 1px var(--background), 0 0 6px color-mix(in srgb, var(--notice-color, var(--active)) 70%, transparent); pointer-events: none; }
 .section-toggle .agents-summary-dot { position: static; margin-left: 3px; overflow: visible; }
-.navigation-status-spinner { position: absolute; inset: 0; border: 1.5px solid #ffffff35; border-top-color: #fff; border-right-color: #fff; border-radius: 50%; box-shadow: 0 0 5px #ffffff35; filter: drop-shadow(0 0 1px #0008); animation: navigation-status-spin .85s linear infinite; pointer-events: none; }
-@keyframes navigation-status-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .navigation-status-spinner { animation: none; } .navigation-status-artwork { transition: none; } }
+.navigation-status-spinner { position: absolute; top: 50%; left: 50%; width: var(--status-spinner-size); height: var(--status-spinner-size); margin-top: calc(var(--status-spinner-size) / -2); margin-left: calc(var(--status-spinner-size) / -2); color: #fff; filter: drop-shadow(0 0 1px #0008) drop-shadow(0 0 2px #fff6); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .navigation-status-artwork { transition: none; } }
 :root[data-theme="light"] .terminal-provider--codex { color: #202622; }
 
 .tree-row,

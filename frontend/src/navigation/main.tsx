@@ -644,10 +644,12 @@ function NavigationApp() {
   const agentsNotice = agentsCollapsed ? pendingNotice(state?.terminal_agents || []) : null;
   const agentItems = [...manualAgentOrder].sort((a, b) =>
     Number(b.needs_attention) - Number(a.needs_attention)
-      || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER) : 0)
+      || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER)
+        : Number(b.working) - Number(a.working))
   ).map(terminal => ({
     id: `terminal:${terminal.id}`, label: `${terminal.context} · ${terminal.provider_label}`,
     reorderable: !terminal.needs_attention,
+    reorderGroup: terminal.working ? "working" : "idle",
     statusLabel: terminal.attention_kind === "completed" ? copy.responseReady : copy.needsAttention,
     content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} />,
   }));

@@ -108,15 +108,21 @@ The compact form reveals GitHub input on demand and keeps location details
 collapsed. Existing database-only links are materialized when project context is
 prepared on startup. Existing files and conflicting links are never overwritten.
 
-Terminal rows use the detected provider's icon. They do not show persistent
-loading dots or green presence badges; launching or focusing a CLI alone is not
-treated as submitting an agent turn.
+Terminal rows use the detected provider's icon. A white spinner over a dimmed
+icon indicates a working agent. A green dot means a response is ready; yellow
+means response or permission is required. These are lifecycle indicators, not
+presence badges: launching or focusing a CLI alone does not start a work spinner.
+Project and worktree group icons summarize pending notices; yellow takes priority
+when both kinds are present. Collapsed Agents shows a summary dot beside its title.
 
 Click the arrow or title of **Agents** or **Projects** to collapse that sidebar
 section independently. The other section uses the freed space. These choices
 persist across restarts, while project and worktree group expansion remains unchanged.
 The separate collapse-all button still folds the individual projects and worktree groups.
 Section headers and the Settings footer use compact rows.
+Drag the divider between Agents and Projects up or down to resize their independent
+scroll areas. The proportion is saved; double-click the divider to restore its
+default position. Settings uses the same sidebar width and application palette.
 
 Packaged apps send macOS notifications with Blackholes' own name and icon. The
 first notice requests notification permission if it has not been granted yet.
@@ -128,14 +134,17 @@ Receiving a notice alone never changes the selected workspace. Bare development
 executables retain in-app notices and the attention sound, but do not send macOS
 notifications under Terminal's identity.
 
-The Agents section lists only initialized agent terminals with live processes,
-including idle/working/attention sessions. Dormant restored or exited terminals
-stay out of this list. Saved sessions remain in Projects; activating one there
-starts its terminal and adds it to Agents. Press and hold a card by its
+The Agents section lists initialized agent terminals with live processes and
+sessions with unacknowledged notifications, including after a restart. Other
+dormant restored or exited terminals remain in Projects; activating one there
+starts its terminal and adds it to Agents. Pending notifications come first,
+newest first, followed by working agents and then idle agents. Opening a session
+acknowledges its notification. Press and hold a card by its
 icon or title, then drag to reorder the list. The cursor changes
 only once the hold activates reordering; the insertion marker and edge
 scrolling help with long lists. Keyboard users can focus a card and use
-`Option+Up` / `Option+Down`. The order survives app restarts and does not change
+`Option+Up` / `Option+Down`. Manual ordering applies within working or idle agents;
+notification priority is automatic. The order survives app restarts and does not change
 project/group ownership or the project tree.
 
 Closing a terminal agent from Agents, the project tree or its terminal pane

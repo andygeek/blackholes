@@ -22,6 +22,10 @@ navigation hydration; older sessions default to expanded. Hidden content stays
 mounted, and the grid reallocates its space to the remaining open section.
 The toggle buttons expose `aria-expanded` and `aria-controls`; section folding
 does not change the expanded project/task IDs or stop terminal sessions.
+The draggable separator saves `sidebar_agents_fraction` through
+`set_sidebar_agents_fraction`. Navigation puts pending notices first by recency,
+then working agents, then idle agents; manual reordering stays within a state.
+Shared chrome colors are embedded from `assets/theme.css` in each WebView.
 
 The GPUI title bar shows the installed version, a release-notes icon, and the update action outside all
 WebViews, including settings. `src/services/updater.rs` connects to the native
@@ -31,7 +35,7 @@ executable. See [Releasing and updates](RELEASING.md).
 `workspace/ReleaseNotes.tsx` renders the three most recent releases inside the
 central workspace, keeping the navigation sidebar visible and resizable.
 `build.rs` selects stable versions up to the package version from `docs/releases/`
-and embeds their English and Spanish notes. Each card shows a summary; the current
+and embeds their English and Spanish notes. Each release shows a summary; the current
 version's changes start expanded and older versions can be expanded individually.
 Installation and verification sections remain in the full online notes, linked
 through the native `open_url` command to GitHub Releases.
@@ -43,6 +47,12 @@ remain available. Background surface updates cannot replace the notes while
 they are open, and existing terminals keep running. Modal overlays use the notes
 as their backdrop rather than the hidden terminal. The notes use the same theme
 and language as the application.
+
+Native terminal overlays require Wry's `transparent` Cargo feature on macOS,
+in addition to `with_transparent(true)` and transparent HTML backgrounds. Without
+that feature, the WebView draws an opaque backing over the terminal even when
+the modal's CSS backdrop is translucent. Keep the terminal rendered beneath the
+overlay; only the backdrop should dim it.
 
 The native bottom bar (`src/ui/usage_bar.rs`) is also outside the WebViews.
 It displays local Claude/Codex account limits through independent background

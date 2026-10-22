@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-interface AgentEntry { id: string; label: string; content: ReactNode; reorderable?: boolean; statusLabel?: string }
+interface AgentEntry { id: string; label: string; content: ReactNode; reorderable?: boolean; reorderGroup?: string; statusLabel?: string }
 interface DropTarget { id: string; after: boolean }
-interface Drag { id: string; pointer: number; startX: number; startY: number; x: number; y: number; active: boolean; moved: boolean }
+interface Drag { id: string; group: string; pointer: number; startX: number; startY: number; x: number; y: number; active: boolean; moved: boolean }
 
 const HOLD_DELAY_MS = 400;
 const MOVEMENT_TOLERANCE = 6;
@@ -27,7 +27,8 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
     const bounds = viewport?.getBoundingClientRect();
     let next: DropTarget | null = null;
     if (bounds && current.x >= bounds.left && current.x <= bounds.right && current.y >= bounds.top && current.y <= bounds.bottom) {
-      const rows = [...list.current.querySelectorAll<HTMLElement>('[data-agent-reorderable="true"]')];
+      const rows = [...list.current.querySelectorAll<HTMLElement>('[data-agent-reorderable="true"]')]
+        .filter(row => row.dataset.agentReorderGroup === current.group);
       // Include row gaps and the end of the list as valid insertion positions.
       const row = rows.find(row => {
         const rect = row.getBoundingClientRect();
@@ -57,7 +58,8 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
   }, [disabled]);
 
   useEffect(() => {
-    if (drag.current && !items.some(item => item.id === drag.current?.id && item.reorderable !== false)) cancel();
+    if (drag.current && !items.some(item => item.id === drag.current?.id && item.reorderable !== false
+      && (item.reorderGroup || "") === drag.current.group)) cancel();
   }, [items]);
 
   useEffect(() => {
@@ -114,9 +116,10 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
       const button = (event.target as Element).closest(".agent-open");
       const row = button?.closest<HTMLElement>("[data-agent-id]");
       if (!row) return; // The X remains a normal confirmation button, never a drag handle.
-      if (!items.some(item => item.id === row.dataset.agentId && item.reorderable !== false)) return;
+      const item = items.find(item => item.id === row.dataset.agentId && item.reorderable !== false);
+      if (!item) return;
       cancel();
-      const current: Drag = { id: row.dataset.agentId!, pointer: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false, moved: false };
+      const current: Drag = { id: row.dataset.agentId!, group: item.reorderGroup || "", pointer: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false, moved: false };
       drag.current = current;
       holdTimer.current = window.setTimeout(() => {
         holdTimer.current = null;
@@ -147,7 +150,8 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
         event.preventDefault();
         if (current.moved) updateTarget();
         const destination = drop.current;
-        if (destination && destination.id !== current.id && items.some(item => item.id === destination.id)) {
+        if (destination && destination.id !== current.id && items.some(item => item.id === destination.id
+          && item.reorderable !== false && (item.reorderGroup || "") === current.group)) {
           const ids = items.map(item => item.id).filter(id => id !== current.id);
           ids.splice(ids.indexOf(destination.id) + Number(destination.after), 0, current.id);
           commit(ids, current.id);
@@ -168,9 +172,10 @@ export function SortableAgentList({ items, disabled, language, onReorder }: {
       event.stopPropagation();
       const ids = items.map(item => item.id);
       const index = ids.indexOf(id), next = index + (event.key === "ArrowUp" ? -1 : 1);
-      if (next >= 0 && next < ids.length && items[next].reorderable !== false) { [ids[index], ids[next]] = [ids[next], ids[index]]; commit(ids, id); }
+      if (next >= 0 && next < ids.length && items[next].reorderable !== false
+        && items[next].reorderGroup === items[index].reorderGroup) { [ids[index], ids[next]] = [ids[next], ids[index]]; commit(ids, id); }
     }}>
-    {items.map(item => <div key={item.id} data-agent-id={item.id} data-agent-reorderable={item.reorderable !== false}
+    {items.map(item => <div key={item.id} data-agent-id={item.id} data-agent-reorderable={item.reorderable !== false} data-agent-reorder-group={item.reorderGroup || ""}
       className={`sortable-agent${dragging === item.id ? " is-dragging" : ""}${target?.id === item.id && target.id !== dragging ? target.after ? " drop-after" : " drop-before" : ""}`}
       title={item.reorderable === false
         ? `${item.statusLabel || ""} · ${language === "es" ? "Ordenado por notificación más reciente" : "Sorted by newest notification"}`
