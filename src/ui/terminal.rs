@@ -1,3 +1,4 @@
+mod color_scheme;
 mod native_glyph;
 mod program_status;
 mod unicode_strokes;
@@ -9,7 +10,7 @@ use alacritty_terminal::{
     index::{Column, Line, Point as TerminalPoint, Side},
     selection::{Selection, SelectionType},
     term::{Config as AlacrittyConfig, Term, TermMode, cell::Flags, search::RegexSearch},
-    vte::ansi::{Color, CursorShape, NamedColor, Processor},
+    vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb},
 };
 use gpui::{
     App, Bounds, ClipboardItem, Context, DispatchPhase, Edges, ElementInputHandler, Entity,
@@ -39,7 +40,7 @@ use std::{
     sync::LazyLock,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -77,6 +78,9 @@ pub struct AgentTerminalSignal {
 enum FastTerminalEvent {
     Terminal(TerminalEvent),
     PtyWrite(String),
+    /// A program asked for a color; the formatter builds the reply.
+    ColorRequest(usize, Arc<dyn Fn(Rgb) -> String + Sync + Send>),
+    ColorSchemeQuery,
     Agent(AgentTerminalSignal),
     ProgramStatus(program_status::Event),
     AlternateScreen(bool),
@@ -107,9 +111,10 @@ impl EventListener for FastEventProxy {
             Event::ClipboardLoad(_, _) => self.send(TerminalEvent::ClipboardLoad),
             Event::Exit | Event::ChildExit(_) => self.send(TerminalEvent::Exit),
             Event::PtyWrite(text) => { let _ = self.sender.try_send(FastTerminalEvent::PtyWrite(text)); }
+            // Queued with the other replies: programs expect them in the order they asked.
+            Event::ColorRequest(index, format) => { let _ = self.sender.try_send(FastTerminalEvent::ColorRequest(index, format)); }
             Event::Wakeup
             | Event::MouseCursorDirty
-            | Event::ColorRequest(_, _)
             | Event::TextAreaSizeRequest(_)
             | Event::CursorBlinkingChange => {}
         }
@@ -164,6 +169,9 @@ pub struct FastTerminalView {
     /// pointer moves. Released as a click, discarded once it becomes a drag.
     pending_mouse_report: Option<(MouseButton, Vec<u8>)>,
     program_status_active: bool,
+    /// Whether the running program asked to be told when the theme changes
+    /// between light and dark.
+    color_scheme_reports: Arc<AtomicBool>,
     agent_turn_pending: bool,
     agent_output_seen: bool,
     agent_settle_running: bool,
@@ -383,12 +391,15 @@ impl FastTerminalView {
         let protocol_event_tx = event_tx.clone();
         let stdin_writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(writer)));
         let protocol_writer = stdin_writer.clone();
+        let color_scheme_reports = Arc::new(AtomicBool::new(false));
+        let reader_color_scheme_reports = color_scheme_reports.clone();
         thread::Builder::new()
             .name("blackholes-pty-reader".into())
             .spawn(move || {
                 let mut reader = reader;
                 let mut parser: Processor = Processor::new();
                 let mut osc_scanner = OscScanner::default();
+                let mut color_scheme_scanner = color_scheme::Scanner::default();
                 let mut buffer = [0_u8; 8 * 1024];
                 loop {
                     match reader.read(&mut buffer) {
@@ -410,6 +421,16 @@ impl FastTerminalView {
                                     OscEvent::Agent(signal) => {
                                         let _ = protocol_event_tx.try_send(FastTerminalEvent::Agent(signal));
                                     }
+                                }
+                            });
+                            // Scanned before parsing, so this reply is queued ahead of
+                            // the replies to whatever the program asks next.
+                            color_scheme_scanner.scan(&buffer[..length], |event| match event {
+                                color_scheme::Event::Reports(enabled) => {
+                                    reader_color_scheme_reports.store(enabled, Ordering::Release);
+                                }
+                                color_scheme::Event::Query => {
+                                    let _ = protocol_event_tx.try_send(FastTerminalEvent::ColorSchemeQuery);
                                 }
                             });
                             let mut term = parser_term.lock();
@@ -507,6 +528,7 @@ impl FastTerminalView {
             search_saved_selection: None,
             pending_mouse_report: None,
             program_status_active: false,
+            color_scheme_reports,
             agent_turn_pending: false,
             agent_output_seen: false,
             agent_settle_running: false,
@@ -582,8 +604,19 @@ impl FastTerminalView {
         self.renderer_measured = false;
         self.paint_state.lock().clear();
         self.invalidate_terminal_frame();
+        let was_dark = color_scheme::is_dark(&self.config.colors);
         self.config = config;
+        let dark = color_scheme::is_dark(&self.config.colors);
+        if dark != was_dark && self.color_scheme_reports.load(Ordering::Acquire) {
+            self.write(color_scheme::report(dark));
+        }
         cx.notify();
+    }
+
+    /// The color a query reports: the one the program set, else the theme's.
+    fn requested_color(&self, index: usize) -> Option<Rgb> {
+        let theme_color = color_scheme::palette_color(&self.config.colors, index)?;
+        Some(self.term.lock().colors()[index].unwrap_or(theme_color))
     }
 
     fn write(&self, bytes: &[u8]) {
@@ -1169,6 +1202,14 @@ impl FastTerminalView {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 FastTerminalEvent::PtyWrite(text) => self.write(text.as_bytes()),
+                FastTerminalEvent::ColorRequest(index, format) => {
+                    if let Some(color) = self.requested_color(index) {
+                        self.write(format(color).as_bytes());
+                    }
+                }
+                FastTerminalEvent::ColorSchemeQuery => {
+                    self.write(color_scheme::report(color_scheme::is_dark(&self.config.colors)));
+                }
                 FastTerminalEvent::Agent(signal) => self.dispatch_agent_signal(signal, cx),
                 FastTerminalEvent::ProgramStatus(program_status::Event::Status { signal, active }) => {
                     self.program_status_active = active;

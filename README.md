@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Blackholes</h1>
 <p align="center"><strong>Your workspace for coding agents, terminals, and Git worktrees.</strong></p>
-<p align="center">Run your installed agent CLIs side by side. Organize sessions by project and worktree group, keep repositories together, and give every worktree group its own working context.</p>
+<p align="center">Run your installed agent CLIs side by side. Organize sessions by project and task, keep repositories together, and give every task its own working context.</p>
 
 <p align="center">
   <a href="https://github.com/andygeek/blackholes/stargazers"><img src="https://img.shields.io/github/stars/andygeek/blackholes?style=flat" alt="GitHub stars" /></a>
@@ -15,32 +15,34 @@
 </p>
 
 <h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
-<p align="center">Current version: <a href="docs/releases/0.1.18.md">0.1.18</a></p>
+<p align="center">Current version: <a href="docs/releases/0.1.19.md">0.1.19</a></p>
 <p align="center">macOS 13+ · Apple Silicon · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
-[![Blackholes demo: creating worktree groups and running terminal agents](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-demo.mp4)
+[![Blackholes: a project with three repositories and its tasks, each opening with its own branches, context and links](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4)
 
-[Watch the demo](https://blackholes.dev/videos/blackholes-demo.mp4) · Recordings show an earlier interface.
+[Watch the recording](https://blackholes.dev/videos/blackholes-repositories.mp4)
 
 ## Features
 
 | | |
 | --- | --- |
-| **Agent sessions**<br><br>Run Claude Code and Codex in native terminals, organized by project and worktree group.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-demo.mp4) | [![Worktree Group agent sessions](docs/media/task-sessions.gif)](https://blackholes.dev/videos/blackholes-demo.mp4) |
-| **Multiple repositories**<br><br>Keep repositories together and create isolated Git worktrees for each worktree group.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-repositories.mp4) | [![Project repositories](docs/media/project-repositories.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4) |
+| **Agent sessions**<br><br>Run Claude Code, Codex and Antigravity in native terminals, organized by project and task. | ![The Agents list with a session that needs attention, and a task with its agent session and worktrees](docs/media/task-sessions.webp) |
+| **Multiple repositories**<br><br>Keep repositories together and create isolated Git worktrees for each task.<br><br>[Watch →](https://blackholes.dev/videos/blackholes-repositories.mp4) | [![A project's repositories and the worktrees of its tasks](docs/media/project-repositories.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4) |
+| **Changes and diffs**<br><br>Review each repository's changes, stage and commit them, and read the diff without leaving the workspace. | ![Source control with a task's staged changes and the diff of one file](docs/media/source-control.webp) |
 
-- Worktree Groups with a living context document and multiple PR, ClickUp, Slack and other links.
+- Tasks with a living context document and multiple PR, ClickUp, Slack and other links.
 - Terminal sessions, file editing, and repository-wide text search.
 - Green and yellow agent notifications, working indicators, and a resizable Agents/Projects split.
 - Git staging, manual commits, history, commit diffs, and push.
 - Local Claude, Codex and Antigravity usage, refreshed every 10 minutes for the agents you select.
 - The latest three releases in the workspace, with a shortcut beside the version and a link to the full history.
-- MCP tools to create worktree groups and launch agents from your existing clients.
+- MCP tools to create tasks and launch agents from your existing clients.
 
 ## Supported agents
 
 <a href="https://github.com/openai/codex"><img src="docs/media/codex-badge.svg" alt="Codex" height="28" /></a>
 <a href="https://code.claude.com/docs/en/overview"><img src="docs/media/claude-code-badge.svg" alt="Claude Code" height="28" /></a>
+<a href="https://antigravity.google/"><img src="docs/media/antigravity-badge.svg" alt="Antigravity" height="28" /></a>
 
 Use your installed CLIs and your own accounts. [Setup guide →](docs/USAGE.md)
 

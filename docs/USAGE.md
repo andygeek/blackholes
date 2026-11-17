@@ -37,7 +37,10 @@ follow the selected application language, and work without an internet connectio
 ## Setup and local tools
 
 Settings contains **General** for appearance, language, and the projects folder,
-and **MCP servers** for connecting terminal agents to Blackholes. Agent permissions
+**Agents** for the agents you work with, and **MCP servers** for connecting
+terminal agents to Blackholes. Terminals report the app's light or dark theme to
+programs that ask for their colors, and tell programs that support color scheme
+reports when you switch. Agent permissions
 and instructions remain in each project's settings.
 
 Terminals resolve commands after your interactive login shell starts. Account
