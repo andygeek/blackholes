@@ -3,6 +3,7 @@ import type { SearchData } from "./RepositorySearch";
 import { CommitOverview, type HistoryData } from "./GitHistory";
 import {
   ArrowLeft,
+  Bot,
   Cable,
   ChevronDown,
   ChevronRight,
@@ -58,6 +59,7 @@ interface Choice {
 export interface SettingsData {
   language: "en" | "es";
   theme: AppTheme;
+  agents?: Array<{ id: string; label: string; command?: string | null; enabled: boolean }>;
   projects_root: string;
   git_available: boolean;
   external_integrations?: {
@@ -272,7 +274,7 @@ function SettingsTabs<T extends string>({ tabs, value, onChange, label }: {
   );
 }
 
-type PreferencePage = "general" | "mcps";
+type PreferencePage = "general" | "agents" | "mcps";
 
 function PreferenceGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="preference-group"><h2>{title}</h2><div className="preference-box">{children}</div></section>;
@@ -315,9 +317,9 @@ function SettingsView({ data, sidebarWidth }: { data: SettingsData; sidebarWidth
       profiles: integrationProfiles.filter((profile) => profile.client === client),
     }));
 
-  const pages: Array<{ id: PreferencePage; label: string; description: string; icon: LucideIcon; keywords: string; badge?: number; content: React.ReactNode }> = [
+  const pages: Array<{ id: PreferencePage; section: "application" | "integrations"; label: string; description: string; icon: LucideIcon; keywords: string; badge?: number; content: React.ReactNode }> = [
     {
-      id: "general", label: t(language, "General", "General"), icon: Settings,
+      id: "general", section: "application", label: t(language, "General", "General"), icon: Settings,
       description: t(language, "Make Blackholes feel at home.", "Personaliza la apariencia y el espacio de trabajo."),
       keywords: "appearance apariencia theme tema claro oscuro light dark language idioma English Español projects proyectos carpeta folder " + data.projects_root,
       content: <>
@@ -353,14 +355,30 @@ function SettingsView({ data, sidebarWidth }: { data: SettingsData; sidebarWidth
       </>,
     },
     {
-      id: "mcps", label: t(language, "MCP servers", "Servidores MCP"), icon: Cable,
+      id: "agents", section: "application", label: t(language, "Agents", "Agentes"), icon: Bot,
+      description: t(language,
+        "Choose the coding agents you work with. Each one shows its plan usage in the bottom bar and appears in the + menus.",
+        "Elige los agentes de código con los que trabajas. Cada uno muestra el uso de su plan en la barra inferior y aparece en los menús +."),
+      keywords: "agents agentes claude codex antigravity agy usage uso bar barra menu menú " + (data.agents ?? []).map((agent) => agent.label).join(" "),
+      content: <PreferenceGroup title={t(language, "Agents you use", "Agentes que usas")}>
+        {(data.agents ?? []).map((agent) => <PreferenceRow key={agent.id} title={agent.label} description={<>
+          {t(language, "Uses the command ", "Usa el comando ")}<code>{agent.command}</code>{t(language, " installed on this computer.", " instalado en esta computadora.")}
+        </>}>
+          <button type="button" role="switch" aria-checked={agent.enabled} aria-label={agent.label}
+            className={`workspace-switch${agent.enabled ? " is-enabled" : ""}`}
+            onClick={() => postNative({ type: "set_agent_enabled", agent: agent.id, enabled: !agent.enabled })}><i /></button>
+        </PreferenceRow>)}
+      </PreferenceGroup>,
+    },
+    {
+      id: "mcps", section: "integrations", label: t(language, "MCP servers", "Servidores MCP"), icon: Cable,
       description: t(language, "Connect Blackholes to your terminal agents.", "Conecta Blackholes a tus agentes de terminal."),
       keywords: "mcp servers servidores conexiones integrations integraciones",
       content: <>
         <PreferenceGroup title={t(language, "Blackholes in your terminal agents", "Blackholes en tus agentes de terminal")}>
           <PreferenceRow title={t(language, "Automatic connection", "Conexión automática")} description={t(language,
-            "Let Codex and Claude Code manage projects and worktree groups in Blackholes. The connection is prepared automatically when the app opens. Start a new agent session to use it.",
-            "Permite que Codex y Claude Code gestionen proyectos y grupos de worktrees en Blackholes. La conexión se prepara automáticamente al abrir la app. Inicia una nueva sesión del agente para usarla.")}>
+            "Let Codex and Claude Code manage projects and tasks in Blackholes. The connection is prepared automatically when the app opens. Start a new agent session to use it.",
+            "Permite que Codex y Claude Code gestionen proyectos y tareas en Blackholes. La conexión se prepara automáticamente al abrir la app. Inicia una nueva sesión del agente para usarla.")}>
             <button type="button" className="workspace-button" disabled={data.external_integrations?.running}
               onClick={() => postNative({ type: "refresh_external_integrations" })}>
               <RefreshCw size={14} />{data.external_integrations?.running ? t(language, "Preparing…", "Preparando…") : t(language, "Refresh connection", "Actualizar conexión")}
@@ -408,8 +426,8 @@ function SettingsView({ data, sidebarWidth }: { data: SettingsData; sidebarWidth
         <input type="search" aria-label={t(language, "Search settings", "Buscar ajustes")} placeholder={t(language, "Search settings…", "Buscar ajustes…")} value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
       <nav aria-label={t(language, "Settings sections", "Secciones de configuración")}>
-        {pages.map((page) => <div key={page.id}>
-          <span className="preferences-nav-label">{page.id === "general" ? t(language, "Application", "Aplicación") : t(language, "Integrations", "Integraciones")}</span>
+        {pages.map((page, index) => <div key={page.id}>
+          {page.section !== pages[index - 1]?.section && <span className="preferences-nav-label">{page.section === "application" ? t(language, "Application", "Aplicación") : t(language, "Integrations", "Integraciones")}</span>}
           <button type="button" className={!terms.length && activePage === page.id ? "is-selected" : ""}
             aria-current={!terms.length && activePage === page.id ? "page" : undefined}
             onClick={() => { setActivePage(page.id); setQuery(""); }}>
@@ -541,7 +559,7 @@ function ProjectSettingsView({ data }: { data: ProjectSettingsData }) {
         {activeTab === "terminals" && (
           <div className="settings-tab-panel">
             <SettingsSection wide title={t(language, "Agent permissions", "Permisos de agentes")}
-              description={t(language, "For terminal agents launched or restored in this project and its worktree groups, including parallel launches through MCP.", "Para los agentes de terminal que se inician o restauran en este proyecto y sus grupos de worktrees, incluidos los inicios en paralelo por MCP.")}>
+              description={t(language, "For terminal agents launched or restored in this project and its tasks, including parallel launches through MCP.", "Para los agentes de terminal que se inician o restauran en este proyecto y sus tareas, incluidos los inicios en paralelo por MCP.")}>
               <label className="project-terminal-permissions">
                 <input type="checkbox" checked={Boolean(data.terminal_skip_permissions)}
                   aria-describedby="terminal-permissions-description"
@@ -588,11 +606,11 @@ function ProjectSettingsView({ data }: { data: ProjectSettingsData }) {
 
         <SettingsSection
           wide
-          title={t(language, "CLAUDE.MD FOR WORKTREE GROUPS", "CLAUDE.MD PARA GRUPOS DE WORKTREES")}
+          title={t(language, "CLAUDE.MD FOR TASKS", "CLAUDE.MD PARA TAREAS")}
           description={t(
             language,
-            "This shared template is added to every new worktree group and reapplied to existing worktree groups whenever it is saved.",
-            "Esta plantilla compartida se agrega a cada grupo de worktrees nuevo y se vuelve a aplicar a los grupos de worktrees existentes cada vez que se guarda.",
+            "This shared template is added to every new task and reapplied to existing tasks whenever it is saved.",
+            "Esta plantilla compartida se agrega a cada tarea nueva y se vuelve a aplicar a las tareas existentes cada vez que se guarda.",
           )}
         >
           <ProjectInstructionsEditor
@@ -619,7 +637,7 @@ function FileEditor({ editor, language, theme, root }: { editor: EditorData; lan
       {editor.source !== "repository" && editor.workspace_id && (
         <nav className="instructions-tabs">
           <button className={editor.source === "project-instructions" ? "is-selected" : ""} onClick={() => postNative({ type: "open_project_instructions", workspace_id: editor.workspace_id })}>{t(language, "Project CLAUDE.md", "CLAUDE.md del proyecto")}</button>
-          <button className={editor.source === "task-instructions" ? "is-selected" : ""} onClick={() => postNative({ type: "open_project_task_instructions", workspace_id: editor.workspace_id })}>{t(language, "Worktree Group CLAUDE.md", "CLAUDE.md de grupos de worktrees")}</button>
+          <button className={editor.source === "task-instructions" ? "is-selected" : ""} onClick={() => postNative({ type: "open_project_task_instructions", workspace_id: editor.workspace_id })}>{t(language, "Task CLAUDE.md", "CLAUDE.md de tareas")}</button>
         </nav>
       )}
       <header className="document-header"><File size={16} /><div><strong>{editor.file_name}</strong><span>{editor.relative_path}</span></div><span className={`save-state is-${editor.save_state}`}>{saveStateLabel(editor.save_state, language)}</span><button type="button" className="workspace-button" onClick={() => postNative({ type: "save_active_file" })}><Save size={13} />{t(language, "Save", "Guardar")}</button><button type="button" className="workspace-icon-button" onClick={() => postNative({ type: "close_file_editor" })}><X size={15} /></button></header>
@@ -694,7 +712,7 @@ export function WorkspaceSurface({ event, sidebarWidth }: { event: WorkspaceSurf
       <img className="home-welcome-logo" src={document.getElementById("root")?.dataset.appLogo} alt="Blackholes" width={112} height={112} draggable={false} />
       <p>{data.description}</p>
       <ul className="home-welcome-shortcuts" aria-label={t(language, "Keyboard shortcuts", "Atajos de teclado")}>
-        <li><kbd>⌘O</kbd><span>{t(language, "Search projects, worktree groups, agents and terminals", "Buscar proyectos, grupos de worktrees, agentes y terminales")}</span></li>
+        <li><kbd>⌘O</kbd><span>{t(language, "Search projects, tasks, agents and terminals", "Buscar proyectos, tareas, agentes y terminales")}</span></li>
         <li><kbd>⌘P</kbd><span>{t(language, "Search files in the selected repository", "Buscar archivos del repositorio seleccionado")}</span></li>
       </ul>
     </div></div></main>;
@@ -702,6 +720,6 @@ export function WorkspaceSurface({ event, sidebarWidth }: { event: WorkspaceSurf
   if (event.surface === "settings") return <SettingsView data={event.data as SettingsData} sidebarWidth={sidebarWidth} />;
   if (event.surface === "project-settings") return <ProjectSettingsView data={event.data as ProjectSettingsData} />;
   if (event.surface === "task-details") return <TaskDetails key={(event.data as TaskDetailsData).id} data={event.data as TaskDetailsData} />;
-  if (event.surface === "project-overview") return <ProjectOverview data={event.data as ProjectOverviewData} />;
+  if (event.surface === "project-overview") return <ProjectOverview key={(event.data as ProjectOverviewData).id} data={event.data as ProjectOverviewData} />;
   return <WorkbenchView data={event.data as WorkbenchData} />;
 }

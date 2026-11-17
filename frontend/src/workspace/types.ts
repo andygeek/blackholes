@@ -1,9 +1,5 @@
 export interface AppModalState {
-  kind: "remove_project" | "close_terminal" | "remove_task" | "create_project" | "edit_project" | "create_task" | "add_repository" | "remove_repository";
-  icon?: string;
-  color_id?: string;
-  icon_options?: { value: string; label: string }[];
-  color_options?: { value: string; label: string; color: string }[];
+  kind: "remove_project" | "close_terminal" | "remove_task" | "create_project" | "create_task" | "add_repository" | "remove_repository";
   close_preview?: {
     terminals: { terminalId: string; label: string; state: string; live: boolean }[];
     changes: { path: string; changes: string }[];

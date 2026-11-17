@@ -2,7 +2,9 @@
 use crate::model::{SessionState, TerminalNoticeKind};
 use serde_json::{Value, json};
 
-/// Only lifecycle metadata crosses the app bridge; prompts and tool results stay in the CLI.
+/// Only lifecycle metadata, a bounded Stop excerpt for notifications and a count
+/// of background tasks cross the app bridge; prompts, full responses, commands
+/// and tool results stay in the CLI.
 pub(super) fn terminal_state(event: &str) -> Option<SessionState> {
     match event {
         "SessionStart" => Some(SessionState::Idle),
@@ -22,6 +24,19 @@ pub(super) fn notice_kind(event: &str) -> Option<TerminalNoticeKind> {
         }
         _ => None,
     }
+}
+
+/// Counts what Claude's Stop hook reports as still running in the background:
+/// shells, subagents, workflows and the like. Claude's own upkeep and artifact
+/// watchers are left out, since they are not work the user started.
+pub(super) fn background_tasks(tasks: &Value) -> usize {
+    tasks.as_array().map_or(0, |tasks| {
+        tasks.iter().filter(|task| {
+            let text = |name: &str| task.get(name).and_then(Value::as_str).unwrap_or_default();
+            matches!(text("status"), "running" | "pending" | "")
+                && !matches!(text("type"), "" | "memory save" | "memory import" | "dream" | "auto-mode scan" | "monitor")
+        }).count()
+    })
 }
 
 pub(super) fn upsert(groups: &mut Vec<Value>, marker: &str, command: &str) {
@@ -62,5 +77,25 @@ mod tests {
         let once = groups.clone();
         upsert(&mut groups, "blackholes-marker", "new blackholes-marker");
         assert_eq!(once, groups);
+    }
+
+    #[test]
+    fn counts_background_work_the_user_can_see() {
+        // First entry: a Stop payload captured from Claude Code 2.1.326.
+        let tasks = json!([
+            {"id": "b85lra38y", "type": "shell", "status": "running", "description": "Sleep 10 seconds then echo listo", "command": "sleep 10; echo listo"},
+            {"id": "a1", "type": "subagent", "status": "pending", "description": "Review the diff"},
+            {"id": "w1", "type": "workflow", "status": "running", "name": "review-changes"},
+            {"id": "t1", "type": "teammate", "status": "running"},
+            {"id": "s2", "type": "shell", "status": "completed"},
+            {"id": "m1", "type": "monitor", "status": "running", "description": "Artifact comments"},
+            {"id": "d1", "type": "dream", "status": "running"},
+            {"id": "x1", "type": "memory save", "status": "running"},
+            "not an object",
+        ]);
+        assert_eq!(background_tasks(&tasks), 4);
+        assert_eq!(background_tasks(&json!([])), 0);
+        assert_eq!(background_tasks(&json!("soon")), 0);
+        assert_eq!(background_tasks(&Value::Null), 0);
     }
 }

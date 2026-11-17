@@ -295,13 +295,6 @@ button {
 :root[data-theme="light"] .app-modal--task footer { background: #fff; }
 .app-modal--project { width: min(100%, 500px); }
 .app-modal--project #app-modal-description { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
-.edit-project-choice { display: grid; gap: 10px; font-size: 13px; font-weight: 500; }
-.edit-project-icon-trigger { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: inherit; font: inherit; cursor: pointer; }
-.edit-project-choice .note-icon-options { margin-bottom: 0; }
-.edit-project-choice .note-icon-options[hidden] { display: none; }
-.edit-project-colors { display: flex; flex-wrap: wrap; gap: 10px; padding: 3px; }
-.edit-project-colors button { width: 28px; height: 28px; border: 0; border-radius: 50%; cursor: pointer; }
-.edit-project-colors button[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 3px; }
 .create-project-form .project-modal-fields { gap: 14px; }
 .create-project-form .project-modal-fields[hidden] { display: none; }
 .create-project-form :is(.project-setup-options, .project-source-picker) { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }

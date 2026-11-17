@@ -1,7 +1,7 @@
 use anyhow::Result;
 use blackholes_rust::{
     assets::AppAssets,
-    paths::AppPaths,
+    paths::{AppPaths, INSTANCE_ENVIRONMENT},
     services::{
         claude::run_claude_session_hook, codex::run_codex_session_hook, database::Database,
         providers::terminate_provider_helpers,
@@ -40,6 +40,10 @@ fn main() -> Result<()> {
         .init();
 
     let paths = AppPaths::discover()?;
+    if let Some(instance) = &paths.instance {
+        // SAFETY: no other thread has started yet. Terminals inherit the variable.
+        unsafe { std::env::set_var(INSTANCE_ENVIRONMENT, instance) };
+    }
     let database = Database::open(&paths)?;
     let initial_theme = database.load_session().theme;
     let application = Application::new().with_assets(AppAssets);
@@ -54,7 +58,10 @@ fn main() -> Result<()> {
         }
     });
     application.run(move |cx| {
-        blackholes_rust::services::updater::initialize();
+        // An update would replace a separate instance with the released app.
+        if paths.instance.is_none() {
+            blackholes_rust::services::updater::initialize();
+        }
         if let Err(error) = cx.text_system().add_fonts(vec![Cow::Borrowed(
             include_bytes!("../assets/fonts/GeistMono-ExtraBold.ttf").as_slice(),
         )]) {

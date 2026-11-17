@@ -1298,7 +1298,7 @@ fn legacy_tool_definitions() -> Vec<Value> {
         write_tool(
             "update_project",
             "Update a project's display metadata without renaming its directory or repositories. Returns the updated project.",
-            json!({"type":"object","properties":{"projectId":{"type":"string"},"displayName":{"type":"string"},"icon":{"type":"string"},"color":{"type":"string","enum":["slate","coral","peach","amber","sage","mint","sky","lavender","rose"]}},"required":["projectId"]}),
+            json!({"type":"object","properties":{"projectId":{"type":"string"},"displayName":{"type":"string"},"icon":{"type":"string","maxLength":64,"description":"Named icon (layers, folder, code-2, square-terminal, rocket, database, globe, list-todo, git-branch), or emoji:<symbol>, e.g. emoji:🚀."},"color":{"type":"string","enum":["slate","coral","peach","amber","sage","mint","sky","lavender","rose"]}},"required":["projectId"]}),
         ),
         write_tool(
             "add_project_repository",
@@ -1673,7 +1673,7 @@ mod closure_tests {
         let paths = AppPaths {
             database: root.join("db.sqlite"), session: root.join("session.json"),
             task_workspaces: root.join("task-workspaces"), agent_profiles: root.join("profiles"),
-            default_projects: root.join("projects"), events_socket: root.join("events.sock"), data_dir: root.clone(),
+            default_projects: root.join("projects"), events_socket: root.join("events.sock"), data_dir: root.clone(), instance: None,
         };
         {
             // Disable legacy import before opening: never discover user data in tests.

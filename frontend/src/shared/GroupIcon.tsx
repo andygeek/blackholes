@@ -12,9 +12,12 @@ export const groupIcons = [
   { value: "git-branch", en: "Branch", es: "Rama", Icon: GitBranch },
 ] as const;
 
+/** Names that earlier versions saved for a project icon. */
+const earlierNames: Record<string, string> = { code: "code-2", terminal: "square-terminal", branch: "git-branch" };
+
 /** Icons are bundled artwork or escaped Unicode text, never user HTML. */
 export function GroupIcon({ value, size = 20 }: { value: string; size?: number }) {
   if (value.startsWith("emoji:")) return <span className="group-emoji" style={{ fontSize: size, lineHeight: 1 }} aria-hidden="true">{value.slice(6)}</span>;
-  const Icon = groupIcons.find(icon => icon.value === value)?.Icon || Layers3;
+  const Icon = groupIcons.find(icon => icon.value === (earlierNames[value] || value))?.Icon || Layers3;
   return <Icon size={size} aria-hidden="true" />;
 }

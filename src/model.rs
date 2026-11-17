@@ -95,6 +95,9 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
+    /// The agents a user can choose to work with, in the order they are listed.
+    pub const CHOICES: [Self; 3] = [Self::Claude, Self::Codex, Self::Antigravity];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Shell => "Terminal",
@@ -371,9 +374,14 @@ pub struct AppSession {
     pub projects_section_collapsed: bool,
     #[serde(default)]
     pub last_seen_release_version: Option<String>,
+    /// The agents this user works with: each gets its usage meter and a launch menu entry.
+    #[serde(default = "default_agents")]
+    pub agents: Vec<AgentKind>,
 }
 
 fn default_sidebar_agents_fraction() -> f32 { 0.4 }
+
+fn default_agents() -> Vec<AgentKind> { vec![AgentKind::Claude, AgentKind::Codex] }
 
 impl Default for AppSession {
     fn default() -> Self {
@@ -397,6 +405,7 @@ impl Default for AppSession {
             agents_section_collapsed: false,
             projects_section_collapsed: false,
             last_seen_release_version: None,
+            agents: default_agents(),
         }
     }
 }

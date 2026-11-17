@@ -1222,6 +1222,16 @@ impl InputState {
             return;
         }
 
+        // A single-line field has one logical line: triple click selects all,
+        // including text scrolled beyond its visible bounds.
+        if event.button == MouseButton::Left && event.click_count >= 3 && self.mode.is_single_line() {
+            self.selecting = false;
+            self.selected_word_range = None;
+            self.selection_reversed = false;
+            self.select_all(&SelectAll, window, cx);
+            return;
+        }
+
         // Double click to select word
         if event.button == MouseButton::Left && event.click_count == 2 {
             self.select_word(offset, window, cx);

@@ -589,6 +589,7 @@ fn task_record_and_session_result_are_saved_atomically_in_temporary_database() {
         default_projects: f.root.join("projects"),
         events_socket: f.root.join("events.sock"),
         data_dir: f.root.clone(),
+        instance: None,
     };
     // Prevent any fallback to a user's historical database/configuration.
     let connection = rusqlite::Connection::open(&paths.database).unwrap();

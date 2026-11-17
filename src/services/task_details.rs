@@ -97,7 +97,7 @@ pub fn links(task: &ProjectTask) -> Vec<WorktreeGroupLink> {
 }
 
 pub fn validate_links(values: Vec<WorktreeGroupLink>) -> Result<Vec<WorktreeGroupLink>> {
-    ensure!(values.len() <= 64, "A worktree group supports at most 64 links");
+    ensure!(values.len() <= 64, "A task supports at most 64 links");
     let mut links = Vec::<WorktreeGroupLink>::new();
     for value in values {
         let url = link(Some(value.url), "Link")?.context("Link URL cannot be empty")?;
@@ -149,12 +149,12 @@ impl TaskDetailsPatch {
         if let Some(expected) = &self.expected_revision {
             ensure!(
                 *expected == revision(task),
-                "Worktree group changed elsewhere. Reload the latest context before saving."
+                "Task changed elsewhere. Reload the latest context before saving."
             );
         }
         if let Some(title) = &self.title {
             task.title =
-                text(Some(title.clone()), 500, "Title")?.context("Worktree group title cannot be empty")?;
+                text(Some(title.clone()), 500, "Title")?.context("Task title cannot be empty")?;
         }
         if let Some(value) = &self.icon {
             task.icon = icon(value)?;
@@ -192,12 +192,12 @@ pub fn update(
     patch: &TaskDetailsPatch,
 ) -> Result<ProjectTask> {
     database.edit_task_metadata(task_id, |task| {
-        ensure!(task.workspace_id == workspace.id, "Worktree group project changed");
+        ensure!(task.workspace_id == workspace.id, "Task project changed");
         let previous = task.clone();
         patch.apply(task)?;
         if let Err(error) = service.repair_task_files(workspace, task) {
             let _ = service.repair_task_files(workspace, &previous);
-            bail!("Could not write worktree group context: {error:#}");
+            bail!("Could not write task context: {error:#}");
         }
         Ok(())
     })

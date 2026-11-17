@@ -392,6 +392,10 @@ fn insert_event(
 }
 
 fn legacy_database_path(paths: &AppPaths) -> Option<PathBuf> {
+    // A separate instance starts empty.
+    if paths.instance.is_some() {
+        return None;
+    }
     let mut candidates = Vec::new();
     if let Some(parent) = paths.data_dir.parent() {
         candidates.push(

@@ -150,7 +150,8 @@ The script performs these steps automatically:
 3. Runs `./scripts/build-release` and rejects generated changes to the source tree.
 4. Creates a fresh `.app` with its resources, licenses, and Sparkle framework.
 5. Signs nested executables and frameworks, then the app, using hardened runtime
-   and timestamps. The bundled Node executable has its own entitlements.
+   and timestamps. The bundled Node executable has its own entitlements; the app
+   is signed with microphone access for voice input in agents run in its terminals.
 6. Verifies signatures, uploads a temporary app ZIP to Apple, and waits for a result.
 7. Retrieves the notarization log, requires `Accepted`, and staples and validates
    the app's ticket.
@@ -190,6 +191,28 @@ machine details.
 
 If the build changed generated assets, review and commit them, record the new
 source commit, and package again. Do not bypass the clean-tree check.
+
+### Try the packaged app before releasing
+
+To test the app on the build machine before committing or notarizing, run the
+same script with `--local`:
+
+```sh
+node scripts/package-release.mjs --local
+```
+
+It needs the signing identity, the Sparkle public key, and the license
+acknowledgment, but no notarization profile. It accepts uncommitted changes,
+builds and signs the same bundle, and stops after verifying the signature. The
+output directory carries a `-local-` marker and holds only
+`staging/Blackholes.app`: no update ZIP, appcast, source archive, or checksums.
+The app is not notarized. It opens on the Mac that built it because it was
+never downloaded; do not publish or share it.
+
+Quit Blackholes before replacing the installed app, from a terminal outside
+Blackholes: agents running in its terminals stop with it. An installation with
+the same version as a later release is not offered that release as an update,
+so install the published DMG over it.
 
 ## Create and notarize a DMG
 
@@ -392,6 +415,7 @@ worktrees, and signing keys out of build cleanup.
 | `scripts/package-release.mjs` | Packaging, signing, app notarization, ZIP, appcast, source, and initial checksums |
 | `scripts/fetch-node`, `scripts/fetch-sparkle` | Pinned distributions and checksum verification |
 | `assets/node-entitlements.plist` | Entitlements for the bundled Node runtime |
+| `assets/app-entitlements.plist` | App entitlements: microphone access for terminal agents |
 | `native/updater.m`, `src/services/updater.rs`, `src/ui/app.rs` | Update integration and restart coordination |
 | `src/paths.rs` | Local application data paths |
 | `CONTRIBUTING.md`, `DCO` | Contribution and commit requirements |

@@ -9,11 +9,13 @@ Blackholes uses the agent CLIs installed on your computer: `codex`, `claude`,
 providers you use with their own tools; no provider CLI is included in the app.
 Missing providers do not prevent the app or other providers from working.
 Sign in through each provider's CLI. New terminal sessions inherit the computer's
-CLI account and profile environment; Blackholes has no separate account login or
-provider selector in Settings. Saved sessions retain their previous profile,
+CLI account and profile environment; Blackholes has no separate account login.
+Saved sessions retain their previous profile,
 including legacy isolated Blackholes profiles. Existing profile files are preserved.
-Claude and Codex plan limits are available in the bottom usage bar only for
-installed providers. Reports refresh on startup, every 10 minutes while the app
+**Settings → Agents** lists the agents you work with: Claude Code, Codex and
+Antigravity (`agy`). Claude Code and Codex are on by default. Each selected agent
+gets its entry in the `+` menus and, when its CLI is installed, its plan limits
+in the bottom usage bar. Reports refresh on startup, every 10 minutes while the app
 is running, and with the refresh button. Each query runs independently in the
 background with a time limit. Temporary failures retain the last report, marked
 with an asterisk, without a blocking dialog. Open its details to see the last
@@ -50,7 +52,7 @@ already-running sessions keep their current executable.
 
 Packaged apps retain a private Node.js engine for provider account usage queries.
 It is not added to your terminal PATH. These helpers read metadata through the
-installed Claude and Codex CLIs without submitting prompts. Blackholes does not
+installed Claude, Codex and Antigravity CLIs without submitting prompts. Blackholes does not
 bundle an agent SDK or run its own chat engine; conversation execution and history
 belong to the provider CLI in each terminal.
 
@@ -115,6 +117,16 @@ presence badges: launching or focusing a CLI alone does not start a work spinner
 Project and worktree group icons summarize pending notices; yellow takes priority
 when both kinds are present. Collapsed Agents shows a summary dot beside its title.
 
+Blue gears turning over the agent icon and a blue row mark a Claude Code session
+that left something running in the background when its turn ended: a shell
+command, a subagent or a workflow. The response is still announced as usual;
+blue only says that work goes on behind it, whether Claude is waiting for a
+build or left a server up. The mark is refreshed each time Claude finishes
+responding, and a pending notice or the work spinner takes its place on the
+icon. Project and worktree group icons show a blue dot when one of their
+sessions has background work and nothing else is pending. Codex hooks do not
+report background work, so Codex sessions are never marked.
+
 Click the arrow or title of **Agents** or **Projects** to collapse that sidebar
 section independently. The other section uses the freed space. These choices
 persist across restarts, while project and worktree group expansion remains unchanged.
@@ -134,6 +146,10 @@ Receiving a notice alone never changes the selected workspace. Bare development
 executables retain in-app notices and the attention sound, but do not send macOS
 notifications under Terminal's identity.
 
+Voice input in Claude Code and Codex records through Blackholes, so macOS asks
+once for microphone access for the packaged app. Without that permission the
+agent hears nothing.
+
 The Agents section lists initialized agent terminals with live processes and
 sessions with unacknowledged notifications, including after a restart. Other
 dormant restored or exited terminals remain in Projects; activating one there
@@ -152,17 +168,18 @@ requires confirmation. It stops the terminal and removes it from session
 restoration, without deleting repository files or provider-saved conversations.
 Agent close confirmations use the shared modal with the sidebar visible beneath its
 dimmed, blurred backdrop, including when a native terminal is active.
-Editing a project's visible name, icon and color uses that same shared modal,
-preserving the sidebar and current workspace beneath the backdrop. Appearance
-changes are saved only on confirmation; repository and folder names stay unchanged.
+A project's visible name, icon and color are edited on its page: **Edit project**
+opens it with the name focused. Type the name, click the large icon to choose an
+emoji or a bundled icon, and pick a color. Each change is saved at once;
+repository and folder names stay unchanged.
 
 `Cmd+O` searches projects, worktree groups and terminal sessions (including plain shells). Search by agent/provider name, terminal title, project, worktree group or
 repository context. Terminal results open the existing session rather than creating a duplicate; project results open the session overview and worktree group results open worktree group details.
 The palette accounts for the sidebar when centering and adapts to narrow windows.
 Its search input supports `Cmd+A`, `Cmd+C`, `Cmd+X`, and `Cmd+V` through the native clipboard.
 
-Use the `+` on a worktree group or repository to open **Blank Terminal**, **Claude**, or
-**Codex**. A worktree group’s `…` menu contains **Edit group** and **Close group**. The double
+Use the `+` on a worktree group or repository to open **Blank Terminal** or one of
+the agents selected in **Settings → Agents**. A worktree group’s `…` menu contains **Edit group** and **Close group**. The double
 up-chevron above the project tree collapses all project and worktree group accordions.
 
 ## Workspaces and worktree group details
@@ -290,8 +307,10 @@ modified. Existing provider conversation files remain managed by their CLIs.
 ## Computer account usage bar
 
 The bottom bar stays visible across terminals, project/group details, files, and
-settings. It shows Claude and Codex plan usage from the computer's local CLI
-accounts, honoring their normal profile environment. It does not query legacy
+settings. It shows the plan usage of the agents selected in **Settings → Agents**
+(Claude Code, Codex and Antigravity) from the computer's local CLI
+accounts, honoring their normal profile environment. Agents that are not
+selected are neither shown nor queried. It does not query legacy
 isolated Blackholes profiles used by previously saved sessions.
 
 Installed providers load on app startup and refresh every 10 minutes. The refresh
@@ -300,17 +319,19 @@ running. A provider's queries never overlap. These metadata queries do not submi
 prompts or generate model responses; reset countdowns update locally each minute.
 
 The bottom bar prefers the general **5-hour** allowance, then the **weekly**
-allowance, then another available limit. Its label always identifies the actual
+allowance, then another available limit. Antigravity reports a limit per group
+of models instead of one for the account, so the bar shows the group closest to
+its cap. Its label always identifies the actual
 window; a weekly allowance is never labeled as five hours. Invalid or missing
 percentages are skipped when selecting a limit.
-Click Claude or Codex to open a panel above the bar with the available limits,
+Click an agent to open a panel above the bar with the available limits,
 reset countdowns, exact local reset times, and the last update. Unreported
 windows are omitted, and the panel opens at a size based on its visible limits.
 Escape, the close button, clicking outside, or moving/resizing the main window
 dismisses it.
 The refresh button sits immediately after the visible providers. Its arrow icon
-stays visible and rotates while either query is running; repeated clicks are
-disabled until both finish.
+stays visible and rotates while a query is running; repeated clicks are
+disabled until all of them finish.
 
 A passed reset deadline asks for a refresh; it does not assume usage is zero.
 Missing CLIs are hidden. Installed CLIs with authentication failures or accounts

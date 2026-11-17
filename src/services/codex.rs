@@ -24,6 +24,8 @@ struct CodexHookInput {
     session_id: String,
     #[serde(default)]
     hook_event_name: String,
+    #[serde(default)]
+    last_assistant_message: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -36,6 +38,8 @@ pub struct CodexSessionBridgePayload {
     pub state: Option<SessionState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice_kind: Option<TerminalNoticeKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_preview: Option<String>,
 }
 
 pub fn install_codex_session_hooks() -> Result<()> {
@@ -60,6 +64,12 @@ pub fn install_codex_session_hooks() -> Result<()> {
 pub fn run_codex_session_hook() -> Result<()> {
     // Hooks must never interfere with Codex. Missing Blackholes context, a
     // closed app, or malformed input simply means there is nothing to record.
+    // Return a valid neutral object for every event, including when forwarding
+    // is unavailable. Older Codex builds reject an empty successful stdout.
+    let mut output = std::io::stdout().lock();
+    let _ = output.write_all(b"{}\n");
+    let _ = output.flush();
+    drop(output);
     let _ = forward_codex_session();
     Ok(())
 }
@@ -84,6 +94,7 @@ fn forward_codex_session() -> Result<()> {
         profile: active_codex_profile(),
         state: super::agent_hooks::terminal_state(&hook.hook_event_name),
         notice_kind: super::agent_hooks::notice_kind(&hook.hook_event_name),
+        response_preview: super::agent_notice::response_preview(&hook.hook_event_name, hook.last_assistant_message.as_deref()),
     };
     let message = format!(
         "{CODEX_SESSION_EVENT_PREFIX}{}",

@@ -12,7 +12,7 @@ const emojiChoices = [
   "❤️", "💜", "💙", "✅", "🚧", "🛠️", "💎", "🍎",
 ];
 
-export function GroupIconPicker({ value, language, onChange }: { value: string; language: "en" | "es"; onChange(value: string): void }) {
+export function GroupIconPicker({ value, language, color, onChange }: { value: string; language: "en" | "es"; color?: string; onChange(value: string): void }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"emoji" | "icons">("emoji");
   const [custom, setCustom] = useState("");
@@ -36,7 +36,7 @@ export function GroupIconPicker({ value, language, onChange }: { value: string; 
   return <div className="group-icon-picker" ref={container} onKeyDown={event => {
     if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); }
   }}>
-    <button ref={trigger} className="group-page-icon" type="button" title={t("Change icon", "Cambiar icono")} aria-label={t("Change group icon", "Cambiar icono del grupo")} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}><GroupIcon value={value} size={52} /></button>
+    <button ref={trigger} className="group-page-icon" type="button" style={{ color }} title={t("Change icon", "Cambiar icono")} aria-label={t("Change icon", "Cambiar icono")} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}><GroupIcon value={value} size={52} /></button>
     {open && <div className="group-icon-popover" role="dialog" aria-label={t("Choose an icon", "Elegir un icono")}>
       <div className="group-icon-tabs" role="group" aria-label={t("Icon style", "Estilo de icono")}>
         <button type="button" aria-pressed={tab === "emoji"} onClick={() => setTab("emoji")}>Emoji</button>

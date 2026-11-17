@@ -3,7 +3,6 @@ import { postNative } from "../shared/native";
 import type { AppModalState } from "./types";
 import { CreateTaskForm } from "./CreateTaskForm";
 import { CreateProjectForm } from "./CreateProjectForm";
-import { EditProjectForm } from "./EditProjectForm";
 
 /** One themed, focus-contained surface for confirmations and project forms. */
 export function AppModal({ modal, language, onDismiss }: {
@@ -13,9 +12,8 @@ export function AppModal({ modal, language, onDismiss }: {
   const [pending, setPending] = useState(false);
   const [offset, setOffset] = useState(0);
   const isProject = modal.kind === "create_project" || modal.kind === "add_repository";
-  const isEditProject = modal.kind === "edit_project";
   const isTask = modal.kind === "create_task";
-  const isForm = isProject || isTask || isEditProject;
+  const isForm = isProject || isTask;
   useEffect(() => { if (modal.feedback) setPending(false); }, [modal.feedback]);
 
   useEffect(() => {
@@ -52,7 +50,7 @@ export function AppModal({ modal, language, onDismiss }: {
   return <div className="app-modal-backdrop" onMouseDown={event => {
     if (event.target === event.currentTarget) dismiss();
   }}>
-    <section ref={section} className={`app-modal${isForm ? " app-modal--form" : ""}${isTask ? " app-modal--task" : ""}${isProject || isEditProject ? " app-modal--project" : ""}`}
+    <section ref={section} className={`app-modal${isForm ? " app-modal--form" : ""}${isTask ? " app-modal--task" : ""}${isProject ? " app-modal--project" : ""}`}
       role={isForm ? "dialog" : "alertdialog"} aria-modal="true" aria-busy={pending} tabIndex={-1}
       aria-labelledby="app-modal-title" aria-describedby="app-modal-description"
       style={{ transform: `translateX(${offset}px)` }}
@@ -68,8 +66,8 @@ export function AppModal({ modal, language, onDismiss }: {
           else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
         }
       }}>
-      <h2 id="app-modal-title">{isTask ? (language === "es" ? "Crear grupo de worktrees" : "Create worktree group") : modal.title}</h2>
-      {isEditProject ? <EditProjectForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isTask ? <CreateTaskForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isProject ? <CreateProjectForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : <>
+      <h2 id="app-modal-title">{isTask ? (language === "es" ? "Crear tarea" : "Create task") : modal.title}</h2>
+      {isTask ? <CreateTaskForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isProject ? <CreateProjectForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : <>
         <strong>{modal.name}</strong>
         {modal.context && <span className="app-modal__context">{modal.context}</span>}
         <p id="app-modal-description">{modal.description}</p>

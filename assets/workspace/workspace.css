@@ -328,11 +328,6 @@
 .save-state.is-error { color: #ff8295; }
 .save-state.is-saving { color: #d1b46f; }
 
-.note-icon-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
-.note-icon-options button { display: grid; place-items: center; height: 46px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: transparent; cursor: pointer; }
-.note-icon-options button:hover { background: color-mix(in srgb, var(--surface-raised) 90%, var(--text)); }
-.note-icon-options button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--surface-raised) 88%, var(--accent)); }
-.note-icon-options button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .workbench-page { display: flex; overflow: hidden; }
 .workbench-explorer { position: relative; display: flex; min-width: 220px; max-width: 520px; flex: none; flex-direction: column; border-right: 1px solid #252a33; background: #111318; }
 .explorer-resize-handle { position: absolute; z-index: 3; top: 0; right: -3px; bottom: 0; width: 6px; cursor: col-resize; }
@@ -759,6 +754,7 @@
 .preferences-search input::placeholder { color: var(--pref-muted); }
 .preferences-search:focus-within { border-color: var(--pref-focus); }
 .preferences-nav-label { display: block; margin: 22px 10px 7px; color: var(--pref-muted); font-size: 11px; }
+.preferences-sidebar nav > div + div > button:first-child { margin-top: 2px; }
 .preferences-sidebar nav button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--pref-text); font: inherit; text-align: left; cursor: pointer; }
 .preferences-sidebar nav button:hover { background: var(--pref-hover); }
 .preferences-sidebar nav button.is-selected { background: var(--pref-selected); }
@@ -856,6 +852,9 @@
 .task-details-page .group-title-input { font-size: 34px; line-height: 1.25; letter-spacing: -.7px; font-weight: 700; margin-bottom: 18px; min-height: 43px; }
 .task-details-page .group-document-input { font-size: 15px; line-height: 1.85; min-height: 100px; }
 .task-details-page .group-title-input:focus, .task-details-page .group-document-input:focus { outline: none; }
+.project-colors { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px; }
+.task-details-page .project-colors button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; }
+.task-details-page .project-colors button[aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: 2px; }
 .group-title-input::placeholder, .group-document-input::placeholder { color: var(--detail-muted); opacity: .6; }
 .group-link-editor { border-top: 1px solid var(--detail-border); padding-top: 20px; margin-top: 24px; }
 .group-link-editor > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }

@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { JsonRpcProcess } from "./json-rpc.mjs";
 import { installedAgentBinary, providerEnvironment } from "./environment.mjs";
@@ -94,8 +95,35 @@ async function codexUsage() {
     rate_limits_available: windows.some(w => w.utilization !== null), windows };
 }
 
+async function antigravityUsage() {
+  // Print mode answers /usage itself: no agent turn, no quota spent, no conversation kept.
+  const child = spawn(installedAgentBinary("agy"), ["--print", "/usage", "--output-format", "json"], {
+    cwd: tmpdir(), env: environment, stdio: ["ignore", "pipe", "ignore"], signal: abortController.signal,
+  });
+  dispose = () => child.kill();
+  child.on("error", () => {});
+  child.stdout.setEncoding("utf8");
+  let output = "";
+  for await (const chunk of child.stdout) {
+    output += chunk;
+    if (output.length > 262144) throw new Error("Usage query unavailable");
+  }
+  const report = JSON.parse(output);
+  if (report.status !== "SUCCESS" || report.command?.name !== "usage") throw new Error("Usage query unavailable");
+  // Each group of models shares a five-hour and a weekly limit, reported as what is left.
+  const minutes = { "5h": 300, weekly: 10080 };
+  const windows = (report.command.data?.groups ?? []).flatMap(group => (group.buckets ?? []).map(bucket => ({
+    label: String(group.name ?? "").replace(/\s+models$/i, ""),
+    limit_id: bucket.id ?? null,
+    minutes: minutes[bucket.window] ?? null,
+    utilization: typeof bucket.remaining_fraction === "number" ? percentage((1 - bucket.remaining_fraction) * 100) : null,
+    resets_at: bucket.reset_time ?? null,
+  })));
+  return { subscription_type: null, rate_limits_available: windows.some(w => w.utilization !== null), windows };
+}
+
 try {
-  const load = { claude: claudeUsage, codex: codexUsage }[request.provider];
+  const load = { claude: claudeUsage, codex: codexUsage, antigravity: antigravityUsage }[request.provider];
   // Other runtimes do not currently expose a supported plan-limit query.
   const usage = load ? await Promise.race([
     load(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Usage timeout")), 12000); }),

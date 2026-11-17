@@ -1,3 +1,4 @@
+use crate::model::AgentKind;
 use anyhow::{Context as _, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -74,6 +75,7 @@ pub enum AgentProvider {
     Codex,
     Gemini,
     OpenCode,
+    Antigravity,
 }
 
 impl AgentProvider {
@@ -83,6 +85,7 @@ impl AgentProvider {
             Self::Codex => "codex",
             Self::Gemini => "gemini",
             Self::OpenCode => "opencode",
+            Self::Antigravity => "antigravity",
         }
     }
 
@@ -92,9 +95,20 @@ impl AgentProvider {
             Self::Codex => "Codex",
             Self::Gemini => "Gemini",
             Self::OpenCode => "OpenCode",
+            Self::Antigravity => "Antigravity",
         }
     }
 
+    /// The terminal agent that signs in to this account.
+    pub fn agent(self) -> AgentKind {
+        match self {
+            Self::Claude => AgentKind::Claude,
+            Self::Codex => AgentKind::Codex,
+            Self::Gemini => AgentKind::Gemini,
+            Self::OpenCode => AgentKind::OpenCode,
+            Self::Antigravity => AgentKind::Antigravity,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -156,7 +170,10 @@ pub fn refresh_agent_plan_usage(provider: AgentProvider) -> ProviderUsageResult 
     let cwd = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"));
-    let Ok(agent) = super::installed_agents::InstalledAgent::resolve(provider.id(), &cwd) else {
+    let Some((binary, _)) = provider.agent().command() else {
+        return ProviderUsageResult::NotInstalled;
+    };
+    let Ok(agent) = super::installed_agents::InstalledAgent::resolve(binary, &cwd) else {
         return ProviderUsageResult::NotInstalled;
     };
     match query_plan_usage(provider, &agent) {

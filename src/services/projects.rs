@@ -431,12 +431,16 @@ impl ProjectService {
         if display_name.is_empty() {
             bail!("Project name cannot be empty");
         }
-        workspace.display_name = Some(display_name.into());
-        workspace.icon = if icon.trim().is_empty() {
+        let icon = if icon.trim().is_empty() {
             DEFAULT_PROJECT_ICON.into()
-        } else {
+        } else if icon == workspace.icon {
+            // Keep an icon saved by an earlier version as it is.
             icon
+        } else {
+            super::task_details::icon(&icon)?
         };
+        workspace.display_name = Some(display_name.into());
+        workspace.icon = icon;
         workspace.color = color;
         workspace.updated_at = Utc::now();
         Ok(())
@@ -871,4 +875,28 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_project_icon_is_a_bundled_icon_or_an_emoji() {
+        let mut project = new_workspace("api".into(), None, PathBuf::from("/tmp/api"), WorkspaceLayout::Empty, vec![]);
+        let update = |project: &mut Workspace, icon: &str| {
+            ProjectService::update_presentation(project, "API".into(), icon.into(), WorkspaceColor::Sky)
+        };
+        update(&mut project, "emoji:🚀").unwrap();
+        assert_eq!((project.label(), project.icon.as_str(), project.color), ("API", "emoji:🚀", WorkspaceColor::Sky));
+        update(&mut project, "rocket").unwrap();
+        assert!(update(&mut project, "<svg/>").is_err());
+        assert_eq!(project.icon, "rocket");
+        // An icon saved by an earlier version stays when another field changes.
+        project.icon = "terminal".into();
+        update(&mut project, "terminal").unwrap();
+        assert_eq!(project.icon, "terminal");
+        update(&mut project, " ").unwrap();
+        assert_eq!(project.icon, DEFAULT_PROJECT_ICON);
+    }
 }

@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use gpui::{
     AnyElement, AnyWindowHandle, App, Bounds, ClickEvent, Context, FocusHandle, Pixels, Render,
     Rgba, SharedString, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, canvas, div, point, prelude::*, px, relative, rgb, size,
+    WindowOptions, canvas, div, img, point, prelude::*, px, relative, rgb, size,
 };
 use gpui_component::{
     Disableable as _, Icon, Sizable as _,
@@ -68,6 +68,17 @@ fn is_account_window(window: &PlanUsageWindow) -> bool {
     }
 }
 
+fn window_rank(window: &PlanUsageWindow) -> (bool, u8) {
+    (
+        !is_account_window(window),
+        match window.minutes {
+            Some(300) => 0,
+            Some(10080) => 1,
+            _ => 2,
+        },
+    )
+}
+
 // Prefer the five-hour account limit, then weekly, then any other reported
 // limit. Keep its actual duration/label: primary does not necessarily mean 5h.
 fn available_windows(state: &ComputerPlanUsage) -> Vec<&PlanUsageWindow> {
@@ -76,17 +87,19 @@ fn available_windows(state: &ComputerPlanUsage) -> Vec<&PlanUsageWindow> {
         .iter()
         .filter(|window| utilization(window).is_some())
         .collect::<Vec<_>>();
-    windows.sort_by_key(|window| {
-        (
-            !is_account_window(window),
-            match window.minutes {
-                Some(300) => 0,
-                Some(10080) => 1,
-                _ => 2,
-            },
-        )
-    });
+    windows.sort_by_key(|window| window_rank(window));
     windows
+}
+
+/// The limit summarized in the bar. An account with one limit per group of
+/// models, such as Antigravity, shows the group closest to its cap.
+fn primary_window(state: &ComputerPlanUsage) -> Option<&PlanUsageWindow> {
+    let windows = available_windows(state);
+    let rank = window_rank(windows.first()?);
+    windows
+        .into_iter()
+        .take_while(|window| window_rank(window) == rank)
+        .reduce(|busiest, window| if utilization(window) > utilization(busiest) { window } else { busiest })
 }
 
 fn window_label(window: &PlanUsageWindow, language: Language, compact: bool) -> String {
@@ -135,18 +148,28 @@ fn reset_label(window: &PlanUsageWindow, now: DateTime<Utc>, language: Language)
     })
 }
 
-fn provider_style(provider: AgentProvider, theme: AppTheme) -> (AppIcon, Rgba) {
+fn provider_accent(provider: AgentProvider, theme: AppTheme) -> Rgba {
     match provider {
-        AgentProvider::Claude => (AppIcon::ClaudeCode, rgb(0xd97757)),
-        _ => (
-            AppIcon::Codex,
-            if theme == AppTheme::Dark {
-                rgb(0xd5dcd9)
-            } else {
-                rgb(0x37433c)
-            },
-        ),
+        AgentProvider::Claude => rgb(0xd97757),
+        AgentProvider::Antigravity => rgb(0x3b82f6),
+        _ if theme == AppTheme::Dark => rgb(0xd5dcd9),
+        _ => rgb(0x37433c),
     }
+}
+
+fn provider_icon(provider: AgentProvider, theme: AppTheme, size: f32) -> AnyElement {
+    let icon = match provider {
+        // Its logo is full-color artwork, not a tinted glyph.
+        AgentProvider::Antigravity => {
+            return img("icons/antigravity.png").size(px(size)).flex_none().into_any_element();
+        }
+        AgentProvider::Claude => AppIcon::ClaudeCode,
+        _ => AppIcon::Codex,
+    };
+    Icon::new(icon)
+        .with_size(px(size))
+        .text_color(provider_accent(provider, theme))
+        .into_any_element()
 }
 
 fn muted(theme: AppTheme) -> Rgba {
@@ -188,9 +211,8 @@ fn provider_item(
     theme: AppTheme,
     on_open: OpenDetails,
 ) -> AnyElement {
-    let (icon, accent) = provider_style(state.provider, theme);
-    let windows = available_windows(state);
-    let window = windows.first().copied();
+    let accent = provider_accent(state.provider, theme);
+    let window = primary_window(state);
     let value = window.and_then(utilization);
     let summary = if let Some(value) = value {
         let reset = window
@@ -230,7 +252,7 @@ fn provider_item(
                 h_flex()
                     .whitespace_nowrap()
                     .gap_2()
-                    .child(Icon::new(icon).with_size(px(14.)).text_color(accent))
+                    .child(provider_icon(provider, theme, 14.))
                     .child(provider.display_name())
                     .child(div().w(px(48.)).child(meter(value, theme, accent, 4.)))
                     .child(summary),
@@ -331,7 +353,6 @@ impl Render for UsagePopover {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let language = self.language;
         let theme = self.theme;
-        let (icon, accent) = provider_style(self.state.provider, theme);
         let border = if theme == AppTheme::Dark {
             rgb(0x30343c)
         } else {
@@ -424,7 +445,7 @@ impl Render for UsagePopover {
                     .px_4()
                     .pt_3()
                     .gap_2()
-                    .child(Icon::new(icon).with_size(px(16.)).text_color(accent))
+                    .child(provider_icon(self.state.provider, theme, 16.))
                     .child(
                         div()
                             .flex_1()
@@ -562,7 +583,7 @@ pub(super) fn resident_memory_bytes() -> Option<u64> {
 }
 
 pub(super) fn render(
-    states: &[ComputerPlanUsage; 2],
+    states: &[&ComputerPlanUsage],
     language: Language,
     theme: AppTheme,
     terminal_count: usize,
@@ -600,6 +621,7 @@ pub(super) fn render(
                 .children(
                     states
                         .iter()
+                        .copied()
                         .filter(|state| state.installed)
                         .map(|state| provider_item(state, language, theme, on_open.clone())),
                 )
@@ -614,8 +636,8 @@ pub(super) fn render(
                         .flex_none()
                         .tooltip(tr(
                             language,
-                            "Refresh Codex and Claude computer account usage",
-                            "Actualizar el uso de las cuentas locales de Codex y Claude",
+                            "Refresh the usage of your computer accounts",
+                            "Actualizar el uso de las cuentas de esta computadora",
                         ))
                         .on_click(on_refresh),
                 )),
@@ -635,4 +657,48 @@ pub(super) fn render(
                 .child(terminal_count.to_string()),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(label: &str, limit_id: &str, minutes: u64, utilization: f64) -> PlanUsageWindow {
+        PlanUsageWindow {
+            label: label.into(),
+            limit_id: Some(limit_id.into()),
+            minutes: Some(minutes),
+            utilization: Some(utilization),
+            resets_at: None,
+        }
+    }
+
+    fn primary(provider: AgentProvider, windows: Vec<PlanUsageWindow>) -> Option<(String, u64)> {
+        let mut state = ComputerPlanUsage::new(provider);
+        state.usage = Some(ProviderPlanUsage { windows, ..Default::default() });
+        primary_window(&state).map(|window| (window.limit_id.clone().unwrap_or_default(), window.minutes.unwrap_or_default()))
+    }
+
+    #[test]
+    fn the_bar_shows_the_account_limit_or_the_busiest_group() {
+        let is = |limit_id: &str, minutes| Some((limit_id.to_string(), minutes));
+        // One account-wide limit: its five-hour window, whatever a model-specific limit reports.
+        assert_eq!(
+            primary(AgentProvider::Codex, vec![
+                window("spark", "codex_spark", 300, 90.),
+                window("", "codex", 10080, 40.),
+                window("", "codex", 300, 10.),
+            ]),
+            is("codex", 300),
+        );
+        // A limit per group of models: the five-hour window closest to its cap.
+        let groups = |gemini: f64, others: f64| vec![
+            window("Gemini", "gemini-weekly", 10080, 95.),
+            window("Gemini", "gemini-5h", 300, gemini),
+            window("Claude and GPT", "3p-5h", 300, others),
+        ];
+        assert_eq!(primary(AgentProvider::Antigravity, groups(20., 60.)), is("3p-5h", 300));
+        assert_eq!(primary(AgentProvider::Antigravity, groups(0., 0.)), is("gemini-5h", 300));
+        assert_eq!(primary(AgentProvider::Antigravity, vec![]), None);
+    }
 }

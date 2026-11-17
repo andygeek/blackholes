@@ -18,6 +18,11 @@ pub fn apply_native_theme(theme: AppTheme, window: Option<&mut gpui::Window>, cx
         AppTheme::Dark => gpui_component::ThemeMode::Dark,
     };
     gpui_component::Theme::change(mode, window, cx);
+    // Keep selected input text legible against our custom native surfaces.
+    gpui_component::Theme::global_mut(cx).colors.selection = match theme {
+        AppTheme::Dark => gpui::rgba(0x709cef70).into(),
+        AppTheme::Light => gpui::rgba(0x2c6bd44d).into(),
+    };
     apply_macos_appearance(theme);
 }
 

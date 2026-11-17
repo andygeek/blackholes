@@ -1,26 +1,17 @@
-import { StrictMode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { StrictMode, createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GroupIcon } from "../shared/GroupIcon";
 import {
   ChevronRight,
-  CircleDot,
-  Code2,
-  Database,
   FilePenLine,
-  Folder,
-  Gem,
   GitBranch,
-  Globe2,
-  Layers3,
   ListTodo,
   MoreHorizontal,
   NotebookPen,
   ChevronsUp,
   Plus,
   RefreshCw,
-  Rocket,
   Settings,
-  Sparkles,
   SquareTerminal,
   Trash2,
   X,
@@ -40,6 +31,8 @@ interface Copy {
   project: string;
   settings: string;
   working: string;
+  backgroundTask: string;
+  backgroundTasks: string;
   needsAttention: string;
   responseReady: string;
   terminal: string;
@@ -78,6 +71,7 @@ interface TerminalItem {
   attention_kind: NoticeKind | null;
   attention_rank: number | null;
   working: boolean;
+  background_tasks?: number;
 }
 
 interface RepositoryItem {
@@ -127,8 +121,18 @@ interface NavigationState {
   projects_section_collapsed: boolean;
   terminal_agents: TerminalItem[];
   agent_order?: string[];
+  agents?: LaunchAgent[];
   projects: ProjectItem[];
 }
+
+interface LaunchAgent {
+  id: string;
+  label: string;
+}
+
+/** The agents the user works with, chosen in Settings: each has an entry in the launch menus. */
+const defaultLaunchAgents: LaunchAgent[] = [{ id: "claude", label: "Claude" }, { id: "codex", label: "Codex" }];
+const LaunchAgents = createContext(defaultLaunchAgents);
 
 interface MenuItem {
   label: string;
@@ -148,18 +152,20 @@ const fallbackCopy: Copy = {
   project: "Proyecto",
   settings: "Configuración",
   working: "Trabajando",
+  backgroundTask: "1 tarea en segundo plano",
+  backgroundTasks: "{count} tareas en segundo plano",
   needsAttention: "Necesita tu atención",
   responseReady: "Respuesta lista",
   terminal: "Terminal",
   blankTerminal: "Terminal vacía",
-  tasks: "Grupos de worktrees",
-  task: "Grupo de worktrees",
+  tasks: "Tareas",
+  task: "Tarea",
   new: "Nuevo",
   toggle: "Expandir o contraer",
   options: "Opciones",
   closeTerminal: "Cerrar terminal",
   newTerminal: "Nueva terminal",
-  newTask: "Agregar grupo de worktrees",
+  newTask: "Agregar tarea",
   refreshProject: "Buscar repositorios nuevos",
   addToProject: "Agregar al proyecto",
   addRepository: "Agregar repositorio…",
@@ -167,28 +173,9 @@ const fallbackCopy: Copy = {
   editProject: "Editar proyecto",
   projectSettings: "Configuración del proyecto",
   removeProject: "Eliminar proyecto",
-  editTask: "Editar grupo de worktrees",
-  removeTask: "Cerrar grupo",
+  editTask: "Editar tarea",
+  removeTask: "Cerrar tarea",
 };
-
-const iconFor = (value?: string): LucideIcon => ({
-  folder: Folder,
-  layers: Layers3,
-  globe: Globe2,
-  rocket: Rocket,
-  code: Code2,
-  "code-2": Code2,
-  "list-todo": ListTodo,
-  database: Database,
-  terminal: SquareTerminal,
-  "square-terminal": SquareTerminal,
-  branch: GitBranch,
-  "git-branch": GitBranch,
-  claude: Sparkles,
-  codex: CircleDot,
-  gemini: Gem,
-  shell: SquareTerminal,
-}[value || ""] || Layers3);
 
 const terminalNotice = (terminal: TerminalItem): NoticeKind | null => terminal.needs_attention
   ? terminal.attention_kind ?? "input-required" : null;
@@ -196,8 +183,15 @@ const terminalNotice = (terminal: TerminalItem): NoticeKind | null => terminal.n
 const noticeLabel = (notice: NoticeKind | null, copy: Copy) => notice === "completed"
   ? copy.responseReady : notice === "input-required" ? copy.needsAttention : "";
 
-const terminalStatus = (terminal: TerminalItem, copy: Copy) => noticeLabel(terminalNotice(terminal), copy)
-  || (terminal.working ? copy.working : "");
+// Tasks the agent left running behind its last turn: marked in blue, never announced.
+const runsInBackground = (terminal: TerminalItem) => terminal.agent !== "shell" && (terminal.background_tasks ?? 0) > 0;
+const anyInBackground = (terminals: TerminalItem[]) => terminals.some(runsInBackground);
+
+const terminalStatus = (terminal: TerminalItem, copy: Copy) => [
+  noticeLabel(terminalNotice(terminal), copy) || (terminal.working ? copy.working : ""),
+  !runsInBackground(terminal) ? "" : terminal.background_tasks === 1
+    ? copy.backgroundTask : copy.backgroundTasks.replace("{count}", String(terminal.background_tasks)),
+].filter(Boolean).join(" · ");
 
 function pendingNotice(terminals: TerminalItem[]): NoticeKind | null {
   let result: NoticeKind | null = null;
@@ -218,13 +212,13 @@ function TerminalAgentRow({ terminal, copy, onOpen }: { terminal: TerminalItem; 
     ? terminal.provider_label
     : `${terminal.provider_label} · ${terminal.label}`;
   return (
-    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}${terminal.needs_attention ? " needs-attention" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}`}>
+    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}${terminal.needs_attention ? " needs-attention" : runsInBackground(terminal) ? " has-background" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}`}>
       <button type="button" className="agent-open"
         aria-current={terminal.selected ? "true" : undefined}
         aria-label={`${terminal.context} · ${preview}${status ? ` · ${status}` : ""}`}
         title={`${terminal.context}\n${preview}${status ? `\n${status}` : ""}`}
         onClick={() => onOpen(terminal)}>
-        <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working} large>
+        <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working} background={runsInBackground(terminal)} large>
           <TerminalProviderIcon provider={terminal.agent} />
         </NavigationStatusIcon>
         <span className="agent-copy">
@@ -302,7 +296,7 @@ function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; 
       title={`${terminal.label}${status ? ` · ${status}` : ""}`}
       onClick={() => postNative({ type: "focus_terminal", terminal_id: terminal.id })}
     >
-      <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working}>
+      <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working} background={runsInBackground(terminal)}>
         <TerminalProviderIcon provider={terminal.agent} />
       </NavigationStatusIcon>
       <span className="tree-label">
@@ -325,9 +319,9 @@ function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; 
   );
 }
 
-function terminalLaunchItems(workspaceId: string, taskId: string | null | undefined, repositoryId: string | null, copy: Copy): MenuItem[] {
+function terminalLaunchItems(workspaceId: string, taskId: string | null | undefined, repositoryId: string | null, copy: Copy, agents: LaunchAgent[]): MenuItem[] {
   return [
-    ["shell", copy.blankTerminal], ["claude", "Claude"], ["codex", "Codex"],
+    ["shell", copy.blankTerminal], ...agents.map(agent => [agent.id, agent.label]),
   ].map(([agent, label]) => ({
     label, icon: SquareTerminal, provider: agent === "shell" ? undefined : agent,
     command: { type: "new_terminal", workspace_id: workspaceId, task_id: taskId || null, repository_id: repositoryId, agent },
@@ -342,6 +336,7 @@ function RepositoryRow({ repository, workspaceId, taskId, copy, indentation, ope
   indentation: number;
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
+  const agents = useContext(LaunchAgents);
   return (
     <>
       <button
@@ -363,7 +358,7 @@ function RepositoryRow({ repository, workspaceId, taskId, copy, indentation, ope
           <RowAction
             label={copy.newTerminal}
             icon={Plus}
-            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), terminalLaunchItems(workspaceId, taskId, repository.id, copy))}
+            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), terminalLaunchItems(workspaceId, taskId, repository.id, copy, agents))}
           />
           {!taskId && <RowAction label={copy.options} icon={MoreHorizontal}
             onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), [
@@ -384,7 +379,9 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
   copy: Copy;
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
-  const notice = pendingNotice(taskTerminals(task));
+  const agents = useContext(LaunchAgents);
+  const terminals = taskTerminals(task);
+  const notice = pendingNotice(terminals);
   const status = noticeLabel(notice, copy);
   return (
     <>
@@ -398,14 +395,14 @@ function TaskRows({ task, workspaceId, copy, openMenu }: {
         onClick={() => postNative({ type: "select_task", workspace_id: workspaceId, task_id: task.id })}
       >
         <Chevron expanded={task.expanded} copy={copy} command={{ type: "toggle_task", task_id: task.id }} />
-        <NavigationStatusIcon notice={notice}><GroupIcon value={task.icon} size={13} /></NavigationStatusIcon>
+        <NavigationStatusIcon notice={notice} backgroundInside={anyInBackground(terminals)}><GroupIcon value={task.icon} size={13} /></NavigationStatusIcon>
         <span className="tree-label">{task.title}</span>
         {task.unseen && <span className="new-badge">{copy.new}</span>}
         <span className="row-actions">
           <RowAction
             label={copy.newTerminal}
             icon={Plus}
-            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), terminalLaunchItems(workspaceId, task.id, null, copy))}
+            onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), terminalLaunchItems(workspaceId, task.id, null, copy, agents))}
           />
           <RowAction
             label={copy.options}
@@ -445,12 +442,13 @@ function ProjectBlock({ project, copy, openMenu }: {
   copy: Copy;
   openMenu(anchor: DOMRect, items: MenuItem[]): void;
 }) {
-  const Icon = iconFor(project.icon);
-  const notice = pendingNotice([
+  const agents = useContext(LaunchAgents);
+  const terminals = [
     ...project.terminals,
     ...project.repositories.flatMap(repository => repository.terminals),
     ...project.tasks.flatMap(taskTerminals),
-  ]);
+  ];
+  const notice = pendingNotice(terminals);
   const status = noticeLabel(notice, copy);
   return (
     <section className="project-block">
@@ -464,7 +462,7 @@ function ProjectBlock({ project, copy, openMenu }: {
         onClick={() => postNative({ type: "select_project", workspace_id: project.id })}
       >
         <Chevron expanded={project.expanded} copy={copy} command={{ type: "toggle_project", workspace_id: project.id }} />
-        <NavigationStatusIcon notice={notice}><Icon size={13} /></NavigationStatusIcon>
+        <NavigationStatusIcon notice={notice} backgroundInside={anyInBackground(terminals)}><GroupIcon value={project.icon || "layers"} size={13} /></NavigationStatusIcon>
         <span className="tree-label">{project.label}</span>
         <span className="row-actions">
           <RowAction
@@ -476,7 +474,7 @@ function ProjectBlock({ project, copy, openMenu }: {
             label={copy.addToProject}
             icon={Plus}
             onClick={(event) => openMenu(event.currentTarget.getBoundingClientRect(), [
-              ...terminalLaunchItems(project.id, null, null, copy),
+              ...terminalLaunchItems(project.id, null, null, copy, agents),
               { label: copy.addRepository, icon: Plus, command: { type: "add_project_repository", workspace_id: project.id } },
               { label: copy.newTask, icon: ListTodo, command: { type: "new_task", workspace_id: project.id } },
             ])}
@@ -642,6 +640,7 @@ function NavigationApp() {
   const manualAgentOrder = [...(state?.terminal_agents || [])].sort((a, b) =>
     (agentRanks.get(`terminal:${a.id}`) ?? Number.MAX_SAFE_INTEGER) - (agentRanks.get(`terminal:${b.id}`) ?? Number.MAX_SAFE_INTEGER));
   const agentsNotice = agentsCollapsed ? pendingNotice(state?.terminal_agents || []) : null;
+  const agentsInBackground = agentsCollapsed && !agentsNotice && anyInBackground(state?.terminal_agents || []);
   const agentItems = [...manualAgentOrder].sort((a, b) =>
     Number(b.needs_attention) - Number(a.needs_attention)
       || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER)
@@ -673,7 +672,7 @@ function NavigationApp() {
               aria-controls="sidebar-agents-content" onClick={() => setSectionCollapsed("agents", !agentsCollapsed)}>
               <ChevronRight size={14} aria-hidden="true" />
               <span>{agentsLabel}</span>
-              {agentsNotice && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${agentsNotice === "input-required" ? " is-awaiting-input" : ""}`} />}
+              {(agentsNotice || agentsInBackground) && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${agentsNotice === "input-required" ? " is-awaiting-input" : agentsInBackground ? " has-background" : ""}`} />}
             </button>
           </header>
           <SidebarScrollArea id="sidebar-agents-content" hidden={agentsCollapsed}
@@ -702,7 +701,7 @@ function NavigationApp() {
               <span>{copy.projects}</span>
             </button>
             <span className="section-header__actions">
-              <button className="icon-button" type="button" aria-label={state?.language === "en" ? "Collapse all projects and worktree groups" : "Contraer todos los proyectos y grupos de worktrees"} title={state?.language === "en" ? "Collapse all projects and worktree groups" : "Contraer todos los proyectos y grupos de worktrees"} onClick={() => postNative({ type: "collapse_all" })}>
+              <button className="icon-button" type="button" aria-label={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} title={state?.language === "en" ? "Collapse all projects and tasks" : "Contraer todos los proyectos y tareas"} onClick={() => postNative({ type: "collapse_all" })}>
                 <ChevronsUp size={15} />
               </button>
               <button className="icon-button" type="button"
@@ -719,6 +718,7 @@ function NavigationApp() {
           <SidebarScrollArea id="sidebar-projects-content" hidden={projectsCollapsed}
             label={state?.language === "en" ? "Scroll projects" : "Desplazar proyectos"}>
           <nav className="projects" aria-label={copy.projects}>
+            <LaunchAgents.Provider value={state?.agents ?? defaultLaunchAgents}>
             {(state?.projects || []).map((project) => (
               <ProjectBlock
                 key={project.id}
@@ -727,6 +727,7 @@ function NavigationApp() {
                 openMenu={openMenu}
               />
             ))}
+            </LaunchAgents.Provider>
           </nav>
           </SidebarScrollArea>
         </section>

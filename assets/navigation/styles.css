@@ -19,6 +19,10 @@
   --waiting: #e2bd65;
   --waiting-background: #312b1b;
   --waiting-hover: #403722;
+  --running: #5aa2ff;
+  --running-background: #17273f;
+  --running-hover: #1f3555;
+  --row-neutral: var(--workspace-slate);
 }
 
 :root[data-theme="light"] {
@@ -29,6 +33,10 @@
   --waiting: #9b6d13;
   --waiting-background: #fff4d9;
   --waiting-hover: #f9e8be;
+  --running: #2f6fd6;
+  --running-background: #e4eefc;
+  --running-hover: #d3e3fa;
+  --row-neutral: var(--foreground);
 }
 
 * {
@@ -400,15 +408,26 @@ button:focus-visible {
 :root[data-theme="light"] .terminal-agent-card.needs-attention.is-selected,
 .terminal-agent-card.needs-attention.is-selected { background: var(--notice-hover); }
 .terminal-agent-card.needs-attention .agent-name { color: var(--notice-color); }
-.navigation-status-icon { position: relative; overflow: visible; --notice-color: var(--active); --status-dot-size: 6px; --status-spinner-size: 14px; }
+/* Something keeps running behind the agent: informative, so the name keeps its color. */
+.terminal-agent-card.has-background { background: var(--running-background); }
+.terminal-agent-card.has-background:hover,
+:root[data-theme="light"] .terminal-agent-card.has-background.is-selected,
+.terminal-agent-card.has-background.is-selected { background: var(--running-hover); }
+.navigation-status-icon { position: relative; overflow: visible; --notice-color: var(--active); --status-dot-size: 6px; --status-spinner-size: 14px; --status-gears-size: 16px; }
 .navigation-status-icon.is-awaiting-input, .agents-summary-dot.is-awaiting-input { --notice-color: var(--waiting); }
+.navigation-status-icon.has-background-inside, .agents-summary-dot.has-background { --notice-color: var(--running); }
 .navigation-status-artwork { display: grid; width: 100%; height: 100%; place-items: center; transition: opacity 120ms ease; }
 .navigation-status-icon.has-notice .navigation-status-artwork { opacity: .4; }
-.navigation-status-icon.is-working .navigation-status-artwork { opacity: .25; }
-.terminal-agent-avatar.navigation-status-icon { --status-dot-size: 8px; --status-spinner-size: 18px; }
+.navigation-status-icon.is-working .navigation-status-artwork,
+.navigation-status-icon.has-background .navigation-status-artwork { opacity: .25; }
+.terminal-agent-avatar.navigation-status-icon { --status-dot-size: 8px; --status-spinner-size: 18px; --status-gears-size: 22px; }
 .navigation-status-dot { position: absolute; top: -1px; right: -1px; display: block; width: var(--status-dot-size, 6px); height: var(--status-dot-size, 6px); flex: none; border-radius: 50%; background: var(--notice-color, var(--active)); box-shadow: 0 0 0 1px var(--background), 0 0 6px color-mix(in srgb, var(--notice-color, var(--active)) 70%, transparent); pointer-events: none; }
 .section-toggle .agents-summary-dot { position: static; margin-left: 3px; overflow: visible; }
 .navigation-status-spinner { position: absolute; top: 50%; left: 50%; width: var(--status-spinner-size); height: var(--status-spinner-size); margin-top: calc(var(--status-spinner-size) / -2); margin-left: calc(var(--status-spinner-size) / -2); color: #fff; filter: drop-shadow(0 0 1px #0008) drop-shadow(0 0 2px #fff6); pointer-events: none; }
+/* Gears take the spinner's place while something runs behind an idle session. */
+.navigation-status-gears { position: absolute; top: 50%; left: 50%; width: var(--status-gears-size); height: var(--status-gears-size); margin-top: calc(var(--status-gears-size) / -2); margin-left: calc(var(--status-gears-size) / -2); color: var(--running); pointer-events: none; }
+/* White disappears on the light sidebar: draw it in the text color with a light halo instead. */
+:root[data-theme="light"] .navigation-status-spinner { color: var(--foreground); filter: drop-shadow(0 0 1px #fff); }
 @media (prefers-reduced-motion: reduce) { .navigation-status-artwork { transition: none; } }
 :root[data-theme="light"] .terminal-provider--codex { color: #202622; }
 

@@ -13,6 +13,16 @@
   --app-accent: #8197d5;
   --app-focus: #708acb;
   --app-danger: #e57883;
+  /* Project and group colors. Each theme has its own tones: these pastels only read on a dark surface. */
+  --workspace-slate: #9aa3ae;
+  --workspace-coral: #d99084;
+  --workspace-peach: #dda57e;
+  --workspace-amber: #d1b46f;
+  --workspace-sage: #96b39a;
+  --workspace-mint: #8db9ab;
+  --workspace-sky: #8db3cf;
+  --workspace-lavender: #a597c8;
+  --workspace-rose: #c796aa;
 }
 
 :root[data-theme="light"] {
@@ -29,4 +39,13 @@
   --app-accent: #5574ba;
   --app-focus: #5574ba;
   --app-danger: #c7475a;
+  --workspace-slate: #5f6b7a;
+  --workspace-coral: #c0432e;
+  --workspace-peach: #ab5a14;
+  --workspace-amber: #8a6712;
+  --workspace-sage: #3f7a4a;
+  --workspace-mint: #2f7a66;
+  --workspace-sky: #2b72a8;
+  --workspace-lavender: #7257c4;
+  --workspace-rose: #b8437a;
 }

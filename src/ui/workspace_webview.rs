@@ -24,6 +24,10 @@ pub enum WorkspaceCommand {
     SetTheme {
         theme: AppTheme,
     },
+    SetAgentEnabled {
+        agent: crate::model::AgentKind,
+        enabled: bool,
+    },
     CloseSettings,
     CloseReleaseNotes,
     SetSidebarWidth {
@@ -49,12 +53,15 @@ pub enum WorkspaceCommand {
         #[serde(default)]
         mode: crate::services::projects::ProjectRepositoryMode,
     },
-    SubmitEditProject {
-        request_id: uuid::Uuid,
+    /// The project page edits one field at a time; the others keep their saved value.
+    UpdateProject {
         workspace_id: uuid::Uuid,
-        name: String,
-        icon: String,
-        color: WorkspaceColor,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+        #[serde(default)]
+        color: Option<WorkspaceColor>,
     },
     ConfirmRemoveProject {
         workspace_id: uuid::Uuid,

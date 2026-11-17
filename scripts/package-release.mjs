@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MPL-2.0
 // Produces signed/notarized GitHub Release assets; never uploads or publishes.
+// With --local it stops at a signed app for testing on this Mac.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, cpSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, writeFileSync } from "node:fs";
@@ -16,13 +17,17 @@ const requireEnv = (name) => {
   return value;
 };
 if (process.platform !== "darwin") throw new Error("Release packaging requires macOS.");
+// A local build accepts uncommitted changes and is never notarized, so it
+// produces no release assets: only the signed app to try before releasing.
+const local = process.argv.slice(2).includes("--local");
+if (process.argv.length > (local ? 3 : 2)) throw new Error("Usage: node scripts/package-release.mjs [--local]");
 const identity = requireEnv("BLACKHOLES_SIGNING_IDENTITY");
 if (!identity.startsWith("Developer ID Application:")) throw new Error("Use a Developer ID Application signing identity.");
-const notaryProfile = requireEnv("BLACKHOLES_NOTARY_PROFILE");
+const notaryProfile = local ? "" : requireEnv("BLACKHOLES_NOTARY_PROFILE");
 const publicKey = requireEnv("BLACKHOLES_SPARKLE_PUBLIC_KEY");
 if (!/^[A-Za-z0-9+/]{43}=$/.test(publicKey) || Buffer.from(publicKey, "base64").length !== 32) throw new Error("Expected a Sparkle Ed25519 PUBLIC key, not a private key.");
 if (process.env.BLACKHOLES_ACK_RUNTIME_LICENSES !== "1") throw new Error("Review the Node redistribution terms, then set BLACKHOLES_ACK_RUNTIME_LICENSES=1.");
-if (capture("git", ["status", "--porcelain"])) throw new Error("Commit the release source before packaging so its source archive matches the app.");
+if (!local && capture("git", ["status", "--porcelain"])) throw new Error("Commit the release source before packaging so its source archive matches the app.");
 
 const version = readFileSync(join(root, "Cargo.toml"), "utf8").match(/^version = "([0-9]+\.[0-9]+\.[0-9]+)"$/m)?.[1];
 if (!version) throw new Error("Expected a stable major.minor.patch package version.");
@@ -35,11 +40,11 @@ const signingPublicKey = capture(join(sparkle, "bin/generate_keys"), ["--account
 if (signingPublicKey !== publicKey) throw new Error("Public key does not match the Blackholes update-signing key in this Mac's Keychain.");
 run("./scripts/build-release", []);
 // Generated assets must be committed before release; never silently publish a different source snapshot.
-if (capture("git", ["status", "--porcelain"])) throw new Error("Build changed generated files. Review, commit, and rerun packaging.");
+if (!local && capture("git", ["status", "--porcelain"])) throw new Error("Build changed generated files. Review, commit, and rerun packaging.");
 
 const artifactRoot = join(root, "target", "release-artifacts");
 mkdirSync(artifactRoot, { recursive: true });
-const output = mkdtempSync(join(artifactRoot, `v${version}-${arch}-`));
+const output = mkdtempSync(join(artifactRoot, `v${version}-${arch}-${local ? "local-" : ""}`));
 const staging = join(output, "staging");
 const app = join(staging, "Blackholes.app");
 const contents = join(app, "Contents");
@@ -73,6 +78,9 @@ const plist = {
   CFBundleIdentifier: "dev.blackholes.rust", CFBundlePackageType: "APPL", CFBundleIconFile: "app-icon",
   CFBundleVersion: version, CFBundleShortVersionString: version, LSMinimumSystemVersion: "13.0",
   NSHighResolutionCapable: true, NSPrincipalClass: "NSApplication",
+  // Agents running in Blackholes terminals (Claude Code and Codex voice input)
+  // ask for the microphone through the app. Without this key macOS denies them.
+  NSMicrophoneUsageDescription: "Blackholes needs the microphone so voice input in coding agents running in its terminals, such as Claude Code and Codex, can hear you.",
   SUFeedURL: `${repo}/releases/latest/download/appcast-${arch}.xml`, SUPublicEDKey: publicKey,
   SUEnableAutomaticChecks: true, SUScheduledCheckInterval: 14400,
   SUAutomaticallyUpdate: false, SUAllowsAutomaticUpdates: false,
@@ -80,8 +88,13 @@ const plist = {
 };
 const escapeXML = (s) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 writeFileSync(join(contents, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n${Object.entries(plist).map(([key,value]) => `<key>${key}</key>${typeof value === "boolean" ? `<${value}/>` : typeof value === "number" ? `<integer>${value}</integer>` : `<string>${escapeXML(value)}</string>`}`).join("\n")}\n</dict></plist>\n`);
+mkdirSync(join(resources, "es.lproj"), { recursive: true });
+writeFileSync(join(resources, "es.lproj/InfoPlist.strings"),
+  '"NSMicrophoneUsageDescription" = "Blackholes necesita el micrófono para que la entrada por voz de los agentes que corren en sus terminales, como Claude Code y Codex, pueda escucharte.";\n');
 const sourceCommit = capture("git", ["rev-parse", "HEAD"]);
-writeFileSync(join(resources, "SOURCE.txt"), `Corresponding source for Blackholes ${version}:\n${repo}/archive/${sourceCommit}.tar.gz\nThird-party package sources and licenses are identified by the included lockfiles and notices.\n`);
+writeFileSync(join(resources, "SOURCE.txt"), local
+  ? `Local test build of Blackholes ${version}, not for distribution.\nBuilt from commit ${sourceCommit}${capture("git", ["status", "--porcelain"]) ? " with uncommitted changes" : ""}.\n`
+  : `Corresponding source for Blackholes ${version}:\n${repo}/archive/${sourceCommit}.tar.gz\nThird-party package sources and licenses are identified by the included lockfiles and notices.\n`);
 
 // Sign inside out. Preserve upstream entitlements for helpers; never use --deep to sign.
 const sign = (path, preserve = false) => run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp", "--options", "runtime",
@@ -101,8 +114,14 @@ const visit = (dir) => {
   }
 };
 visit(contents);
-sign(app);
+// The app entitlements carry microphone access for agents started in its terminals.
+run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp", "--options", "runtime",
+  "--entitlements", join(root, "assets/app-entitlements.plist"), app]);
 run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
+if (local) {
+  console.log(`Local test build, signed but not notarized: ${app}\nQuit Blackholes before replacing the installed app. Do not publish this build.`);
+  process.exit(0);
+}
 const submission = join(staging, "notarization.zip");
 run("/usr/bin/ditto", ["-c", "-k", "--keepParent", app, submission]);
 const result = JSON.parse(capture("xcrun", ["notarytool", "submit", submission, "--keychain-profile", notaryProfile, "--wait", "--output-format", "json"]));

@@ -60,7 +60,7 @@ impl BlackholesApp {
             .collect::<Vec<_>>();
         self.closing_task_ids
             .extend(request.task_ids.iter().copied());
-        self.busy = Some(self.tr("Closing worktree groups…", "Cerrando grupos de worktrees…").into());
+        self.busy = Some(self.tr("Closing tasks…", "Cerrando tareas…").into());
         let paths = self.paths.clone();
         let background = cx.background_executor().spawn(async move {
             let service = TaskService::new(&paths);

@@ -1,6 +1,6 @@
 [package]
 name = "blackholes-rust"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2024"
 authors = ["Andy Eulogio Sulluchuco"]
 description = "A native, GPU-accelerated workspace for orchestrating coding agents."
@@ -42,7 +42,7 @@ notify-rust = "4.18"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAppearance", "NSApplication", "NSImage", "NSPasteboard", "NSResponder", "NSMenu", "NSMenuItem", "NSEvent"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSString"] }
 
 [profile.release]
 opt-level = 3
