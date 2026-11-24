@@ -2218,3 +2218,7 @@ button {
 :root[data-theme="light"] .app-modal__cancel:hover { background: #e1e6ed; }
 :root[data-theme="light"] .app-modal__confirm { background: #a53c4d; color: #ffffff; }
 :root[data-theme="light"] .app-modal__confirm:hover { background: #b84758; }
+
+.app-modal p.app-modal__hint { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.app-modal__note { display: block; margin-top: 12px; color: var(--muted); font-size: 12px; }
+.app-modal__note textarea { display: block; margin-top: 6px; resize: none; }

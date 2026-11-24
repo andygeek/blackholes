@@ -1,6 +1,6 @@
 //! Shared, patchable task metadata for the desktop and MCP.
 use super::{database::Database, tasks::TaskService};
-use crate::model::{ProjectTask, Workspace, WorkspaceColor, WorktreeGroupLink, WorktreeGroupLinkKind};
+use crate::model::{ProjectTask, TaskDecision, Workspace, WorkspaceColor, WorktreeGroupLink, WorktreeGroupLinkKind};
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use serde::{Deserialize, Deserializer};
@@ -9,6 +9,8 @@ use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
 pub const DETAILS_FILE_NAME: &str = ".blackholes-task-details.md";
+pub const MAX_DECISIONS: usize = 200;
+pub const MAX_DECISION_LENGTH: usize = 2000;
 
 fn nullable<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
 where
@@ -203,6 +205,50 @@ pub fn update(
     })
 }
 
+/// Records a decision on a live task. Decisions are kept as written; they are not
+/// part of the description revision, so adding one never conflicts with a draft.
+pub fn add_decision(
+    database: &Database,
+    workspace: &Workspace,
+    service: &TaskService,
+    task_id: Uuid,
+    text_value: &str,
+    url: Option<String>,
+) -> Result<(ProjectTask, TaskDecision)> {
+    let decision_text = text(Some(text_value.to_string()), MAX_DECISION_LENGTH, "Decision")?
+        .context("Decision text cannot be empty")?;
+    let url = link(url, "Decision link")?;
+    let decision = TaskDecision { id: Uuid::new_v4(), text: decision_text, url, created_at: Utc::now() };
+    let added = decision.clone();
+    let task = database.edit_task_metadata(task_id, |task| {
+        ensure!(task.workspace_id == workspace.id, "Task project changed");
+        ensure!(task.decisions.len() < MAX_DECISIONS, "A task keeps at most {MAX_DECISIONS} decisions");
+        task.decisions.push(added.clone());
+        task.updated_at = Utc::now();
+        service.repair_task_files(workspace, task).context("Could not write task context")?;
+        Ok(())
+    })?;
+    Ok((task, decision))
+}
+
+pub fn remove_decision(
+    database: &Database,
+    workspace: &Workspace,
+    service: &TaskService,
+    task_id: Uuid,
+    decision_id: Uuid,
+) -> Result<ProjectTask> {
+    database.edit_task_metadata(task_id, |task| {
+        ensure!(task.workspace_id == workspace.id, "Task project changed");
+        let before = task.decisions.len();
+        task.decisions.retain(|decision| decision.id != decision_id);
+        ensure!(task.decisions.len() < before, "That decision is no longer in this task");
+        task.updated_at = Utc::now();
+        service.repair_task_files(workspace, task).context("Could not write task context")?;
+        Ok(())
+    })
+}
+
 pub fn markdown(task: &ProjectTask) -> String {
     let mut content = format!(
         "# {}\n\nWorktree Group ID: {}\n\n",
@@ -224,7 +270,16 @@ pub fn markdown(task: &ProjectTask) -> String {
             content.push('\n');
         }
     }
-    content.push_str("This file is generated. Use MCP get_worktree_group / update_worktree_group to maintain the current description and links. Start with a short summary paragraph. Rewrite stale context after meaningful changes and before finishing; preserve requirements, constraints and unresolved work. Never append progress logs, dated entries or a history of actions.\n");
+    if !task.decisions.is_empty() {
+        content.push_str("## Decisions\n\n");
+        for decision in &task.decisions {
+            content.push_str(&format!("- {}: {}{}\n", decision.created_at.format("%Y-%m-%d"),
+                decision.text.replace(['\r', '\n'], " "),
+                decision.url.as_deref().map(|url| format!(" ({url})")).unwrap_or_default()));
+        }
+        content.push('\n');
+    }
+    content.push_str("This file is generated. Use MCP get_worktree_group / update_worktree_group to maintain the current description and links. Start with a short summary paragraph. Rewrite stale context after meaningful changes and before finishing; preserve requirements, constraints and unresolved work. Never append progress logs, dated entries or a history of actions. Record lasting decisions with MCP add_worktree_group_decision instead of the description.\n");
     content
 }
 
@@ -242,6 +297,7 @@ mod tests {
             icon: "layers".into(), color: WorkspaceColor::Slate, sort_order: 0,
             worktree_root_path: std::env::temp_dir().join(format!("blackholes-uncreated-{}", Uuid::new_v4())),
             repositories: vec![], sessions: vec![], created_at: now, updated_at: now,
+            decisions: vec![],
         }
     }
 

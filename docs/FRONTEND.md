@@ -25,6 +25,26 @@ does not change the expanded project/task IDs or stop terminal sessions.
 The draggable separator saves `sidebar_agents_fraction` through
 `set_sidebar_agents_fraction`. Navigation puts pending notices first by recency,
 then working agents, then idle agents; manual reordering stays within a state.
+Right-clicking an agent card pins or unpins it. Pinned sessions are stored in
+`AppSession.pinned_terminal_ids`, listed first in pin order and reorderable among
+themselves, and stay listed after they go idle or exit; clicking a stopped one
+resumes it through the usual restore path. Closing the agent removes its pin.
+The same menu renames a session: `rename_terminal` opens the `rename_terminal`
+app modal and `submit_rename_terminal` stores the name in
+`TerminalDescriptor.custom_label` and `label`. While a custom name is set,
+terminal titles no longer replace the label; an empty name clears it.
+An agent card shows the session name in bold (the label without a leading
+provider name) and its project/task and `repository_label` below. A label that
+only names the provider or the task moves that place line up instead; the
+provider icon is the only provider indication on the card.
+Sections group cards below the ones without a section. Each section header folds
+(`set_agent_section_collapsed`), shows its count and a notice dot while folded,
+and its menu renames, moves or deletes it. The card menu moves a session to a
+section (`set_terminal_section`) or into a new one (`new_agent_section`), and the
+Agents header creates empty sections. Each section is its own sortable list;
+`reorder_agents` and `reorder_pinned` merge a section's order into the global
+orders without moving other sections. Sessions in a section stay listed while
+stopped. The rename modal also edits the session's note, shown in the tooltip.
 Shared chrome colors are embedded from `assets/theme.css` in each WebView.
 
 The GPUI title bar shows the installed version, a release-notes icon, and the update action outside all

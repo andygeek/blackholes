@@ -33,6 +33,40 @@ pub enum NavigationCommand {
     ReorderAgents {
         ids: Vec<String>,
     },
+    SetTerminalPinned {
+        terminal_id: Uuid,
+        pinned: bool,
+    },
+    ReorderPinned {
+        ids: Vec<Uuid>,
+    },
+    RenameTerminal {
+        terminal_id: Uuid,
+    },
+    /// Opens the name modal for a new section; the session, if given, moves into it.
+    NewAgentSection {
+        #[serde(default)]
+        terminal_id: Option<Uuid>,
+    },
+    RenameAgentSection {
+        section_id: Uuid,
+    },
+    DeleteAgentSection {
+        section_id: Uuid,
+    },
+    MoveAgentSection {
+        section_id: Uuid,
+        offset: i32,
+    },
+    SetAgentSectionCollapsed {
+        section_id: Uuid,
+        collapsed: bool,
+    },
+    SetTerminalSection {
+        terminal_id: Uuid,
+        #[serde(default)]
+        section_id: Option<Uuid>,
+    },
     SetSidebarSectionCollapsed {
         section: SidebarSection,
         collapsed: bool,

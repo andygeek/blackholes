@@ -1,6 +1,8 @@
 mod agent_hooks;
 pub mod agent_notice;
 pub mod agent_commands;
+pub mod agent_activity;
+pub mod agent_sections;
 pub mod claude;
 pub mod codex;
 pub mod database;

@@ -13,7 +13,8 @@ export function AppModal({ modal, language, onDismiss }: {
   const [offset, setOffset] = useState(0);
   const isProject = modal.kind === "create_project" || modal.kind === "add_repository";
   const isTask = modal.kind === "create_task";
-  const isForm = isProject || isTask;
+  const isRename = modal.kind === "rename_terminal" || modal.kind === "agent_section";
+  const isForm = isProject || isTask || isRename;
   useEffect(() => { if (modal.feedback) setPending(false); }, [modal.feedback]);
 
   useEffect(() => {
@@ -50,7 +51,7 @@ export function AppModal({ modal, language, onDismiss }: {
   return <div className="app-modal-backdrop" onMouseDown={event => {
     if (event.target === event.currentTarget) dismiss();
   }}>
-    <section ref={section} className={`app-modal${isForm ? " app-modal--form" : ""}${isTask ? " app-modal--task" : ""}${isProject ? " app-modal--project" : ""}`}
+    <section ref={section} className={`app-modal${isForm && !isRename ? " app-modal--form" : ""}${isTask ? " app-modal--task" : ""}${isProject ? " app-modal--project" : ""}`}
       role={isForm ? "dialog" : "alertdialog"} aria-modal="true" aria-busy={pending} tabIndex={-1}
       aria-labelledby="app-modal-title" aria-describedby="app-modal-description"
       style={{ transform: `translateX(${offset}px)` }}
@@ -67,7 +68,10 @@ export function AppModal({ modal, language, onDismiss }: {
         }
       }}>
       <h2 id="app-modal-title">{isTask ? (language === "es" ? "Crear tarea" : "Create task") : modal.title}</h2>
-      {isTask ? <CreateTaskForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isProject ? <CreateProjectForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : <>
+      {isTask ? <CreateTaskForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isProject ? <CreateProjectForm modal={modal} language={language} onDismiss={dismiss} onBusyChange={setPending} /> : isRename ? <NameForm modal={modal} pending={pending} onDismiss={dismiss} onSubmit={(name, note) => {
+        setPending(true);
+        postNative({ type: "submit_name_modal", request_id: modal.request_id, name, note });
+      }} /> : <>
         <strong>{modal.name}</strong>
         {modal.context && <span className="app-modal__context">{modal.context}</span>}
         <p id="app-modal-description">{modal.description}</p>
@@ -102,4 +106,42 @@ export function AppModal({ modal, language, onDismiss }: {
       </>}
     </section>
   </div>;
+}
+
+/** Names a session (with an optional note) or a section; the name starts selected so typing replaces it. */
+function NameForm({ modal, pending, onDismiss, onSubmit }: {
+  modal: AppModalState; pending: boolean; onDismiss: () => void; onSubmit: (name: string, note: string | null) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState(modal.value || "");
+  const [note, setNote] = useState(modal.note ?? "");
+  const hasNote = modal.note !== undefined && modal.note !== null;
+  // A section needs a name; a session's empty name returns it to the agent's title.
+  const blocked = modal.kind === "agent_section" && !name.trim();
+  useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
+  return <>
+    {modal.name && <strong>{modal.name}</strong>}
+    {modal.context && <span className="app-modal__context">{modal.context}</span>}
+    <form className="app-modal__name-form" onSubmit={event => {
+      event.preventDefault();
+      if (!pending && !blocked) onSubmit(name, hasNote ? note : null);
+    }}>
+      <input ref={input} type="text" value={name} maxLength={modal.value_max || 72} disabled={pending} data-initial-focus
+        aria-label={modal.title} aria-describedby="app-modal-description" spellCheck={false} autoComplete="off"
+        onChange={event => setName(event.target.value)} />
+      {hasNote && <label className="app-modal__note">{modal.note_label}
+        <textarea value={note} rows={2} maxLength={modal.note_max || 280} disabled={pending} placeholder={modal.note_placeholder}
+          onChange={event => setNote(event.target.value)}
+          onKeyDown={event => {
+            // Enter saves, as in the name field; Shift+Enter is not needed for one line.
+            if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+          }} />
+      </label>}
+      <p id="app-modal-description" className="app-modal__hint">{modal.description}</p>
+      <footer>
+        <button type="button" className="app-modal__cancel" disabled={pending} onClick={onDismiss}>{modal.cancel_label}</button>
+        <button type="submit" className="app-modal__primary" disabled={pending || blocked}>{modal.confirm_label}</button>
+      </footer>
+    </form>
+  </>;
 }

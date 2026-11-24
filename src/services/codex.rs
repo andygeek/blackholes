@@ -104,7 +104,8 @@ fn forward_codex_session() -> Result<()> {
     Ok(())
 }
 
-fn codex_homes() -> Vec<PathBuf> {
+/// Codex homes on this computer: default, work and `CODEX_HOME`.
+pub fn codex_homes() -> Vec<PathBuf> {
     let Some(user_home) = env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };

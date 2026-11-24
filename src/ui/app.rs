@@ -18,6 +18,7 @@ use crate::{
     },
     paths::AppPaths,
     services::{
+        agent_sections,
         claude::{ClaudeSessionBridgePayload, install_claude_session_hooks},
         codex::{CodexSessionBridgePayload, install_codex_session_hooks},
         database::Database,
@@ -555,6 +556,31 @@ enum AgentRemovalTarget {
     Terminal(Uuid),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NameModal {
+    /// Name and note of an agent session.
+    Session(Uuid),
+    /// Creates a section (`section_id: None`), optionally moving a session into it, or renames one.
+    Section { section_id: Option<Uuid>, terminal_id: Option<Uuid> },
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OrganizeAgentSessionsPayload {
+    request: agent_sections::OrganizeRequest,
+    #[serde(default)]
+    caller_terminal_id: Option<Uuid>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentSessionsPayload {
+    #[serde(default)]
+    include_stopped: bool,
+    #[serde(default)]
+    caller_terminal_id: Option<Uuid>,
+}
+
 pub struct BlackholesApp {
     update_state: crate::services::updater::UpdateState,
     external_integrations: crate::services::external_integrations::IntegrationStatus,
@@ -573,6 +599,8 @@ pub struct BlackholesApp {
     task_removal_preview: Option<crate::services::tasks::closure::ClosePreview>,
     closing_task_ids: HashSet<Uuid>,
     agent_removal_confirmation: Option<AgentRemovalTarget>,
+    /// Open name modal and the request ID its submission must carry.
+    name_modal: Option<(Uuid, NameModal)>,
     task_modal_submitting: bool,
     workspaces: Vec<Workspace>,
     tasks: Vec<ProjectTask>,
@@ -759,7 +787,10 @@ impl BlackholesApp {
                 // Repair agent identity persisted by older builds that trusted conflicting
                 // third-party Warp plugin events over Blackholes' own session hook.
                 terminal.agent = agent;
-            } else if let Some(agent) = agent_from_terminal_title(&terminal.label) {
+            } else if terminal.custom_label.is_none()
+                && let Some(agent) = agent_from_terminal_title(&terminal.label)
+            {
+                // A name the user typed is not a terminal title and says nothing about the agent.
                 terminal.agent = agent;
             }
             if terminal.agent == AgentKind::Shell {
@@ -779,6 +810,14 @@ impl BlackholesApp {
         session.agent_order.retain(|id| id.strip_prefix("terminal:")
             .and_then(|id| Uuid::parse_str(id).ok())
             .is_some_and(|id| session.terminals.iter().any(|terminal| terminal.id == id)));
+        session.pinned_terminal_ids.retain(|id| session.terminals.iter()
+            .any(|terminal| terminal.id == *id && terminal.agent != AgentKind::Shell));
+        let section_ids: HashSet<Uuid> = session.agent_sections.iter().map(|section| section.id).collect();
+        for terminal in &mut session.terminals {
+            if terminal.section_id.is_some_and(|id| !section_ids.contains(&id)) {
+                terminal.section_id = None;
+            }
+        }
         // Navigation always starts collapsed. Repository Git summaries are loaded lazily when the
         // user expands a project or task, so startup cost does not grow with the total repo count.
         session.expanded_workspace_ids.clear();
@@ -895,6 +934,7 @@ impl BlackholesApp {
             task_removal_preview: None,
             closing_task_ids: HashSet::new(),
             agent_removal_confirmation: None,
+            name_modal: None,
             task_modal_submitting: false,
             workspaces,
             tasks,
@@ -1261,6 +1301,15 @@ impl BlackholesApp {
                     self.dismiss_app_modal(cx);
                 }
             }
+            WorkspaceCommand::SubmitNameModal { request_id, name, note } => {
+                self.submit_name_modal(request_id, &name, note.as_deref(), cx);
+                self.dismiss_app_modal(cx);
+                if self.show_terminal
+                    && let Some(selected) = self.selected_terminal_id()
+                {
+                    self.focus_terminal_input(selected, window, cx);
+                }
+            }
             WorkspaceCommand::ConfirmRemoveTask { task_id } => {
                 if self.task_removal_confirmation == Some(task_id) {
                     self.start_remove_task(task_id, cx);
@@ -1324,6 +1373,28 @@ impl BlackholesApp {
                         self.hydrate_active_workspace_surface(cx);
                     }
                 }
+            }
+            WorkspaceCommand::AddTaskDecision { task_id, text, url } => {
+                let url = url.filter(|url| !url.trim().is_empty());
+                let result = self.tasks.iter().find(|task| task.id == task_id)
+                    .and_then(|task| self.workspaces.iter().find(|workspace| workspace.id == task.workspace_id))
+                    .ok_or_else(|| anyhow::anyhow!("Task is no longer available"))
+                    .and_then(|workspace| crate::services::task_details::add_decision(&self.database, workspace, &TaskService::new(&self.paths), task_id, &text, url));
+                self.finish_decision_edit(task_id, result.map(|(task, _)| task), cx);
+            }
+            WorkspaceCommand::RemoveTaskDecision { task_id, decision_id } => {
+                let result = self.tasks.iter().find(|task| task.id == task_id)
+                    .and_then(|task| self.workspaces.iter().find(|workspace| workspace.id == task.workspace_id))
+                    .ok_or_else(|| anyhow::anyhow!("Task is no longer available"))
+                    .and_then(|workspace| crate::services::task_details::remove_decision(&self.database, workspace, &TaskService::new(&self.paths), task_id, decision_id));
+                self.finish_decision_edit(task_id, result, cx);
+            }
+            WorkspaceCommand::DeleteArchivedTask { task_id } => {
+                if let Err(error) = self.database.delete_archived_task(task_id) {
+                    self.set_status(format!("Could not delete the archived task: {error:#}"), true, cx);
+                }
+                self.hydrate_active_workspace_surface(cx);
+                cx.notify();
             }
             WorkspaceCommand::TaskDetailsDirty { task_id, dirty } => {
                 if dirty { self.task_details_dirty.insert(task_id); } else { self.task_details_dirty.remove(&task_id); }
@@ -1560,7 +1631,7 @@ impl BlackholesApp {
                 let mut seen = HashSet::new();
                 let requested: Vec<_> = ids.into_iter().filter(|id| {
                     let exists = if let Some(id) = id.strip_prefix("terminal:").and_then(|id| Uuid::parse_str(id).ok()) {
-                        self.session.terminals.iter().any(|terminal| terminal.id == id && self.terminal_agent_is_active(terminal))
+                        self.session.terminals.iter().any(|terminal| terminal.id == id && self.terminal_listed_in_agents(terminal))
                     } else { false };
                     exists && seen.insert(id.clone())
                 }).collect();
@@ -1583,8 +1654,61 @@ impl BlackholesApp {
                 self.hydrate_navigation(cx);
                 cx.notify();
             }
+            NavigationCommand::SetTerminalPinned { terminal_id, pinned } => {
+                self.set_terminal_pinned(terminal_id, pinned, cx);
+            }
+            NavigationCommand::RenameTerminal { terminal_id } => {
+                self.open_name_modal(NameModal::Session(terminal_id), cx);
+            }
+            NavigationCommand::NewAgentSection { terminal_id } => {
+                self.open_name_modal(NameModal::Section { section_id: None, terminal_id }, cx);
+            }
+            NavigationCommand::RenameAgentSection { section_id } => {
+                self.open_name_modal(NameModal::Section { section_id: Some(section_id), terminal_id: None }, cx);
+            }
+            NavigationCommand::DeleteAgentSection { section_id } => {
+                agent_sections::delete_section(&mut self.session, section_id);
+                self.agent_list_changed(cx);
+            }
+            NavigationCommand::MoveAgentSection { section_id, offset } => {
+                agent_sections::move_section(&mut self.session, section_id, offset);
+                self.agent_list_changed(cx);
+            }
+            NavigationCommand::SetAgentSectionCollapsed { section_id, collapsed } => {
+                agent_sections::set_section_collapsed(&mut self.session, section_id, collapsed);
+                self.persist_session();
+                self.hydrate_navigation(cx);
+            }
+            NavigationCommand::SetTerminalSection { terminal_id, section_id } => {
+                if let Err(error) = agent_sections::set_session_section(&mut self.session, terminal_id, section_id) {
+                    self.set_status(format!("{error:#}"), true, cx);
+                }
+                self.agent_list_changed(cx);
+            }
+            NavigationCommand::ReorderPinned { ids } => {
+                // A section reorders only its own pins; the others keep their places.
+                let ids: Vec<Uuid> = ids.into_iter()
+                    .filter(|id| self.session.pinned_terminal_ids.contains(id))
+                    .collect();
+                agent_sections::merge_order(&mut self.session.pinned_terminal_ids, &ids);
+                self.persist_session();
+                self.hydrate_navigation(cx);
+                cx.notify();
+            }
             NavigationCommand::ShowSettings => self.show_settings(cx),
         }
+    }
+
+    /// Pinning only changes the Agents section: it never starts, stops or resumes a session.
+    fn set_terminal_pinned(&mut self, terminal_id: Uuid, pinned: bool, cx: &mut Context<Self>) {
+        agent_sections::set_pinned(&mut self.session, terminal_id, pinned);
+        self.persist_session();
+        self.hydrate_navigation(cx);
+        cx.notify();
+    }
+
+    fn terminal_is_pinned(&self, terminal_id: Uuid) -> bool {
+        self.session.pinned_terminal_ids.contains(&terminal_id)
     }
 
     fn dispatch_workspace_event(&self, mut event: serde_json::Value, cx: &mut Context<Self>) {
@@ -1641,6 +1765,9 @@ impl BlackholesApp {
             "group_title": task.map(|task| &task.title),
             "group_icon": task.map(|task| &task.icon),
             "group_color": task.map(|task| workspace_color_css(task.color)),
+            "repository_label": terminal.repository_id
+                .and_then(|id| workspace?.repositories.iter().find(|repository| repository.id == id))
+                .map(|repository| &repository.name),
             "needs_attention": self.session.terminal_attention_order.contains(&terminal.id),
             "attention_kind": self.terminal_notice_kind(terminal.id),
             "attention_rank": self.session.terminal_attention_order.iter().position(|id| *id == terminal.id),
@@ -1649,7 +1776,23 @@ impl BlackholesApp {
                 && self.terminals.contains_key(&terminal.id),
             "background_tasks": self.background_tasks.get(&terminal.id).copied().unwrap_or(0),
             "selected": active_terminal_id == Some(terminal.id),
+            "pinned": self.terminal_is_pinned(terminal.id),
+            "pin_rank": self.session.pinned_terminal_ids.iter().position(|id| *id == terminal.id),
+            "section_id": terminal.section_id,
+            "note": terminal.note,
+            "custom_label": terminal.custom_label.is_some(),
+            "live": self.terminals.contains_key(&terminal.id)
+                && !matches!(terminal.state, SessionState::Restored | SessionState::Exited),
         })
+    }
+
+    /// Active agents are listed in Agents; pinned and sectioned ones also while stopped,
+    /// so they can be resumed from there.
+    fn terminal_listed_in_agents(&self, terminal: &TerminalDescriptor) -> bool {
+        terminal.agent != AgentKind::Shell
+            && (self.terminal_agent_is_active(terminal)
+                || self.terminal_is_pinned(terminal.id)
+                || terminal.section_id.is_some())
     }
 
     fn terminal_agent_is_active(&self, terminal: &TerminalDescriptor) -> bool {
@@ -1818,6 +1961,20 @@ impl BlackholesApp {
                     "toggle": "Expand or collapse",
                     "options": "Options",
                     "closeTerminal": "Close terminal",
+                    "rename": "Rename",
+                    "newSection": "New section",
+                    "newSectionWithSession": "New section…",
+                    "moveToSection": "Move to {name}",
+                    "removeFromSection": "Remove from {name}",
+                    "renameSection": "Rename section",
+                    "deleteSection": "Delete section",
+                    "moveSectionUp": "Move section up",
+                    "moveSectionDown": "Move section down",
+                    "emptySection": "No sessions",
+                    "pin": "Pin to top",
+                    "unpin": "Unpin",
+                    "pinned": "Pinned",
+                    "resumeSession": "Not running · click to resume",
                     "newTerminal": "New terminal",
                     "newTask": "Add task",
                     "refreshProject": "Find new repositories",
@@ -1850,6 +2007,20 @@ impl BlackholesApp {
                     "toggle": "Expandir o contraer",
                     "options": "Opciones",
                     "closeTerminal": "Cerrar terminal",
+                    "rename": "Renombrar",
+                    "newSection": "Nueva sección",
+                    "newSectionWithSession": "Nueva sección…",
+                    "moveToSection": "Mover a {name}",
+                    "removeFromSection": "Quitar de {name}",
+                    "renameSection": "Renombrar sección",
+                    "deleteSection": "Eliminar sección",
+                    "moveSectionUp": "Subir sección",
+                    "moveSectionDown": "Bajar sección",
+                    "emptySection": "Sin sesiones",
+                    "pin": "Fijar arriba",
+                    "unpin": "Desfijar",
+                    "pinned": "Fijada",
+                    "resumeSession": "Detenida · clic para reanudar",
                     "newTerminal": "Nueva terminal",
                     "newTask": "Agregar tarea",
                     "refreshProject": "Buscar repositorios nuevos",
@@ -1880,9 +2051,10 @@ impl BlackholesApp {
                     "id": agent, "label": agent_menu_label(*agent),
                 })).collect::<Vec<_>>(),
                 "terminal_agents": self.session.terminals.iter()
-                    .filter(|terminal| self.terminal_agent_is_active(terminal))
+                    .filter(|terminal| self.terminal_listed_in_agents(terminal))
                     .map(|terminal| self.navigation_terminal(terminal, active_terminal_id))
                     .collect::<Vec<_>>(),
+                "agent_sections": self.session.agent_sections,
                 "projects": projects,
             }),
             cx,
@@ -1975,8 +2147,23 @@ impl BlackholesApp {
                 "id":task.id, "workspace_id":task.workspace_id, "project":workspace.map(|w|w.label()),
                 "details":crate::services::task_details::metadata(task), "revision":crate::services::task_details::revision(task),
                 "legacy_note":self.task_legacy_notes.get(&task_id),
+                "decisions":task.decisions,
                 "repositories":repositories, "terminals":terminals}
         }),cx);
+    }
+
+    fn finish_decision_edit(&mut self, task_id: Uuid, result: anyhow::Result<ProjectTask>, cx: &mut Context<Self>) {
+        match result {
+            Ok(task) => {
+                if let Some(current) = self.tasks.iter_mut().find(|current| current.id == task_id) { *current = task; }
+            }
+            Err(error) => {
+                if let Ok(tasks) = self.database.all_tasks() { self.tasks = tasks; }
+                self.set_status(format!("{error:#}"), true, cx);
+            }
+        }
+        self.hydrate_active_workspace_surface(cx);
+        cx.notify();
     }
 
     fn hydrate_project_overview_surface(&self, workspace_id: Uuid, cx: &mut Context<Self>) {
@@ -1985,6 +2172,21 @@ impl BlackholesApp {
             .map(|terminal| serde_json::json!({"id":terminal.id,"label":terminal.label,"agent":terminal.agent})).collect::<Vec<_>>();
         let tasks = self.tasks.iter().filter(|task|task.workspace_id == workspace_id)
             .map(|task|serde_json::json!({"id":task.id,"title":task.title,"icon":task.icon})).collect::<Vec<_>>();
+        let archived = self.database.archived_tasks(Some(workspace_id)).unwrap_or_default().into_iter().map(|archived| {
+            let names = archived.task.repositories.iter().map(|attached| serde_json::json!({
+                "name": workspace.repositories.iter().find(|r| r.id == attached.repository_id).map(|r| r.name.clone()),
+                "branch": attached.branch,
+            })).collect::<Vec<_>>();
+            serde_json::json!({
+                "id": archived.task.id, "title": archived.task.title, "icon": archived.task.icon,
+                "archived_at": archived.archived_at,
+                "description": crate::services::task_details::document(&archived.task),
+                "links": crate::services::task_details::links(&archived.task),
+                "decisions": archived.task.decisions,
+                "repositories": names,
+                "sessions": archived.sessions,
+            })
+        }).collect::<Vec<_>>();
         self.dispatch_workspace_event(serde_json::json!({
             "type":"workspace_surface", "surface":"project-overview", "theme":app_theme_id(self.session.theme),
             "data":{"language":if self.session.language == Language::English {"en"} else {"es"},
@@ -1992,7 +2194,7 @@ impl BlackholesApp {
                 "color":workspace_color_id(workspace.color),
                 "colors":project_colors().into_iter().map(|color|serde_json::json!({
                     "id":workspace_color_id(color),"css":workspace_color_css(color)})).collect::<Vec<_>>(),
-                "terminals":terminals,"tasks":tasks,
+                "terminals":terminals,"tasks":tasks,"archived":archived,
                 "repositories":workspace.repositories.iter().map(|r|serde_json::json!({"id":r.id,"name":r.name})).collect::<Vec<_>>()}
         }),cx);
     }
@@ -4841,6 +5043,32 @@ impl BlackholesApp {
         repository_id: Uuid,
         cx: &mut Context<Self>,
     ) {
+        // A folder deleted outside Blackholes cannot open in the explorer: update the tree instead.
+        if let Some(task_id) = task_id {
+            let worktree_missing = self.tasks.iter().find(|task| task.id == task_id)
+                .and_then(|task| task.repositories.iter().find(|repository| repository.repository_id == repository_id))
+                .is_some_and(|repository| folder_is_missing(&repository.worktree_path));
+            if worktree_missing {
+                self.select_target(workspace_id, Some(task_id), None, cx);
+                self.set_status(self.tr(
+                    "This repository's worktree folder is no longer on disk. Remove the repository from the task to clear it.",
+                    "La carpeta del worktree de este repositorio ya no está en el disco. Quita el repositorio de la tarea para limpiarlo.",
+                ).to_string(), false, cx);
+                return;
+            }
+        } else if self.workspaces.iter().find(|workspace| workspace.id == workspace_id)
+            .and_then(|workspace| workspace.repositories.iter().find(|repository| repository.id == repository_id))
+            .is_some_and(|repository| folder_is_missing(&repository.path))
+        {
+            let message = self.forget_missing_repositories(workspace_id, cx);
+            self.select_target(workspace_id, None, None, cx);
+            self.hydrate_navigation(cx);
+            self.hydrate_active_workspace_surface(cx);
+            if let Some((message, error)) = message {
+                self.set_status(message, error, cx);
+            }
+            return;
+        }
         self.select_target_surface(workspace_id, task_id, Some(repository_id), true, cx);
         self.publish_workbench_surface(cx);
         if let Some((path, _)) = self.selected_repository_target() {
@@ -5197,7 +5425,80 @@ impl BlackholesApp {
         self.update_project_presentation(workspace_id, name, icon, color, cx)
     }
 
+    /// Removes from the project the repositories whose folder was deleted outside Blackholes.
+    /// Nothing on disk is touched, and they are not ignored: a folder restored at the same path
+    /// is found again by "Find new repositories". A repository a task still uses stays, so that
+    /// task's worktrees are preserved. Returns the message to show, if any, and whether it is an error.
+    fn forget_missing_repositories(&mut self, workspace_id: Uuid, cx: &mut Context<Self>) -> Option<(String, bool)> {
+        let index = self.workspaces.iter().position(|workspace| workspace.id == workspace_id)?;
+        let in_use: HashSet<Uuid> = self.tasks.iter().filter(|task| task.workspace_id == workspace_id)
+            .flat_map(|task| task.repositories.iter().map(|repository| repository.repository_id))
+            .collect();
+        let missing: Vec<_> = self.workspaces[index].repositories.iter()
+            .filter(|repository| folder_is_missing(&repository.path))
+            .map(|repository| (repository.id, repository.name.clone()))
+            .collect();
+        let (kept, forgotten): (Vec<_>, Vec<_>) = missing.into_iter().partition(|(id, _)| in_use.contains(id));
+        if !forgotten.is_empty() {
+            let ids: HashSet<Uuid> = forgotten.iter().map(|(id, _)| *id).collect();
+            let mut workspace = self.workspaces[index].clone();
+            workspace.repositories.retain(|repository| !ids.contains(&repository.id));
+            workspace.layout = match workspace.repositories.as_slice() {
+                [] => WorkspaceLayout::Empty,
+                [only] if workspace.root_path.as_ref() == Some(&only.path) => WorkspaceLayout::SingleRepository,
+                _ => WorkspaceLayout::MultiRepository,
+            };
+            workspace.updated_at = Utc::now();
+            if let Err(error) = self.database.replace_workspace_if_unchanged(&self.workspaces[index], &workspace) {
+                self.reload_external_data(cx);
+                return Some((format!("{}: {error:#}", self.tr(
+                    "Could not update the project's repositories", "No se pudieron actualizar los repositorios del proyecto")), true));
+            }
+            self.workspaces[index] = workspace;
+            // Their terminals stay open and move to the project root.
+            for terminal in &mut self.session.terminals {
+                if terminal.workspace_id == workspace_id && terminal.task_id.is_none()
+                    && terminal.repository_id.is_some_and(|id| ids.contains(&id))
+                {
+                    terminal.repository_id = None;
+                }
+            }
+            if self.session.selected_repository_id.is_some_and(|id| ids.contains(&id)) {
+                self.session.selected_repository_id = None;
+            }
+            self.persist_session();
+        }
+        let names = |items: &[(Uuid, String)]| items.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(", ");
+        let english = self.session.language == Language::English;
+        let mut parts = Vec::new();
+        match (forgotten.len(), english) {
+            (0, _) => {}
+            (1, true) => parts.push(format!("“{}” is no longer on disk and was removed from the project.", names(&forgotten))),
+            (1, false) => parts.push(format!("«{}» ya no está en el disco y se quitó del proyecto.", names(&forgotten))),
+            (_, true) => parts.push(format!("Removed from the project, no longer on disk: {}.", names(&forgotten))),
+            (_, false) => parts.push(format!("Se quitaron del proyecto porque ya no están en el disco: {}.", names(&forgotten))),
+        }
+        if !kept.is_empty() {
+            parts.push(if english {
+                format!("Still used by a task, so kept: {}. Remove it from that task first.", names(&kept))
+            } else {
+                format!("Sigue en uso por una tarea, así que se conserva: {}. Quítalo primero de esa tarea.", names(&kept))
+            });
+        }
+        (!parts.is_empty()).then(|| (parts.join(" "), false))
+    }
+
     fn refresh_project_repositories(&mut self, workspace_id: Uuid, cx: &mut Context<Self>) {
+        let pruned = self.forget_missing_repositories(workspace_id, cx);
+        if pruned.is_some() {
+            self.hydrate_navigation(cx);
+            self.hydrate_active_workspace_surface(cx);
+        }
+        if let Some((message, true)) = &pruned {
+            self.set_status(message.clone(), true, cx);
+            return;
+        }
+        let pruned = pruned.map(|(message, _)| message);
         let Some(index) = self
             .workspaces
             .iter()
@@ -5251,14 +5552,12 @@ impl BlackholesApp {
             })
             .collect::<Vec<_>>();
         if new_repositories.is_empty() {
-            self.set_status(
-                self.tr(
-                    "No new repositories were found",
-                    "No se encontraron repositorios nuevos",
-                ),
-                false,
-                cx,
-            );
+            // Clearing deleted repositories is the update the user sees; say that instead.
+            let message = pruned.unwrap_or_else(|| self.tr(
+                "No new repositories were found",
+                "No se encontraron repositorios nuevos",
+            ).to_string());
+            self.set_status(message, false, cx);
             return;
         }
 
@@ -5303,6 +5602,10 @@ impl BlackholesApp {
             (Language::English, count) => format!("{count} repositories added"),
             (Language::Spanish, 1) => "Repositorio agregado".to_string(),
             (Language::Spanish, count) => format!("{count} repositorios agregados"),
+        };
+        let message = match pruned {
+            Some(pruned) => format!("{message}. {pruned}"),
+            None => message,
         };
         self.set_status(message, false, cx);
     }
@@ -5565,6 +5868,7 @@ impl BlackholesApp {
         self.task_removal_confirmation = None;
         self.task_removal_preview = None;
         self.agent_removal_confirmation = None;
+        self.name_modal = None;
         self.project_modal_request = None;
         self.repository_modal_workspace = None;
         self.repository_removal = None;
@@ -5693,12 +5997,12 @@ impl BlackholesApp {
                 "modal": {
                     "kind": "remove_task", "task_id": task_id,
                     "over_terminal": self.show_terminal && !self.show_release_notes,
-                    "title": self.tr("Delete task and worktrees?", "¿Eliminar tarea y worktrees?"),
+                    "title": self.tr("Close task and archive it?", "¿Cerrar la tarea y archivarla?"),
                     "name": task_title, "context": worktree_path,
                     "close_preview": preview,
                     "description": self.tr(
-                        "Delete the listed terminals, worktrees, changes and extra files permanently. Claude/Codex session IDs are kept in the closure result. Git branches are preserved.",
-                        "Eliminar permanentemente las terminales, worktrees, cambios y archivos extra listados. Los IDs de sesión de Claude/Codex se guardan en el resultado del cierre. Se conservan las ramas Git.",
+                        "The listed terminals, worktrees, changes and extra files are deleted permanently. The task is archived in its project with its context, links, decisions and Claude/Codex session IDs. Git branches are preserved.",
+                        "Se eliminan permanentemente las terminales, worktrees, cambios y archivos extra listados. La tarea queda archivada en su proyecto con su contexto, enlaces, decisiones e IDs de sesión de Claude/Codex. Se conservan las ramas Git.",
                     ),
                     "confirm_label": self.tr("Close task", "Cerrar tarea"),
                     "cancel_label": self.tr("Cancel", "Cancelar"),
@@ -5814,7 +6118,9 @@ impl BlackholesApp {
             );
             return;
         }
-        let branch_name = task.branch().unwrap_or_default().to_string();
+        // A task created without repositories takes its branch name from its title.
+        let branch_name = task.branch().map(str::to_string)
+            .unwrap_or_else(|| crate::services::tasks::normalize_branch_name(&task.title));
         if branch_name.is_empty() {
             self.set_status("This task does not have a branch to reuse", true, cx);
             return;
@@ -6714,10 +7020,8 @@ impl BlackholesApp {
         let Some(workspace) = self.selected_workspace().cloned() else {
             return;
         };
-        if workspace.repositories.is_empty() {
-            self.set_status("Add a Git repository before creating a task", true, cx);
-            return;
-        }
+        // A project without repositories can still hold tasks: they are created
+        // without worktrees, as a folder with their context.
 
         // Keep the underlying WebViews visible: a native GPUI dialog must hide
         // them to avoid AppKit layering conflicts, which produces a blank backdrop.
@@ -7418,6 +7722,9 @@ impl BlackholesApp {
             repository_id: self.session.selected_repository_id,
             agent,
             label: agent.label().into(),
+            custom_label: None,
+            section_id: None,
+            note: None,
             cwd,
             // A running CLI is not necessarily processing a prompt.
             state: SessionState::Idle,
@@ -7552,7 +7859,7 @@ impl BlackholesApp {
         let descriptor = TerminalDescriptor {
             id: Uuid::new_v4(), workspace_id: task.workspace_id,
             task_id: Some(task.id), repository_id: None, agent,
-            label: format!("{} · {}", agent.label(), task.title),
+            label: format!("{} · {}", agent.label(), task.title), custom_label: None, section_id: None, note: None,
             cwd: task.worktree_root_path.clone(), state: SessionState::Idle,
             codex_session: None, claude_session: None, agent_config_dir: config_dir,
             model, created_at: Utc::now(),
@@ -7612,7 +7919,7 @@ impl BlackholesApp {
         let descriptor = TerminalDescriptor {
             id: Uuid::new_v4(), workspace_id: workspace.id,
             task_id: None, repository_id: request.repository_id, agent: AgentKind::Shell,
-            label: request.label(), cwd, state: SessionState::Idle,
+            label: request.label(), custom_label: None, section_id: None, note: None, cwd, state: SessionState::Idle,
             codex_session: None, claude_session: None, agent_config_dir: None,
             model: None, created_at: Utc::now(),
         };
@@ -8184,6 +8491,211 @@ impl BlackholesApp {
         cx.notify();
     }
 
+    fn set_terminal_tab_title(&mut self, terminal_id: Uuid, title: &str) {
+        agent_sections::set_tab_title(&mut self.session, terminal_id, title);
+    }
+
+    fn open_name_modal(&mut self, modal: NameModal, cx: &mut Context<Self>) {
+        if self.workspace_webview.is_none() {
+            return;
+        }
+        let request_id = Uuid::new_v4();
+        let mut event = match modal {
+            NameModal::Session(terminal_id) => {
+                let Some(terminal) = self.session.terminals.iter().find(|terminal| terminal.id == terminal_id) else {
+                    return;
+                };
+                let context = self.navigation_terminal(terminal, self.selected_terminal_id())["context"].clone();
+                serde_json::json!({
+                    "kind": "rename_terminal", "terminal_id": terminal_id,
+                    "title": self.tr("Rename session", "Renombrar sesión"),
+                    "name": terminal.agent.label(), "context": context,
+                    "value": terminal.custom_label.clone().unwrap_or_else(|| terminal.label.clone()),
+                    "value_max": agent_sections::MAX_SESSION_NAME_CHARS,
+                    "note": terminal.note.clone().unwrap_or_default(),
+                    "note_max": agent_sections::MAX_NOTE_CHARS,
+                    "note_label": self.tr("Note (optional)", "Nota (opcional)"),
+                    "note_placeholder": self.tr("What this session is for", "Para qué es esta sesión"),
+                    "description": self.tr(
+                        "The name replaces the title the agent sets. Leave it empty to show the agent's title again.",
+                        "El nombre reemplaza el título que pone el agente. Déjalo vacío para volver a mostrar el del agente.",
+                    ),
+                    "confirm_label": self.tr("Save", "Guardar"),
+                })
+            }
+            NameModal::Section { section_id, .. } => {
+                let current = section_id.and_then(|id| self.session.agent_sections.iter().find(|section| section.id == id));
+                if section_id.is_some() && current.is_none() {
+                    return;
+                }
+                serde_json::json!({
+                    "kind": "agent_section",
+                    "title": if current.is_some() { self.tr("Rename section", "Renombrar sección") }
+                        else { self.tr("New section", "Nueva sección") },
+                    "name": "",
+                    "value": current.map(|section| section.name.clone()).unwrap_or_default(),
+                    "value_max": agent_sections::MAX_SECTION_NAME_CHARS,
+                    "description": self.tr(
+                        "Sections only organize the Agents list. The project tree does not change.",
+                        "Las secciones solo ordenan la lista de Agentes. El árbol de proyectos no cambia.",
+                    ),
+                    "confirm_label": if current.is_some() { self.tr("Rename", "Renombrar") }
+                        else { self.tr("Create", "Crear") },
+                })
+            }
+        };
+        event["request_id"] = serde_json::json!(request_id);
+        event["over_terminal"] = serde_json::json!(self.show_terminal && !self.show_release_notes);
+        event["cancel_label"] = serde_json::json!(self.tr("Cancel", "Cancelar"));
+        event["offset_x"] = serde_json::json!(if self.show_settings { 0.0 } else {
+            -(self.session.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX) / 2.0)
+        });
+        self.name_modal = Some((request_id, modal));
+        self.dispatch_workspace_event(serde_json::json!({ "type": "app_modal", "modal": event }), cx);
+        self.dispatch_navigation_event(serde_json::json!({
+            "type": "modal_visibility", "visible": true,
+        }), cx);
+        cx.notify();
+    }
+
+    /// Applies the name (and note) typed in the open name modal. A stale request does nothing.
+    fn submit_name_modal(&mut self, request_id: Uuid, name: &str, note: Option<&str>, cx: &mut Context<Self>) {
+        let Some((current, modal)) = self.name_modal else {
+            return;
+        };
+        if current != request_id {
+            return;
+        }
+        let result = match modal {
+            NameModal::Session(terminal_id) => {
+                // Renaming only changes what Blackholes shows; the provider's session is untouched.
+                if let Some(label) = agent_sections::set_session_name(&mut self.session, terminal_id, Some(name)) {
+                    self.propagate_session_label(terminal_id, &label);
+                }
+                if let Some(note) = note {
+                    agent_sections::set_session_note(&mut self.session, terminal_id, Some(note));
+                }
+                Ok(())
+            }
+            NameModal::Section { section_id: Some(section_id), .. } =>
+                agent_sections::rename_section(&mut self.session, section_id, name),
+            NameModal::Section { section_id: None, terminal_id } =>
+                agent_sections::create_section(&mut self.session, name).and_then(|section_id| match terminal_id {
+                    Some(terminal_id) => agent_sections::set_session_section(&mut self.session, terminal_id, Some(section_id)),
+                    None => Ok(()),
+                }),
+        };
+        if let Err(error) = result {
+            self.set_status(format!("{error:#}"), true, cx);
+        }
+        self.agent_list_changed(cx);
+    }
+
+    /// A worktree group lists its sessions by the name shown for them.
+    fn propagate_session_label(&mut self, terminal_id: Uuid, label: &str) {
+        let now = Utc::now();
+        for task in &mut self.tasks {
+            if let Some(session) = task.sessions.iter_mut()
+                .find(|session| session.terminal_local_id == terminal_id)
+            {
+                session.label = label.to_string();
+                session.updated_at = now;
+                task.updated_at = now;
+                let _ = self.database.upsert_task(task);
+                break;
+            }
+        }
+    }
+
+    fn agent_list_changed(&mut self, cx: &mut Context<Self>) {
+        self.persist_session();
+        self.hydrate_navigation(cx);
+        self.hydrate_active_workspace_surface(cx);
+        cx.notify();
+    }
+
+    /// The Agents list as the MCP sees it, in display order: sessions without a section first,
+    /// then each section; inside each, pins, notices, working agents, then the manual order.
+    fn agent_sessions_snapshot(&self, include_stopped: bool, caller: Option<Uuid>) -> serde_json::Value {
+        let manual_rank = |id: Uuid| self.session.agent_order.iter()
+            .position(|key| key.strip_prefix("terminal:") == Some(id.to_string().as_str()))
+            .unwrap_or(usize::MAX);
+        let block = |terminal: &TerminalDescriptor| terminal.section_id
+            .and_then(|id| self.session.agent_sections.iter().position(|section| section.id == id))
+            .map_or(0, |index| index + 1);
+        let live = |terminal: &TerminalDescriptor| self.terminals.contains_key(&terminal.id)
+            && !matches!(terminal.state, SessionState::Restored | SessionState::Exited);
+        let mut terminals: Vec<&TerminalDescriptor> = self.session.terminals.iter()
+            .filter(|terminal| terminal.agent != AgentKind::Shell
+                && (include_stopped || self.terminal_listed_in_agents(terminal)))
+            .collect();
+        terminals.sort_by_key(|terminal| {
+            let listed = self.terminal_listed_in_agents(terminal);
+            let pin = self.session.pinned_terminal_ids.iter().position(|id| *id == terminal.id);
+            let notice = self.session.terminal_attention_order.iter().position(|id| *id == terminal.id);
+            let working = live(terminal) && terminal.state == SessionState::Working;
+            (!listed, block(terminal), pin.is_none(), pin.unwrap_or(0),
+                notice.is_none() || pin.is_some(), notice.unwrap_or(0), !working, manual_rank(terminal.id))
+        });
+        let sessions: Vec<_> = terminals.into_iter().map(|terminal| {
+            let workspace = self.workspaces.iter().find(|workspace| workspace.id == terminal.workspace_id);
+            let task = terminal.task_id.and_then(|id| self.tasks.iter().find(|task| task.id == id));
+            let repository = terminal.repository_id
+                .and_then(|id| workspace?.repositories.iter().find(|repository| repository.id == id));
+            let section = terminal.section_id
+                .and_then(|id| self.session.agent_sections.iter().find(|section| section.id == id));
+            let state = match self.terminal_notice_kind(terminal.id) {
+                Some(TerminalNoticeKind::InputRequired) => "needs_input",
+                Some(TerminalNoticeKind::Completed) => "response_ready",
+                None if !live(terminal) => "stopped",
+                None if terminal.state == SessionState::Working => "working",
+                None => "idle",
+            };
+            let provider_session = terminal.claude_session.as_ref().map(|session| session.id.clone())
+                .or_else(|| terminal.codex_session.as_ref().map(|session| session.id.clone()));
+            serde_json::json!({
+                "terminalId": terminal.id,
+                "name": agent_sections::shown_name(terminal),
+                "customName": terminal.custom_label,
+                "note": terminal.note,
+                "agent": terminal.agent,
+                "provider": terminal.agent.label(),
+                "state": state,
+                "listedInAgents": self.terminal_listed_in_agents(terminal),
+                "pinned": self.terminal_is_pinned(terminal.id),
+                "section": section.map(|section| serde_json::json!({ "id": section.id, "name": section.name })),
+                "project": workspace.map(|workspace| serde_json::json!({ "id": workspace.id, "name": workspace.label() })),
+                "worktreeGroup": task.map(|task| serde_json::json!({ "id": task.id, "title": task.title })),
+                "repository": repository.map(|repository| serde_json::json!({ "id": repository.id, "name": repository.name })),
+                "cwd": terminal.cwd,
+                "providerSessionId": provider_session,
+                "agentConfigDir": terminal.agent_config_dir,
+                "isCaller": caller == Some(terminal.id),
+                "createdAt": terminal.created_at,
+            })
+        }).collect();
+        let sections: Vec<_> = self.session.agent_sections.iter().enumerate().map(|(position, section)| serde_json::json!({
+            "id": section.id, "name": section.name, "collapsed": section.collapsed, "position": position,
+            "sessionCount": self.session.terminals.iter()
+                .filter(|terminal| terminal.section_id == Some(section.id) && terminal.agent != AgentKind::Shell).count(),
+        })).collect();
+        serde_json::json!({
+            "accepted": true,
+            "sections": sections,
+            "sessions": sessions,
+            "callerTerminalId": caller.filter(|id| self.session.terminals.iter().any(|terminal| terminal.id == *id)),
+        })
+    }
+
+    fn organize_agent_sessions(&mut self, payload: OrganizeAgentSessionsPayload, cx: &mut Context<Self>) -> Result<serde_json::Value> {
+        let outcome = agent_sections::organize(&mut self.session, &payload.request, payload.caller_terminal_id)?;
+        for (terminal_id, label) in &outcome.renamed {
+            self.propagate_session_label(*terminal_id, label);
+        }
+        self.agent_list_changed(cx);
+        Ok(self.agent_sessions_snapshot(false, payload.caller_terminal_id))
+    }
+
     fn update_terminal_title(&mut self, terminal_id: Uuid, title: &str) {
         let display_title = title;
         // An unrecognized title is not an exit signal: Codex restores the project title after
@@ -8194,13 +8706,18 @@ impl BlackholesApp {
                 .then_some(AgentKind::Shell)
         });
         let mut agent_changed = None;
+        // A name the user gave the session wins over the titles the agent keeps setting.
+        let renamed = self.session.terminals.iter()
+            .any(|terminal| terminal.id == terminal_id && terminal.custom_label.is_some());
         if let Some(descriptor) = self
             .session
             .terminals
             .iter_mut()
             .find(|terminal| terminal.id == terminal_id)
         {
-            descriptor.label = display_title.chars().take(72).collect();
+            if !renamed {
+                descriptor.label = display_title.chars().take(72).collect();
+            }
             if let Some(agent) = detected_agent
                 && descriptor.agent != agent
             {
@@ -8209,14 +8726,8 @@ impl BlackholesApp {
                 agent_changed = Some((agent, descriptor.state));
             }
         }
-        for dock in self.session.docks.values_mut() {
-            for tab in &mut dock.tabs {
-                let mut ids = Vec::new();
-                tab.root.terminal_ids(&mut ids);
-                if ids.contains(&terminal_id) && ids.len() == 1 {
-                    tab.title = display_title.chars().take(72).collect();
-                }
-            }
+        if !renamed {
+            self.set_terminal_tab_title(terminal_id, display_title);
         }
         if let Some((agent, state)) = agent_changed {
             if let Some(handle) = self.terminals.get(&terminal_id) { *handle.state.lock() = state; }
@@ -8234,7 +8745,9 @@ impl BlackholesApp {
                     .find(|session| session.terminal_local_id == terminal_id)
                 {
                     session.agent = agent;
-                    session.label = display_title.chars().take(72).collect();
+                    if !renamed {
+                        session.label = display_title.chars().take(72).collect();
+                    }
                     session.state = state;
                     session.updated_at = now;
                     task.updated_at = now;
@@ -8403,6 +8916,7 @@ impl BlackholesApp {
         self.session
             .terminals
             .retain(|terminal| terminal.id != terminal_id);
+        self.session.pinned_terminal_ids.retain(|id| *id != terminal_id);
         for dock in self.session.docks.values_mut() {
             let mut empty_tabs = Vec::new();
             for tab in &mut dock.tabs {
@@ -10664,6 +11178,7 @@ impl Render for BlackholesApp {
                 || self.task_modal_request.is_some()
                 || self.task_removal_confirmation.is_some()
                 || self.agent_removal_confirmation.is_some()
+                || self.name_modal.is_some()
                 || self.quick_open.is_some());
         let workspace_visible =
             (self.show_release_notes || !self.show_terminal || terminal_modal || self.quick_open.is_some()) && !window.has_active_dialog(cx);
@@ -12413,6 +12928,11 @@ fn terminal_config(theme: AppTheme) -> TerminalConfig {
     }
 }
 
+/// Only a folder that is definitely gone counts; an unreadable one is not treated as deleted.
+fn folder_is_missing(path: &std::path::Path) -> bool {
+    matches!(fs::metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+}
+
 fn insert_unique(ids: &mut Vec<Uuid>, id: Uuid) {
     if !ids.contains(&id) {
         ids.push(id);
@@ -12451,6 +12971,28 @@ fn install_agent_command_bridge(paths: &AppPaths, window: &Window, cx: &mut Cont
                 window_handle.update(cx, |_, window, cx| {
                     this.update(cx, |app, cx| -> Result<serde_json::Value> {
                         app.start_task_agents(serde_json::from_str(payload)?, window, cx)
+                    })
+                }).and_then(|result| result)
+            } else if let Some(payload) = command.message.strip_prefix("agent-sessions:") {
+                this.update(cx, |app, _| -> Result<serde_json::Value> {
+                    let payload: AgentSessionsPayload = serde_json::from_str(payload)?;
+                    Ok(app.agent_sessions_snapshot(payload.include_stopped, payload.caller_terminal_id))
+                })
+            } else if let Some(payload) = command.message.strip_prefix("organize-agent-sessions:") {
+                this.update(cx, |app, cx| -> Result<serde_json::Value> {
+                    app.organize_agent_sessions(serde_json::from_str(payload)?, cx)
+                })
+            } else if let Some(payload) = command.message.strip_prefix("open-agent-session:") {
+                window_handle.update(cx, |_, window, cx| {
+                    this.update(cx, |app, cx| -> Result<serde_json::Value> {
+                        let terminal_id: Uuid = serde_json::from_str::<serde_json::Value>(payload)?["terminalId"]
+                            .as_str().and_then(|id| Uuid::parse_str(id).ok())
+                            .context("terminalId must be a terminal ID")?;
+                        if !app.session.terminals.iter().any(|terminal| terminal.id == terminal_id && terminal.agent != AgentKind::Shell) {
+                            anyhow::bail!("No agent session has terminal ID {terminal_id}");
+                        }
+                        app.focus_terminal(terminal_id, window, cx);
+                        Ok(serde_json::json!({ "accepted": true, "terminalId": terminal_id, "opened": true }))
                     })
                 }).and_then(|result| result)
             } else if let Some(payload) = command.message.strip_prefix("open-project-terminal:") {

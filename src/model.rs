@@ -252,6 +252,38 @@ pub struct ProjectTask {
     pub sessions: Vec<TaskSession>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Durable decisions taken in this task, oldest first. Unlike the description,
+    /// which agents rewrite as current context, decisions are kept as recorded.
+    #[serde(default)]
+    pub decisions: Vec<TaskDecision>,
+}
+
+/// One decision recorded for a task, with an optional link to where it was taken.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskDecision {
+    pub id: Uuid,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// An agent session that belonged to an archived task, kept so it can be found or resumed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedSession {
+    pub agent: AgentKind,
+    pub session_id: String,
+}
+
+/// A closed task kept for reference: its last details, decisions, links and sessions.
+/// Its worktrees and terminals are gone; nothing here is live.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ArchivedTask {
+    pub task: ProjectTask,
+    pub archived_at: DateTime<Utc>,
+    #[serde(default)]
+    pub sessions: Vec<ArchivedSession>,
 }
 
 impl ProjectTask {
@@ -325,7 +357,17 @@ pub struct TerminalDescriptor {
     pub task_id: Option<Uuid>,
     pub repository_id: Option<Uuid>,
     pub agent: AgentKind,
+    /// Name shown for the session: the user's name when set, otherwise the terminal title.
     pub label: String,
+    /// Name the user gave the session. While set, terminal titles no longer replace `label`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_label: Option<String>,
+    /// Section of the Agents list that holds the session. It never changes the project tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<Uuid>,
+    /// One-line note about what the session is for, written by the user or an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub cwd: PathBuf,
     pub state: SessionState,
     #[serde(default)]
@@ -377,6 +419,21 @@ pub struct AppSession {
     /// The agents this user works with: each gets its usage meter and a launch menu entry.
     #[serde(default = "default_agents")]
     pub agents: Vec<AgentKind>,
+    /// Agent sessions pinned to the top of the Agents section, in pin order. A pinned
+    /// session stays listed after it goes idle or exits, so it can be resumed from there.
+    #[serde(default)]
+    pub pinned_terminal_ids: Vec<Uuid>,
+    /// Named sections of the Agents list, in display order. They only organize that list.
+    #[serde(default)]
+    pub agent_sections: Vec<AgentSection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSection {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 fn default_sidebar_agents_fraction() -> f32 { 0.4 }
@@ -406,6 +463,8 @@ impl Default for AppSession {
             projects_section_collapsed: false,
             last_seen_release_version: None,
             agents: default_agents(),
+            pinned_terminal_ids: Vec::new(),
+            agent_sections: Vec::new(),
         }
     }
 }

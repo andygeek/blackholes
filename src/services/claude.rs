@@ -127,7 +127,8 @@ fn bridge_message(input: &str, terminal_id: Uuid, profile: ClaudeProfile) -> Res
     Ok(format!("{CLAUDE_SESSION_EVENT_PREFIX}{}", serde_json::to_string(&payload)?))
 }
 
-fn claude_homes() -> Vec<PathBuf> {
+/// Claude configuration folders on this computer: default, work and `CLAUDE_CONFIG_DIR`.
+pub fn claude_homes() -> Vec<PathBuf> {
     let Some(user_home) = env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };

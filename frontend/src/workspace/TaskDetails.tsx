@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { RefObject, TextareaHTMLAttributes } from "react";
-import { ArrowUpRight, Layers, Plus, X } from "lucide-react";
+import { Archive, ArrowUpRight, Layers, Plus, Search, Trash2, X } from "lucide-react";
 import { postNative } from "../shared/native";
 import { GroupIcon } from "../shared/GroupIcon";
 import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
@@ -12,8 +12,14 @@ export type { TaskMetadata } from "./groupDetailsState";
 
 type Language = "en" | "es";
 type Terminal = { id: string; label: string; agent: string };
-export type TaskDetailsData = { language: Language; id: string; workspace_id: string; project: string; details: TaskMetadata; revision: string; legacy_note?: string | null; repositories: { id: string; name: string; branch: string }[]; terminals: Terminal[] };
-export type ProjectOverviewData = { language: Language; id: string; title: string; icon: string; color: string; colors: { id: string; css: string }[]; terminals: Terminal[]; tasks: { id: string; title: string; icon: string }[]; repositories: { id: string; name: string }[] };
+type Decision = { id: string; text: string; url?: string | null; created_at: string };
+type ArchivedTask = {
+  id: string; title: string; icon: string; archived_at: string; description?: string | null;
+  links: GroupLink[]; decisions: Decision[]; repositories: { name?: string | null; branch: string }[];
+  sessions: { agent: string; sessionId: string }[];
+};
+export type TaskDetailsData = { language: Language; id: string; workspace_id: string; project: string; details: TaskMetadata; revision: string; legacy_note?: string | null; decisions?: Decision[]; repositories: { id: string; name: string; branch: string }[]; terminals: Terminal[] };
+export type ProjectOverviewData = { language: Language; id: string; title: string; icon: string; color: string; colors: { id: string; css: string }[]; terminals: Terminal[]; tasks: { id: string; title: string; icon: string }[]; archived?: ArchivedTask[]; repositories: { id: string; name: string }[] };
 const text = (language: Language, en: string, es: string) => language === "en" ? en : es;
 const requestedFocus = new Set<string>();
 /** Focus the title of a group or project page, also when the page opens after the request. */
@@ -39,6 +45,103 @@ function linkName(link: GroupLink) {
     if (pr) return `${url.pathname.split("/").filter(Boolean)[1] || url.hostname} #${pr[1]}`;
     return url.hostname.replace(/^www\./, "");
   } catch { return link.url; }
+}
+
+const formatDate = (value: string, language: Language) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value
+    : date.toLocaleDateString(language === "en" ? "en-US" : "es-CL", { day: "numeric", month: "short", year: "numeric" });
+};
+
+function DecisionItems({ decisions, language, onRemove }: { decisions: Decision[]; language: Language; onRemove?(decision: Decision): void }) {
+  return <ul className="group-decision-list">{decisions.map(decision => <li key={decision.id}>
+    <time dateTime={decision.created_at}>{formatDate(decision.created_at, language)}</time>
+    <span className="group-decision-text">{decision.text}</span>
+    {decision.url && <button type="button" className="group-link-action" aria-label={text(language, "Open where it was decided", "Abrir dónde se decidió")}
+      title={decision.url} onClick={() => postNative({ type: "open_url", url: decision.url })}><ArrowUpRight size={15} /></button>}
+    {onRemove && <button type="button" className="group-link-action" aria-label={text(language, "Remove decision", "Quitar decisión")}
+      title={text(language, "Remove decision", "Quitar decisión")} onClick={() => onRemove(decision)}><X size={15} /></button>}
+  </li>)}</ul>;
+}
+
+/** Lasting decisions survive closing: the task is archived with them. */
+function Decisions({ taskId, decisions, language }: { taskId: string; decisions: Decision[]; language: Language }) {
+  const t = (en: string, es: string) => text(language, en, es);
+  const [draft, setDraft] = useState("");
+  const [url, setUrl] = useState("");
+  const add = () => {
+    const value = draft.trim();
+    if (!value) return;
+    postNative({ type: "add_task_decision", task_id: taskId, text: value, url: url.trim() || null });
+    setDraft("");
+    setUrl("");
+  };
+  return <section className="group-link-editor group-decisions">
+    <header><h2>{t("Decisions", "Decisiones")}{decisions.length > 0 && <span className="group-count">{decisions.length}</span>}</h2></header>
+    {!decisions.length && <p className="group-empty">{t("What gets decided here stays with the task, even after you close it.", "Lo que se decida aquí queda guardado en la tarea, aunque la cierres.")}</p>}
+    <DecisionItems decisions={decisions} language={language}
+      onRemove={decision => postNative({ type: "remove_task_decision", task_id: taskId, decision_id: decision.id })} />
+    <form className="group-decision-form" onSubmit={event => { event.preventDefault(); add(); }}>
+      <input aria-label={t("New decision", "Nueva decisión")} placeholder={t("Record a decision…", "Registrar una decisión…")} maxLength={2000}
+        value={draft} onChange={event => setDraft(event.target.value)} />
+      <input type="url" aria-label={t("Link where it was decided (optional)", "Enlace donde se decidió (opcional)")} placeholder={t("https://… (optional)", "https://… (opcional)")} maxLength={4096}
+        value={url} onChange={event => setUrl(event.target.value)} />
+      <button type="submit" className="group-quiet-button" disabled={!draft.trim()}><Plus size={14} />{t("Add", "Agregar")}</button>
+    </form>
+  </section>;
+}
+
+function ArchivedTaskItem({ task, language }: { task: ArchivedTask; language: Language }) {
+  const t = (en: string, es: string) => text(language, en, es);
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const timer = window.setTimeout(() => setConfirming(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [confirming]);
+  return <details className="archived-task">
+    <summary>
+      <GroupIcon value={task.icon || "layers"} size={16} />
+      <span className="archived-task__title">{task.title}</span>
+      <span className="archived-task__meta">{task.decisions.length > 0 && `${task.decisions.length} ${task.decisions.length === 1 ? t("decision", "decisión") : t("decisions", "decisiones")} · `}{formatDate(task.archived_at, language)}</span>
+    </summary>
+    <div className="archived-task__body">
+      {task.description?.trim() ? <p className="archived-task__description">{task.description}</p> : <p className="group-empty">{t("No context was written before closing.", "No se escribió contexto antes de cerrar.")}</p>}
+      {task.decisions.length > 0 && <><h3>{t("Decisions", "Decisiones")}</h3><DecisionItems decisions={task.decisions} language={language} /></>}
+      {task.links.length > 0 && <><h3>{t("Links", "Enlaces")}</h3><ul className="archived-task__links">{task.links.map(link => <li key={link.url}>
+        <button type="button" className="archived-task__link" title={link.url} onClick={() => postNative({ type: "open_url", url: link.url })}><ArrowUpRight size={14} />{linkName(link)}</button>
+      </li>)}</ul></>}
+      {task.repositories.length > 0 && <><h3>{t("Branches", "Ramas")}</h3><ul className="archived-task__plain">{task.repositories.map((repo, index) => <li key={index}><span>{repo.name || t("Repository", "Repositorio")}</span><code>{repo.branch}</code></li>)}</ul></>}
+      {task.sessions.length > 0 && <><h3>{t("Agent sessions", "Sesiones de agentes")}</h3><ul className="archived-task__plain">{task.sessions.map(session => <li key={session.sessionId}>
+        <span className="archived-task__session"><TerminalProviderIcon provider={session.agent} />{session.agent}</span><code>{session.sessionId}</code>
+      </li>)}</ul></>}
+      <div className="archived-task__actions">
+        <button type="button" className={`group-quiet-button archived-task__delete${confirming ? " is-confirming" : ""}`}
+          onClick={() => confirming ? postNative({ type: "delete_archived_task", task_id: task.id }) : setConfirming(true)}>
+          <Trash2 size={14} />{confirming ? t("Click again to delete permanently", "Haz clic de nuevo para eliminarla para siempre") : t("Delete from archive", "Eliminar del archivo")}
+        </button>
+      </div>
+    </div>
+  </details>;
+}
+
+function ArchivedTasks({ tasks, language }: { tasks: ArchivedTask[]; language: Language }) {
+  const t = (en: string, es: string) => text(language, en, es);
+  const [query, setQuery] = useState("");
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const visible = terms.length ? tasks.filter(task => {
+    const haystack = [task.title, task.description || "", ...task.decisions.map(d => `${d.text} ${d.url || ""}`),
+      ...task.links.map(link => `${link.url} ${link.label || ""}`), ...task.repositories.map(repo => `${repo.name || ""} ${repo.branch}`)].join(" ").toLowerCase();
+    return terms.every(term => haystack.includes(term));
+  }) : tasks;
+  return <section className="task-related archived-tasks">
+    <h2><Archive size={14} />{t("Archived", "Archivadas")} <span className="group-count">{tasks.length}</span></h2>
+    {tasks.length > 4 && <label className="archived-search"><Search size={14} aria-hidden="true" />
+      <input type="search" value={query} onChange={event => setQuery(event.target.value)}
+        aria-label={t("Search archived tasks", "Buscar en tareas archivadas")} placeholder={t("Search title, context, decisions, links…", "Buscar título, contexto, decisiones, enlaces…")} /></label>}
+    <div className="archived-list">{visible.map(task => <ArchivedTaskItem key={task.id} task={task} language={language} />)}</div>
+    {terms.length > 0 && !visible.length && <p>{t("No archived task matches.", "Ninguna tarea archivada coincide.")}</p>}
+  </section>;
 }
 
 function SheetText({ inputRef, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { inputRef?: RefObject<HTMLTextAreaElement | null> }) {
@@ -109,6 +212,7 @@ export function TaskDetails({ data }: { data: TaskDetailsData }) {
         <button type="button" className="group-link-action" aria-label={`${t("Remove link", "Quitar enlace")} ${index + 1}`} onClick={() => edit({ links: current.values.links.filter((_, i) => i !== index) })}><X size={15} /></button>
       </div>)}</div>
     </section>
+    <Decisions taskId={data.id} decisions={data.decisions || []} language={data.language} />
     <Sessions terminals={data.terminals} language={data.language} collapsible />
     <details className="task-related group-repositories"><summary>{t("Worktrees", "Worktrees")} <span>{data.repositories.length}</span></summary><ul>{data.repositories.map(repo => <li key={repo.id}><span>{repo.name}</span><code>{repo.branch}</code></li>)}</ul><div className="task-related-actions"><button onClick={() => postNative({ type: "add_task_repositories", task_id: data.id })}>{t("Add repositories…", "Agregar repositorios…")}</button><button onClick={() => postNative({ type: "remove_task_repositories", task_id: data.id })}>{t("Remove repositories…", "Quitar repositorios…")}</button></div></details>
     {data.legacy_note?.trim() && <details className="task-legacy"><summary>{t("Previous notes", "Notas anteriores")}</summary><pre>{data.legacy_note}</pre></details>}
@@ -138,6 +242,7 @@ export function ProjectOverview({ data }: { data: ProjectOverviewData }) {
     </article>
     <Sessions terminals={data.terminals} language={data.language} />
     <section className="task-related"><h2>{t("Tasks", "Tareas")}</h2><div className="task-session-list">{data.tasks.map(task => <button key={task.id} onClick={() => postNative({ type: "open_task_details", workspace_id: data.id, task_id: task.id })}><GroupIcon value={task.icon || "layers"} size={16} /><span>{task.title}</span></button>)}</div>{!data.tasks.length && <p>{t("Create a task from the project’s + menu.", "Crea una tarea desde el menú + del proyecto.")}</p>}</section>
+    {(data.archived?.length || 0) > 0 && <ArchivedTasks tasks={data.archived || []} language={data.language} />}
     <section className="task-related"><h2>{t("Repositories", "Repositorios")}</h2><div className="task-session-list">{data.repositories.map(repo => <button key={repo.id} onClick={() => postNative({ type: "open_project_repository", workspace_id: data.id, repository_id: repo.id })}>{repo.name}</button>)}</div></section>
   </div></main>;
 }

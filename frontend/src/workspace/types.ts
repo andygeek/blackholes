@@ -1,11 +1,18 @@
 export interface AppModalState {
-  kind: "remove_project" | "close_terminal" | "remove_task" | "create_project" | "create_task" | "add_repository" | "remove_repository";
+  kind: "remove_project" | "close_terminal" | "rename_terminal" | "agent_section" | "remove_task" | "create_project" | "create_task" | "add_repository" | "remove_repository";
   close_preview?: {
     terminals: { terminalId: string; label: string; state: string; live: boolean }[];
     changes: { path: string; changes: string }[];
     extraFiles: string[];
   };
   terminal_id?: string;
+  /** Current name in a name modal, its length limit and, for a session, its note. */
+  value?: string;
+  value_max?: number;
+  note?: string | null;
+  note_max?: number;
+  note_label?: string;
+  note_placeholder?: string;
   repository_id?: string;
   task_id?: string;
   request_id?: string;

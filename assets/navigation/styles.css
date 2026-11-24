@@ -311,6 +311,23 @@ button:focus-visible {
   background: #3a252b;
 }
 
+/* Pinned sessions: the pin sits beside the X and unpins on click. */
+.pin-button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  cursor: pointer;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--app-accent);
+}
+.pin-button svg { transform: rotate(45deg); }
+.pin-button:hover { color: var(--foreground); background: var(--surface-hover); }
+.terminal-agent-card.is-dormant .agent-name { color: var(--muted); }
+.terminal-agent-card.is-dormant .terminal-provider { opacity: .55; }
+:root[data-theme="light"] .pin-button:hover { color: #111827; background: #e8ecf3; }
+
 .projects-shell, .agents-shell {
   display: flex;
   flex-direction: column;
@@ -678,3 +695,20 @@ button:focus-visible {
 }
 
 .agents-empty { margin: 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+/* Sections of the Agents list. They only group cards; the project tree is unaffected. */
+.agent-section { display: flex; min-width: 0; flex-direction: column; }
+.agent-section-header { display: flex; height: 26px; align-items: center; gap: 2px; margin: 4px var(--sidebar-scroll-right-padding, 8px) 0 8px; padding: 0 2px 0 6px; border-radius: 6px; color: var(--muted); }
+.agent-section-header:hover { background: var(--surface-hover); }
+.agent-section-toggle { display: flex; height: 100%; min-width: 0; flex: 1; align-items: center; gap: 5px; padding: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 650; text-align: left; cursor: pointer; }
+.agent-section-toggle:hover { color: var(--foreground); }
+.agent-section-toggle svg { flex: none; transition: transform 120ms ease; }
+.agent-section-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.agent-section-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-section-count { flex: none; color: var(--subtle); font-size: 11px; font-weight: 500; }
+.agent-section-toggle .agents-summary-dot { position: static; margin-left: 3px; overflow: visible; }
+.agent-section-options { flex: none; opacity: 0; transition: opacity 140ms ease; }
+.agent-section-header:hover .agent-section-options, .agent-section-header:focus-within .agent-section-options { opacity: 1; }
+.agent-section .global-agents { padding-top: 4px; }
+.agent-section-empty { margin: 2px var(--sidebar-scroll-right-padding, 8px) 6px 32px; color: var(--subtle); font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { .agent-section-toggle svg, .agent-section-options { transition: none; } }

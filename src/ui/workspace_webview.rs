@@ -79,6 +79,14 @@ pub enum WorkspaceCommand {
     ConfirmCloseTerminal {
         terminal_id: uuid::Uuid,
     },
+    /// Submits the open session or section name modal. For a session, an empty name
+    /// returns it to the titles its agent sets.
+    SubmitNameModal {
+        request_id: uuid::Uuid,
+        name: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
     ConfirmRemoveTask {
         task_id: uuid::Uuid,
     },
@@ -101,6 +109,9 @@ pub enum WorkspaceCommand {
     },
     SaveTaskDetails { task_id: uuid::Uuid, request_id: String, patch: crate::services::task_details::TaskDetailsPatch },
     TaskDetailsDirty { task_id: uuid::Uuid, dirty: bool },
+    AddTaskDecision { task_id: uuid::Uuid, text: String, #[serde(default)] url: Option<String> },
+    RemoveTaskDecision { task_id: uuid::Uuid, decision_id: uuid::Uuid },
+    DeleteArchivedTask { task_id: uuid::Uuid },
     AddTaskRepositories { task_id: uuid::Uuid },
     RemoveTaskRepositories { task_id: uuid::Uuid },
     FocusTerminal { terminal_id: uuid::Uuid },

@@ -254,10 +254,9 @@ impl TaskService {
         let pull_request_url = super::task_details::link(request.pull_request_url.clone(), "Pull request link")?;
         let external_task_url = super::task_details::link(request.external_task_url.clone(), "External task link")?;
         let links = super::task_details::validate_links(request.links.clone())?;
+        // A task without repositories is a plain folder with its context: for
+        // conversations, research or support that never touch a branch.
         let unique_ids: HashSet<_> = request.repository_ids.iter().copied().collect();
-        if unique_ids.is_empty() {
-            bail!("Choose at least one repository for the task");
-        }
         if unique_ids.len() != request.repository_ids.len() {
             bail!("Choose each repository once");
         }
@@ -291,7 +290,9 @@ impl TaskService {
             Some(requested) => requested.trim().to_string(),
             None => normalize_branch_name(title),
         };
-        validate_branch(&repositories[0].path, &branch)?;
+        if let Some(first) = repositories.first() {
+            validate_branch(&first.path, &branch)?;
+        }
 
         let project_directory = format!(
             "{}-{}",
@@ -364,6 +365,7 @@ impl TaskService {
             sessions: vec![],
             created_at: now,
             updated_at: now,
+            decisions: Vec::new(),
         };
         if let Err(error) = self.repair_task_files(workspace, &task) {
             rollback_worktrees(&created);
@@ -382,10 +384,12 @@ impl TaskService {
         task: &mut ProjectTask,
         request: AddTaskRepositoriesRequest,
     ) -> Result<()> {
+        // A task created without repositories gets its branch from its title
+        // when the first repository is added.
         let branch = task
             .branch()
-            .context("The task does not have a branch")?
-            .to_string();
+            .map(str::to_string)
+            .unwrap_or_else(|| normalize_branch_name(&task.title));
         let current: HashSet<_> = task
             .repositories
             .iter()
@@ -1344,7 +1348,7 @@ fn branch_is_checked_out(repository: &Path, branch: &str) -> bool {
     worktrees.lines().any(|line| line.trim() == expected)
 }
 
-fn normalize_branch_name(value: &str) -> String {
+pub fn normalize_branch_name(value: &str) -> String {
     let mut output = String::new();
     let mut separator = false;
     for character in value.trim().to_lowercase().chars() {

@@ -89,6 +89,7 @@ impl Fixture {
             sessions: vec![],
             created_at: now,
             updated_at: now,
+            decisions: vec![],
         };
         let service = TaskService {
             managed_root: managed,
@@ -111,6 +112,9 @@ impl Fixture {
                 repository_id: None,
                 agent: AgentKind::Codex,
                 label: "Agent".into(),
+                custom_label: None,
+                section_id: None,
+                note: None,
                 cwd: self.task.worktree_root_path.clone(),
                 state,
                 codex_session: Some(CodexSession {
@@ -601,6 +605,15 @@ fn task_record_and_session_result_are_saved_atomically_in_temporary_database() {
         .unwrap();
     let database = Database::open(&paths).unwrap();
     database.upsert_task(&f.task).unwrap();
+    database.edit_task_metadata(f.task.id, |task| {
+        task.decisions.push(crate::model::TaskDecision {
+            id: Uuid::new_v4(), text: "QA moved to qa-iac".into(), url: None, created_at: chrono::Utc::now(),
+        });
+        Ok(())
+    }).unwrap();
+    // A session update carries an older snapshot; recorded decisions must survive it.
+    database.upsert_task(&f.task).unwrap();
+    assert_eq!(database.all_tasks().unwrap()[0].decisions.len(), 1);
     let blocked = CloseTaskResult::blocked(f.task.id, "test blocker");
     database.save_task_closure(&blocked).unwrap();
     assert_eq!(database.all_tasks().unwrap().len(), 1);
@@ -626,6 +639,15 @@ fn task_record_and_session_result_are_saved_atomically_in_temporary_database() {
         serde_json::from_str(&database.setting(&key).unwrap().unwrap()).unwrap();
     assert_eq!(saved["status"], "deleted");
     assert_eq!(saved["sessions"].as_array().unwrap().len(), 2);
+    // Closing archives the task with its context, decisions and sessions.
+    let archived = database.archived_tasks(None).unwrap();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].task.id, f.task.id);
+    assert_eq!(archived[0].task.decisions.len(), 1);
+    assert_eq!(archived[0].sessions.len(), 2);
+    assert!(database.archived_task(f.task.id).unwrap().is_some());
+    assert!(database.delete_archived_task(f.task.id).unwrap());
+    assert!(database.archived_tasks(None).unwrap().is_empty());
 }
 
 #[test]

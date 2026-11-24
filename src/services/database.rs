@@ -1,5 +1,6 @@
 use crate::model::{
-    AgentKind, AppSession, DEFAULT_PROJECT_ICON, DEFAULT_TASK_ICON, ProjectTask, Repository,
+    AgentKind, AppSession, ArchivedSession, ArchivedTask, DEFAULT_PROJECT_ICON, DEFAULT_TASK_ICON,
+    ProjectTask, Repository,
     SessionState, TaskRepository, TaskSession, Workspace, WorkspaceColor, WorkspaceLayout,
 };
 use crate::paths::AppPaths;
@@ -46,6 +47,14 @@ impl Database {
              );
              CREATE INDEX IF NOT EXISTS project_tasks_workspace_idx
                 ON project_tasks(workspace_id, sort_order);
+             CREATE TABLE IF NOT EXISTS archived_tasks (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                archived_at TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS archived_tasks_workspace_idx
+                ON archived_tasks(workspace_id, archived_at);
              CREATE TABLE IF NOT EXISTS local_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_type TEXT NOT NULL,
@@ -211,6 +220,7 @@ impl Database {
             saved.pull_request_url = current.pull_request_url;
             saved.external_task_url = current.external_task_url;
             saved.links = current.links;
+            saved.decisions = current.decisions;
             saved.updated_at = saved.updated_at.max(current.updated_at);
         }
         let task = &saved;
@@ -291,12 +301,82 @@ impl Database {
             params![format!("task-closure:{}", result.task_id), serde_json::to_string(result)?],
         )?;
         if result.status == "deleted" {
+            // Closing frees worktrees and terminals; the task's knowledge is archived,
+            // in the same transaction, so a failed archive keeps the live record.
+            let payload: Option<String> = transaction.query_row(
+                "SELECT payload FROM project_tasks WHERE id = ?1", [result.task_id.to_string()], |row| row.get(0),
+            ).optional()?;
+            if let Some(payload) = payload {
+                let task: ProjectTask = serde_json::from_str(&payload)?;
+                let archived = ArchivedTask {
+                    archived_at: Utc::now(),
+                    sessions: result.sessions.iter().map(|session| ArchivedSession {
+                        agent: session.agent,
+                        session_id: session.session_id.clone(),
+                    }).collect(),
+                    task,
+                };
+                transaction.execute(
+                    "INSERT INTO archived_tasks(id, workspace_id, payload, archived_at)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(id) DO UPDATE SET workspace_id = excluded.workspace_id,
+                        payload = excluded.payload, archived_at = excluded.archived_at",
+                    params![
+                        archived.task.id.to_string(),
+                        archived.task.workspace_id.to_string(),
+                        serde_json::to_string(&archived)?,
+                        archived.archived_at.to_rfc3339(),
+                    ],
+                )?;
+                insert_event(&transaction, "task.archived", result.task_id,
+                    &serde_json::json!({ "id": result.task_id }))?;
+            }
             transaction.execute("DELETE FROM project_tasks WHERE id = ?1", [result.task_id.to_string()])?;
             insert_event(&transaction, "task.removed", result.task_id,
                 &serde_json::json!({ "id": result.task_id }))?;
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Archived tasks, newest first; all projects when `workspace_id` is None.
+    pub fn archived_tasks(&self, workspace_id: Option<Uuid>) -> Result<Vec<ArchivedTask>> {
+        let connection = self.connection.lock();
+        let rows = if let Some(workspace_id) = workspace_id {
+            let mut statement = connection.prepare(
+                "SELECT payload FROM archived_tasks WHERE workspace_id = ?1 ORDER BY archived_at DESC",
+            )?;
+            statement.query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            let mut statement = connection.prepare(
+                "SELECT payload FROM archived_tasks ORDER BY archived_at DESC",
+            )?;
+            statement.query_map([], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        // A record that no longer parses is skipped rather than hiding every other one.
+        Ok(rows.into_iter().filter_map(|json| serde_json::from_str(&json).ok()).collect())
+    }
+
+    pub fn archived_task(&self, task_id: Uuid) -> Result<Option<ArchivedTask>> {
+        let connection = self.connection.lock();
+        let payload: Option<String> = connection.query_row(
+            "SELECT payload FROM archived_tasks WHERE id = ?1", [task_id.to_string()], |row| row.get(0),
+        ).optional()?;
+        payload.map(|json| serde_json::from_str(&json).map_err(Into::into)).transpose()
+    }
+
+    /// Permanently removes an archived task. Live tasks are never touched here.
+    pub fn delete_archived_task(&self, task_id: Uuid) -> Result<bool> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let removed = transaction.execute("DELETE FROM archived_tasks WHERE id = ?1", [task_id.to_string()])?;
+        if removed > 0 {
+            insert_event(&transaction, "task.archive_deleted", task_id, &serde_json::json!({ "id": task_id }))?;
+        }
+        transaction.commit()?;
+        Ok(removed > 0)
     }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
@@ -565,6 +645,7 @@ fn read_legacy_tasks(connection: &Connection) -> Result<Vec<ProjectTask>> {
                 sessions: sessions.remove(&id_text).unwrap_or_default(),
                 created_at: parse_date(row.get(8)?),
                 updated_at: parse_date(row.get(9)?),
+                decisions: Vec::new(),
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

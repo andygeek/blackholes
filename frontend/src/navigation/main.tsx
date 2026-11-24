@@ -2,11 +2,19 @@ import { StrictMode, createContext, useContext, useEffect, useLayoutEffect, useR
 import { createRoot } from "react-dom/client";
 import { GroupIcon } from "../shared/GroupIcon";
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronRight,
   FilePenLine,
+  FolderInput,
+  FolderMinus,
+  FolderPlus,
   GitBranch,
   ListTodo,
   MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
   NotebookPen,
   ChevronsUp,
   Plus,
@@ -43,6 +51,20 @@ interface Copy {
   toggle: string;
   options: string;
   closeTerminal: string;
+  rename: string;
+  newSection: string;
+  newSectionWithSession: string;
+  moveToSection: string;
+  removeFromSection: string;
+  renameSection: string;
+  deleteSection: string;
+  moveSectionUp: string;
+  moveSectionDown: string;
+  emptySection: string;
+  pin: string;
+  unpin: string;
+  pinned: string;
+  resumeSession: string;
   newTerminal: string;
   newTask: string;
   refreshProject: string;
@@ -67,11 +89,19 @@ interface TerminalItem {
   group_title: string | null;
   group_icon: string | null;
   group_color: string | null;
+  repository_label?: string | null;
+  section_id?: string | null;
+  note?: string | null;
+  /** The user named the session; its label is shown exactly as typed. */
+  custom_label?: boolean;
   needs_attention: boolean;
   attention_kind: NoticeKind | null;
   attention_rank: number | null;
   working: boolean;
   background_tasks?: number;
+  pinned?: boolean;
+  pin_rank?: number | null;
+  live?: boolean;
 }
 
 interface RepositoryItem {
@@ -120,6 +150,7 @@ interface NavigationState {
   agents_section_collapsed: boolean;
   projects_section_collapsed: boolean;
   terminal_agents: TerminalItem[];
+  agent_sections?: AgentSectionItem[];
   agent_order?: string[];
   agents?: LaunchAgent[];
   projects: ProjectItem[];
@@ -128,6 +159,22 @@ interface NavigationState {
 interface LaunchAgent {
   id: string;
   label: string;
+}
+
+/** A named section of the Agents list; it never changes the project tree. */
+interface AgentSectionItem {
+  id: string;
+  name: string;
+  collapsed: boolean;
+}
+
+/** Places `ids` in the slots their members occupy in `order`, as the app does when saving. */
+function mergeOrder(order: string[], ids: string[]) {
+  const requested = [...new Set(ids)];
+  const wanted = new Set(requested);
+  let next = 0;
+  const merged = order.map(id => wanted.has(id) ? requested[next++] : id).filter((id): id is string => id !== undefined);
+  return [...merged, ...requested.slice(next)];
 }
 
 /** The agents the user works with, chosen in Settings: each has an entry in the launch menus. */
@@ -164,6 +211,20 @@ const fallbackCopy: Copy = {
   toggle: "Expandir o contraer",
   options: "Opciones",
   closeTerminal: "Cerrar terminal",
+  rename: "Renombrar",
+  newSection: "Nueva sección",
+  newSectionWithSession: "Nueva sección…",
+  moveToSection: "Mover a {name}",
+  removeFromSection: "Quitar de {name}",
+  renameSection: "Renombrar sección",
+  deleteSection: "Eliminar sección",
+  moveSectionUp: "Subir sección",
+  moveSectionDown: "Bajar sección",
+  emptySection: "Sin sesiones",
+  pin: "Fijar arriba",
+  unpin: "Desfijar",
+  pinned: "Fijada",
+  resumeSession: "Detenida · clic para reanudar",
   newTerminal: "Nueva terminal",
   newTask: "Agregar tarea",
   refreshProject: "Buscar repositorios nuevos",
@@ -206,34 +267,66 @@ function pendingNotice(terminals: TerminalItem[]): NoticeKind | null {
 
 const taskTerminals = (task: TaskItem) => [...task.terminals, ...task.repositories.flatMap(repository => repository.terminals)];
 
-function TerminalAgentRow({ terminal, copy, onOpen }: { terminal: TerminalItem; copy: Copy; onOpen(terminal: TerminalItem): void }) {
-  const status = terminalStatus(terminal, copy);
-  const preview = terminal.label === terminal.provider_label
-    ? terminal.provider_label
-    : `${terminal.provider_label} · ${terminal.label}`;
+/** The session's own name: the user's name or the agent's title. The provider is left out because
+ * the icon already shows it, and so are the status glyphs agents put first (✳, a spinner). A title
+ * that only names the provider, the task or the project is no name. */
+function sessionName(terminal: TerminalItem) {
+  if (terminal.custom_label) return terminal.label;
+  const prefix = `${terminal.provider_label} · `;
+  const name = (terminal.label.startsWith(prefix) ? terminal.label.slice(prefix.length) : terminal.label)
+    .replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  return [terminal.provider_label, terminal.group_title, terminal.project_label].includes(name) ? "" : name;
+}
+
+/** Where the session runs: project or project/task, then its repository. */
+const sessionPlace = (terminal: TerminalItem) =>
+  `${terminal.context}${terminal.repository_label ? ` · ${terminal.repository_label}` : ""}`;
+
+function TerminalAgentRow({ terminal, copy, onOpen, onMenu }: {
+  terminal: TerminalItem; copy: Copy; onOpen(terminal: TerminalItem): void; onMenu(anchor: DOMRect, terminal: TerminalItem): void;
+}) {
+  // Only pinned or sectioned sessions are listed while stopped; a click resumes them.
+  const dormant = terminal.live === false && !terminal.needs_attention;
+  const status = dormant ? copy.resumeSession : terminalStatus(terminal, copy);
+  const name = sessionName(terminal);
+  const place = sessionPlace(terminal);
+  const description = [name, place, terminal.provider_label, terminal.note].filter(Boolean).join(" · ");
+  const placeLabel = <>
+    {terminal.group_title ? <>
+      {terminal.project_label}/<span className="agent-group-icon" style={{ color: terminal.group_color || undefined }}>
+        <GroupIcon value={terminal.group_icon || "layers"} size={name ? 11 : 12} />
+      </span>{terminal.group_title}
+    </> : terminal.context}
+    {terminal.repository_label && ` · ${terminal.repository_label}`}
+  </>;
+  // Without a name, the place moves up so the card never shows the provider in words.
+  const subtitle = name ? <>{placeLabel}{dormant && ` · ${copy.resumeSession}`}</> : dormant ? copy.resumeSession : null;
   return (
-    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}${terminal.needs_attention ? " needs-attention" : runsInBackground(terminal) ? " has-background" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}`}>
+    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}${terminal.needs_attention ? " needs-attention" : runsInBackground(terminal) ? " has-background" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}${terminal.pinned ? " is-pinned" : ""}${dormant ? " is-dormant" : ""}`}
+      onContextMenu={event => {
+        event.preventDefault();
+        onMenu(new DOMRect(event.clientX, event.clientY, 0, 0), terminal);
+      }}>
       <button type="button" className="agent-open"
         aria-current={terminal.selected ? "true" : undefined}
-        aria-label={`${terminal.context} · ${preview}${status ? ` · ${status}` : ""}`}
-        title={`${terminal.context}\n${preview}${status ? `\n${status}` : ""}`}
+        aria-label={`${description}${status ? ` · ${status}` : ""}`}
+        title={`${name ? `${name}\n` : ""}${place}\n${terminal.provider_label}${terminal.note ? `\n${terminal.note}` : ""}${status ? `\n${status}` : ""}`}
         onClick={() => onOpen(terminal)}>
         <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working} background={runsInBackground(terminal)} large>
           <TerminalProviderIcon provider={terminal.agent} />
         </NavigationStatusIcon>
         <span className="agent-copy">
-          <span className="agent-name-line"><span className="agent-name">
-            {terminal.group_title ? <>
-              {terminal.project_label}/<span className="agent-group-icon" style={{ color: terminal.group_color || undefined }}>
-                <GroupIcon value={terminal.group_icon || "layers"} size={12} />
-              </span>{terminal.group_title}
-            </> : terminal.context}
-          </span></span>
-          <span className="agent-preview">{preview}</span>
+          <span className="agent-name-line"><span className="agent-name">{name || placeLabel}</span></span>
+          {subtitle && <span className="agent-preview">{subtitle}</span>}
         </span>
       </button>
+      {terminal.pinned && <button type="button" className="pin-button"
+        aria-label={`${copy.unpin}: ${description}`} title={`${copy.pinned} · ${copy.unpin}`}
+        onClick={() => postNative({ type: "set_terminal_pinned", terminal_id: terminal.id, pinned: false })}>
+        <Pin size={13} />
+      </button>}
       <button type="button" className="remove-button"
-        aria-label={`${copy.closeTerminal}: ${terminal.context} · ${preview}`}
+        aria-label={`${copy.closeTerminal}: ${description}`}
         title={copy.closeTerminal}
         onClick={() => postNative({ type: "close_terminal", terminal_id: terminal.id })}>
         <X size={14} />
@@ -641,17 +734,85 @@ function NavigationApp() {
     (agentRanks.get(`terminal:${a.id}`) ?? Number.MAX_SAFE_INTEGER) - (agentRanks.get(`terminal:${b.id}`) ?? Number.MAX_SAFE_INTEGER));
   const agentsNotice = agentsCollapsed ? pendingNotice(state?.terminal_agents || []) : null;
   const agentsInBackground = agentsCollapsed && !agentsNotice && anyInBackground(state?.terminal_agents || []);
-  const agentItems = [...manualAgentOrder].sort((a, b) =>
-    Number(b.needs_attention) - Number(a.needs_attention)
-      || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER)
-        : Number(b.working) - Number(a.working))
-  ).map(terminal => ({
-    id: `terminal:${terminal.id}`, label: `${terminal.context} · ${terminal.provider_label}`,
-    reorderable: !terminal.needs_attention,
-    reorderGroup: terminal.working ? "working" : "idle",
-    statusLabel: terminal.attention_kind === "completed" ? copy.responseReady : copy.needsAttention,
-    content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} />,
-  }));
+  const sections = state?.agent_sections || [];
+  const sectionIds = new Set(sections.map(section => section.id));
+  // A session whose section was just removed shows without one until the next hydrate.
+  const sectionOf = (terminal: TerminalItem) => terminal.section_id && sectionIds.has(terminal.section_id) ? terminal.section_id : null;
+  const openAgentMenu = (anchor: DOMRect, terminal: TerminalItem) => {
+    const current = sections.find(section => section.id === sectionOf(terminal));
+    openMenu(anchor, [terminal.pinned
+      ? { label: copy.unpin, icon: PinOff, command: { type: "set_terminal_pinned", terminal_id: terminal.id, pinned: false } }
+      : { label: copy.pin, icon: Pin, command: { type: "set_terminal_pinned", terminal_id: terminal.id, pinned: true } },
+      { label: copy.rename, icon: Pencil, command: { type: "rename_terminal", terminal_id: terminal.id } },
+      ...sections.filter(section => section !== current).map(section => ({
+        label: copy.moveToSection.replace("{name}", section.name), icon: FolderInput,
+        command: { type: "set_terminal_section", terminal_id: terminal.id, section_id: section.id },
+      })),
+      ...(current ? [{ label: copy.removeFromSection.replace("{name}", current.name), icon: FolderMinus,
+        command: { type: "set_terminal_section", terminal_id: terminal.id, section_id: null } }] : []),
+      { label: copy.newSectionWithSession, icon: FolderPlus, command: { type: "new_agent_section", terminal_id: terminal.id } },
+      { label: copy.closeTerminal, icon: X, danger: true, command: { type: "close_terminal", terminal_id: terminal.id } }]);
+  };
+  const openSectionMenu = (anchor: DOMRect, section: AgentSectionItem, index: number) => openMenu(anchor, [
+    { label: copy.renameSection, icon: Pencil, command: { type: "rename_agent_section", section_id: section.id } },
+    ...(index > 0 ? [{ label: copy.moveSectionUp, icon: ArrowUp, command: { type: "move_agent_section", section_id: section.id, offset: -1 } }] : []),
+    ...(index < sections.length - 1 ? [{ label: copy.moveSectionDown, icon: ArrowDown, command: { type: "move_agent_section", section_id: section.id, offset: 1 } }] : []),
+    { label: copy.deleteSection, icon: Trash2, danger: true, command: { type: "delete_agent_section", section_id: section.id } },
+  ]);
+  const setSectionFolded = (section: AgentSectionItem, collapsed: boolean) => {
+    setMenu(null);
+    setState(previous => previous ? { ...previous, agent_sections: (previous.agent_sections || []).map(current =>
+      current.id === section.id ? { ...current, collapsed } : current) } : previous);
+    postNative({ type: "set_agent_section_collapsed", section_id: section.id, collapsed });
+  };
+  /** Cards of one block (no section, or one section), sorted and reordered on their own. */
+  const agentBlock = (key: string, terminals: TerminalItem[]) => {
+    const members = new Set(terminals.map(terminal => terminal.id));
+    // Pinned sessions stay on top in pin order; their notices still show in their own colors.
+    const pinnedAgents = terminals.filter(terminal => terminal.pinned)
+      .sort((a, b) => (a.pin_rank ?? Number.MAX_SAFE_INTEGER) - (b.pin_rank ?? Number.MAX_SAFE_INTEGER));
+    const unpinnedOrder = manualAgentOrder.filter(terminal => !terminal.pinned && members.has(terminal.id));
+    const unpinnedAgents = [...unpinnedOrder].sort((a, b) =>
+      Number(b.needs_attention) - Number(a.needs_attention)
+        || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER)
+          : Number(b.working) - Number(a.working)));
+    const items = [...pinnedAgents, ...unpinnedAgents].map(terminal => ({
+      id: `terminal:${terminal.id}`, label: [sessionName(terminal), sessionPlace(terminal)].filter(Boolean).join(" · "),
+      reorderable: terminal.pinned || !terminal.needs_attention,
+      reorderGroup: terminal.pinned ? "pinned" : terminal.working ? "working" : "idle",
+      statusLabel: terminal.attention_kind === "completed" ? copy.responseReady : copy.needsAttention,
+      content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} onMenu={openAgentMenu} />,
+    }));
+    const pinnedIds = pinnedAgents.map(terminal => `terminal:${terminal.id}`);
+    return <SortableAgentList key={key} items={items} disabled={modalVisible} language={state?.language || "es"}
+      onReorder={ids => {
+        if (ids.some(id => pinnedIds.includes(id)) && ids.filter(id => pinnedIds.includes(id)).join() !== pinnedIds.join()) {
+          const pinned = ids.filter(id => pinnedIds.includes(id)).map(id => id.replace(/^terminal:/, ""));
+          setState(previous => {
+            if (!previous) return previous;
+            const order = mergeOrder(previous.terminal_agents.filter(terminal => terminal.pinned)
+              .sort((a, b) => (a.pin_rank ?? Number.MAX_SAFE_INTEGER) - (b.pin_rank ?? Number.MAX_SAFE_INTEGER))
+              .map(terminal => terminal.id), pinned);
+            return { ...previous, terminal_agents: previous.terminal_agents.map(terminal => ({
+              ...terminal, pin_rank: terminal.pinned ? order.indexOf(terminal.id) : terminal.pin_rank,
+            })) };
+          });
+          postNative({ type: "reorder_pinned", ids: pinned });
+          return;
+        }
+        ids = ids.filter(id => !pinnedIds.includes(id));
+        const pending = new Set(unpinnedOrder.filter(terminal => terminal.needs_attention).map(terminal => `terminal:${terminal.id}`));
+        const reordered = ids.filter(id => !pending.has(id));
+        let index = 0;
+        // Notification priority never overwrites the saved positions of pending agents.
+        const order = unpinnedOrder.map(terminal =>
+          pending.has(`terminal:${terminal.id}`) ? `terminal:${terminal.id}` : reordered[index++]);
+        setState(previous => previous ? { ...previous, agent_order: mergeOrder(previous.agent_order || [], order) } : previous);
+        postNative({ type: "reorder_agents", ids: order });
+      }} />;
+  };
+  const agentTerminals = state?.terminal_agents || [];
+  const unsectioned = agentTerminals.filter(terminal => !sectionOf(terminal));
 
   return (
     <aside className="sidebar" aria-label="Blackholes">
@@ -674,23 +835,52 @@ function NavigationApp() {
               <span>{agentsLabel}</span>
               {(agentsNotice || agentsInBackground) && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${agentsNotice === "input-required" ? " is-awaiting-input" : agentsInBackground ? " has-background" : ""}`} />}
             </button>
+            <span className="section-header__actions">
+              <button className="icon-button" type="button" aria-label={copy.newSection} title={copy.newSection}
+                onClick={() => {
+                  if (agentsCollapsed) setSectionCollapsed("agents", false);
+                  postNative({ type: "new_agent_section", terminal_id: null });
+                }}>
+                <FolderPlus size={15} />
+              </button>
+            </span>
           </header>
           <SidebarScrollArea id="sidebar-agents-content" hidden={agentsCollapsed}
             label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
-          {agentItems.length === 0 && <p className="agents-empty">{state?.language === "en"
+          {agentTerminals.length === 0 && sections.length === 0 && <p className="agents-empty">{state?.language === "en"
             ? "No active agents. Open a saved session from Projects or start one with +."
             : "No hay agentes activos. Abre una sesión guardada desde Proyectos o inicia una con +."}</p>}
-          <SortableAgentList items={agentItems} disabled={modalVisible} language={state?.language || "es"}
-            onReorder={ids => {
-              const pending = new Set(manualAgentOrder.filter(terminal => terminal.needs_attention).map(terminal => `terminal:${terminal.id}`));
-              const reordered = ids.filter(id => !pending.has(id));
-              let index = 0;
-              // Notification priority never overwrites the saved positions of pending agents.
-              const order = manualAgentOrder.map(terminal =>
-                pending.has(`terminal:${terminal.id}`) ? `terminal:${terminal.id}` : reordered[index++]);
-              setState(previous => previous ? { ...previous, agent_order: order } : previous);
-              postNative({ type: "reorder_agents", ids: order });
-            }} />
+          {unsectioned.length > 0 && agentBlock("unsectioned", unsectioned)}
+          {sections.map((section, index) => {
+            const members = agentTerminals.filter(terminal => sectionOf(terminal) === section.id);
+            const notice = section.collapsed ? pendingNotice(members) : null;
+            const background = section.collapsed && !notice && anyInBackground(members);
+            return <div key={section.id} className="agent-section">
+              <div className="agent-section-header" onContextMenu={event => {
+                event.preventDefault();
+                openSectionMenu(new DOMRect(event.clientX, event.clientY, 0, 0), section, index);
+              }}>
+                <button type="button" className="agent-section-toggle" aria-expanded={!section.collapsed}
+                  aria-label={`${section.name} · ${members.length}${notice ? ` · ${noticeLabel(notice, copy)}` : ""}`}
+                  disabled={modalVisible} onClick={() => setSectionFolded(section, !section.collapsed)}>
+                  <ChevronRight size={13} aria-hidden="true" />
+                  <span className="agent-section-name">{section.name}</span>
+                  <span className="agent-section-count" aria-hidden="true">{members.length}</span>
+                  {(notice || background) && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${notice === "input-required" ? " is-awaiting-input" : background ? " has-background" : ""}`} />}
+                </button>
+                <button type="button" className="row-action agent-section-options" aria-label={`${copy.options}: ${section.name}`} title={copy.options}
+                  disabled={modalVisible} onClick={event => {
+                    event.stopPropagation();
+                    openSectionMenu(event.currentTarget.getBoundingClientRect(), section, index);
+                  }}>
+                  <MoreHorizontal size={14} />
+                </button>
+              </div>
+              {!section.collapsed && (members.length
+                ? agentBlock(section.id, members)
+                : <p className="agent-section-empty">{copy.emptySection}</p>)}
+            </div>;
+          })}
           </SidebarScrollArea>
         </section>
         <section className="projects-shell" aria-label={copy.projects}>

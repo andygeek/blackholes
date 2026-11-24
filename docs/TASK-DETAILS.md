@@ -59,7 +59,9 @@ clients, with their previous argument/result key names:
 | `start_worktree_group_agents` | `groups:[{groupId,prompt?,agent?,model?}]`, optional batch `agent` / `model` |
 | `add_worktree_group_repositories` / `remove_worktree_group_repositories` | `groupId`, repository IDs and existing branch/file options |
 | `open_worktree_group` / `notify_worktree_group_ready` | `groupId`, existing navigation/notification options |
-| `close_worktree_group` / `close_worktree_groups` | `groupId` / `groupIds`, `confirm:true`, existing terminal/file/branch policies |
+| `close_worktree_group` / `close_worktree_groups` | `groupId` / `groupIds`, `confirm:true`, existing terminal/file/branch policies. Closing archives the group |
+| `add_worktree_group_decision` / `remove_worktree_group_decision` | `groupId`, `text`, optional `url` / `groupId`, `decisionId` |
+| `list_archived_worktree_groups` / `get_archived_worktree_group` | Optional `projectId`, `limit` / `groupId`; archived groups newest first with their session IDs |
 
 Read `get_worktree_group` before editing, then patch only fields that changed:
 
@@ -88,6 +90,29 @@ to 32 Unicode characters. HTML, SVG and remote images are not icon inputs.
 Titles allow 500 characters; documents allow 200,100 characters (enough
 to preserve both previous 100,000-character fields). Whitespace-only optional
 text becomes null.
+
+## Decisions, archive and groups without repositories
+
+A group keeps up to 200 **decisions**, each with text (up to 2,000 characters),
+an optional HTTP(S) link to where it was taken and its date. Decisions are kept
+as written: they are not part of the description revision, so adding one never
+conflicts with a draft, and session/worktree persistence cannot drop them. They
+appear in the generated `.blackholes-task-details.md` under **Decisions**.
+
+**Closing archives the group.** Terminals, worktrees and the group folder are
+still removed as before. In the same transaction that removes the live record,
+its last details, links, decisions, repositories/branches and the Claude/Codex
+session IDs are stored in the `archived_tasks` table. A failed archive keeps the
+live record. The project page lists archived groups under **Archived**, with a
+search box once there are several, and each entry can be deleted permanently.
+`search_worktree_groups` includes archived groups after live ones
+(`archived:true`) unless `includeArchived:false` is passed. Groups closed before
+this change were deleted and are not in the archive.
+
+A group can be created **without repositories**: in the app by creating a task
+with none selected, or through MCP with `withoutRepositories:true`. It is a folder
+with its generated context, links and decisions. Adding repositories later uses a
+branch named from the title.
 
 ## Compatibility and generated files
 

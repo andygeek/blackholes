@@ -60,8 +60,9 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
     setPreparations(current => ({ ...current, [id]: { ...(current[id] || emptyPreparation()), ...values } }));
   };
   const send = (checkOnly: boolean) => {
-    if (pending || !selected.length || (checkOnly ? !branch.trim() : !title.trim())) return;
-    if (source !== "current" && !branch.trim()) {
+    // With no repository selected, the task is created as a folder with its context only.
+    if (pending || (checkOnly ? !selected.length || !branch.trim() : !title.trim())) return;
+    if (selected.length && source !== "current" && !branch.trim()) {
       setBranchOptionsOpen(true);
       setError(tr("Enter the local or remote branch to use.", "Escribe la rama local o remota que quieres usar."));
       return;
@@ -158,16 +159,16 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
               </div>;
             })}
             {!visibleRepositories.length && <div className="task-repository-empty" role="status">
-              {repositories.length ? <><Search size={22} aria-hidden="true" /><strong>{tr("No repositories found", "No se encontraron repositorios")}</strong><span>{tr("Try another name or clear the search.", "Prueba otro nombre o limpia la búsqueda.")}</span></> : <><FolderGit2 size={22} aria-hidden="true" /><span>{tr("Add repositories to the project before creating a task.", "Agrega repositorios al proyecto antes de crear una tarea.")}</span></>}
+              {repositories.length ? <><Search size={22} aria-hidden="true" /><strong>{tr("No repositories found", "No se encontraron repositorios")}</strong><span>{tr("Try another name or clear the search.", "Prueba otro nombre o limpia la búsqueda.")}</span></> : <><FolderGit2 size={22} aria-hidden="true" /><span>{tr("This project has no repositories. The task is created without worktrees.", "Este proyecto no tiene repositorios. La tarea se crea sin worktrees.")}</span></>}
             </div>}
           </div>
         </div>
         {!!repositories.length && <div className="task-repository-status" role="status">
-          <span>{filtered ? tr(`${visibleRepositories.length} of ${repositories.length} repositories`, `${visibleRepositories.length} de ${repositories.length} repositorios`) : tr("Select the repositories for this task.", "Selecciona los repositorios para esta tarea.")}</span>
+          <span>{filtered ? tr(`${visibleRepositories.length} of ${repositories.length} repositories`, `${visibleRepositories.length} de ${repositories.length} repositorios`) : selected.length ? tr("Select the repositories for this task.", "Selecciona los repositorios para esta tarea.") : tr("None selected: the task is a folder with its context, without worktrees. You can add repositories later.", "Ninguno seleccionado: la tarea será una carpeta con su contexto, sin worktrees. Puedes agregar repositorios después.")}</span>
           {!!hiddenSelectedCount && <span>{tr(`${hiddenSelectedCount} selected outside this search`, `${hiddenSelectedCount} seleccionados fuera de esta búsqueda`)}</span>}
         </div>}
       </section>
-      <details className="task-branch-options" open={branchOptionsOpen} onToggle={event => setBranchOptionsOpen(event.currentTarget.open)}>
+      {selected.length > 0 && <details className="task-branch-options" open={branchOptionsOpen} onToggle={event => setBranchOptionsOpen(event.currentTarget.open)}>
         <summary tabIndex={pending ? -1 : 0} onClick={event => { if (pending) event.preventDefault(); }}>
           <ChevronRight size={14} aria-hidden="true" /><strong>{tr("Branch options", "Opciones de rama")}</strong>
           <span title={branch || undefined}>{branch.trim() || (source === "current" ? tr("Automatic name", "Nombre automático") : branchSources.find(option => option.value === source)?.label)}{action === "recreate" && source === "current" ? tr(" · Recreate", " · Recrear") : replaceDivergent && source === "remote" ? tr(" · Replace local", " · Reemplazar local") : ""}</span>
@@ -215,13 +216,14 @@ export function CreateTaskForm({ modal, language, onDismiss, onBusyChange }: {
             </small>;
           })}</div>}
         </div>
-      </details>
+      </details>}
     </fieldset>
     {error && <p className="app-modal__error" role="alert">{error}</p>}
     <footer>
       <button type="button" className="app-modal__cancel" disabled={pending !== null} onClick={onDismiss}>{tr("Cancel", "Cancelar")}</button>
-      <button type="submit" className="app-modal__primary" disabled={pending !== null || !title.trim() || !selected.length}>
-        {pending === "create" ? tr("Preparing worktrees…", "Preparando espacios…") : tr("Create task", "Crear tarea")}
+      <button type="submit" className="app-modal__primary" disabled={pending !== null || !title.trim()}>
+        {pending === "create" ? selected.length ? tr("Preparing worktrees…", "Preparando espacios…") : tr("Creating…", "Creando…")
+          : selected.length ? tr("Create task", "Crear tarea") : tr("Create task without repositories", "Crear tarea sin repositorios")}
       </button>
     </footer>
   </form>;

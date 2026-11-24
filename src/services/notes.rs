@@ -77,6 +77,22 @@ const PREVIOUS_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolate
 - Patch only changed fields; omitted fields are preserved and null clears a field. Read `get_task` and pass its `detailsRevision` as `expectedRevision` when editing from a snapshot.
 - Keep the objective and acceptance criteria concise and current. The task details Markdown is generated; do not edit it directly.
 "#;
+const GROUP_PROJECT_TASK_INSTRUCTIONS_V1: &str = r#"This directory is an isolated Blackholes Worktree Group containing one or more repository worktrees and branches.
+
+## Required context
+
+- Before working, read `.blackholes-task-details.md`, then use MCP `get_current_context` and `get_worktree_group` with the group ID above. Read legacy `.blackholes-note.md` only as additional context.
+- Read each attached repository's AGENTS.md / CLAUDE.md. Retrieve authoritative ClickUp, Slack, GitHub or other linked context with connected tools when needed.
+- Change only worktrees attached to this group. Original repositories are read-only context. Use `add_worktree_group_repositories` if another repository is needed; never create or copy worktrees manually.
+
+## Maintain the current context
+
+- The description is a living document, not a journal. Its first paragraph is a short summary of the current objective and state, shown in the UI (up to 320 characters).
+- After meaningful changes and before finishing, reread `get_worktree_group` and use `update_worktree_group` to REPLACE stale description content. Keep only the current objective, essential decisions, constraints and unresolved work. Preserve user requirements. Do not append dated entries, completed-action lists, a changelog or a progress history.
+- Maintain `links` as a collection of `{url, label, kind}` entries: `kind` is `pull_request` for each PR and `context` for ClickUp, Slack, documents or other sources. Support several PRs and context sources. Preserve relevant links and remove obsolete or duplicate entries. A link does not authorize remote changes.
+- Pass `detailsRevision` as `expectedRevision`. On conflict reread and reconcile; never overwrite another agent's update blindly. Omitted fields are preserved; `description:null` clears the document and `links:[]` clears all links.
+- Context Markdown and the manifest are generated. Update through MCP, never edit generated files directly. Do not use legacy note-append tools for current context.
+"#;
 const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated Blackholes Worktree Group containing one or more repository worktrees and branches.
 
 ## Required context
@@ -92,6 +108,12 @@ const DEFAULT_PROJECT_TASK_INSTRUCTIONS: &str = r#"This directory is an isolated
 - Maintain `links` as a collection of `{url, label, kind}` entries: `kind` is `pull_request` for each PR and `context` for ClickUp, Slack, documents or other sources. Support several PRs and context sources. Preserve relevant links and remove obsolete or duplicate entries. A link does not authorize remote changes.
 - Pass `detailsRevision` as `expectedRevision`. On conflict reread and reconcile; never overwrite another agent's update blindly. Omitted fields are preserved; `description:null` clears the document and `links:[]` clears all links.
 - Context Markdown and the manifest are generated. Update through MCP, never edit generated files directly. Do not use legacy note-append tools for current context.
+
+## Decisions, closing and earlier work
+
+- Record each lasting decision (an agreed approach, a changed environment or URL, a rule the team set) with MCP `add_worktree_group_decision`, including the link where it was taken. Decisions are kept as written and survive closing; do not log them as history in the description.
+- Closing a group archives it with its description, links, decisions and agent session IDs. Before closing, rewrite the description so it states what was done, what was decided and what remains.
+- Before starting work that may have been done before, search with `search_worktree_groups`; it includes archived groups. Read one with `get_archived_worktree_group`.
 "#;
 const PROJECT_POLICY_START: &str = "<!-- BLACKHOLES PROJECT POLICY START -->";
 const PROJECT_POLICY_END: &str = "<!-- BLACKHOLES PROJECT POLICY END -->";
@@ -287,7 +309,8 @@ impl ProjectTaskInstructionsService {
             "project task instruction",
             DEFAULT_PROJECT_TASK_INSTRUCTIONS,
         )?;
-        if [LEGACY_PROJECT_TASK_INSTRUCTIONS.trim(), PREVIOUS_PROJECT_TASK_INSTRUCTIONS.trim()].contains(&fs::read_to_string(&path)?.trim()) {
+        if [LEGACY_PROJECT_TASK_INSTRUCTIONS.trim(), PREVIOUS_PROJECT_TASK_INSTRUCTIONS.trim(), GROUP_PROJECT_TASK_INSTRUCTIONS_V1.trim()]
+            .contains(&fs::read_to_string(&path)?.trim()) {
             write_note(&root, PROJECT_TASK_INSTRUCTIONS_FILE_NAME, ".blackholes-task-claude", "project task instruction", DEFAULT_PROJECT_TASK_INSTRUCTIONS)?;
         }
         Ok(path)

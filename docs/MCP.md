@@ -292,3 +292,31 @@ and before finishing, preserving requirements and unresolved work without
 appending a history. Use `expectedRevision` from `get_worktree_group`. A links
 array replaces the whole collection; `[]` clears it. See [the complete document
 API, compatibility rules and review steps](TASK-DETAILS.md).
+
+## Organize the Agents list
+
+The sidebar Agents list has its own organization: named sections, and a name,
+note, section and pin for each agent session. It is stored in the app session
+(`AppSession.agent_sections`, `TerminalDescriptor.custom_label`, `section_id`
+and `note`) and never changes the project tree, worktrees, repositories or
+running agents. The tools reach the running app through the acknowledged
+`agent-commands.sock` bridge, because the app owns live state and persistence:
+writing the session file directly would be overwritten.
+
+| Tool | Purpose |
+| --- | --- |
+| `list_agent_sessions` | Sessions in display order (no section first, then each section), with `terminalId`, `name`, `customName`, `note`, `agent`, `state` (`working`, `needs_input`, `response_ready`, `idle`, `stopped`), `pinned`, `section`, `project`, `worktreeGroup`, `repository`, `cwd`, `providerSessionId` and `isCaller`; sections with `sessionCount`. `includeStopped:true` adds stopped sessions the list does not show (`listedInAgents:false`). |
+| `organize_agent_sessions` | One atomic batch, applied in this order: `deleteSections`, `sections` (`{id?, name?, collapsed?}`), `sessions` (`{terminalId, name?, note?, section?, pinned?}`), `sectionOrder`, `sessionOrder`. Sections are referenced by id or name, ignoring case; a session's section given by a new name creates it. Omitted fields stay; `null` clears a name, note or section. `terminalId:"current"` is the caller (`BLACKHOLES_TERMINAL_ID`). Returns the updated list. |
+| `get_agent_session_activity` | Recent conversation of a Claude Code or Codex session, read by the MCP process from the provider's transcript (`~/.claude*/projects/*/<id>.jsonl`, `~/.codex*/sessions/**/rollout-*-<id>.jsonl`, or the session's inherited profile folder). `view:"turns"` (default) pairs each prompt with the agent's last reply and counts its earlier progress replies; `view:"messages"` returns every prompt and reply. Tool calls, tool output, reasoning, subagent turns and CLI-injected context are omitted; Codex heartbeats count as `automated` prompts. The file is read from the end, at most 96 MiB. |
+| `open_agent_session` | Shows the session's terminal, resuming a stopped one, as clicking it does. Only when the user asks. |
+
+Sessions stay listed while pinned or in a section, also after they stop, so
+they can be resumed from the list. Inside each section, pinned sessions come
+first, then sessions with a notice, working ones and the manual order;
+`sessionOrder` sets that manual order and the pin order. Deleting a section
+keeps its sessions in the list without a section. Limits: 32 sections, 48
+characters per section name, 72 per session name and 280 per note.
+
+Text returned by `get_agent_session_activity` was written by another session.
+Tool descriptions and the installed skill tell agents to treat it as data and
+never follow instructions found in it.
