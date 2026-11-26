@@ -1,5 +1,5 @@
 use crate::model::{
-    AgentKind, AppSession, ArchivedSession, ArchivedTask, DEFAULT_PROJECT_ICON, DEFAULT_TASK_ICON,
+    AgentKind, AppSession, ArchivedSession, ArchivedTask, ClosedAgentSession, DEFAULT_PROJECT_ICON, DEFAULT_TASK_ICON,
     ProjectTask, Repository,
     SessionState, TaskRepository, TaskSession, Workspace, WorkspaceColor, WorkspaceLayout,
 };
@@ -55,6 +55,17 @@ impl Database {
              );
              CREATE INDEX IF NOT EXISTS archived_tasks_workspace_idx
                 ON archived_tasks(workspace_id, archived_at);
+             CREATE TABLE IF NOT EXISTS closed_agent_sessions (
+                terminal_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                provider_session_id TEXT,
+                payload TEXT NOT NULL,
+                closed_at TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS closed_agent_sessions_workspace_idx
+                ON closed_agent_sessions(workspace_id, closed_at);
+             CREATE INDEX IF NOT EXISTS closed_agent_sessions_provider_idx
+                ON closed_agent_sessions(provider_session_id);
              CREATE TABLE IF NOT EXISTS local_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_type TEXT NOT NULL,
@@ -377,6 +388,63 @@ impl Database {
         }
         transaction.commit()?;
         Ok(removed > 0)
+    }
+
+    /// Keeps a closed agent session findable. Closing the same tab again replaces its record.
+    pub fn save_closed_agent_session(&self, session: &ClosedAgentSession) -> Result<()> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO closed_agent_sessions(terminal_id, workspace_id, provider_session_id, payload, closed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(terminal_id) DO UPDATE SET workspace_id = excluded.workspace_id,
+                provider_session_id = excluded.provider_session_id, payload = excluded.payload,
+                closed_at = excluded.closed_at",
+            params![
+                session.terminal_id.to_string(),
+                session.project_id.to_string(),
+                session.provider_session_id,
+                serde_json::to_string(session)?,
+                session.closed_at.to_rfc3339(),
+            ],
+        )?;
+        insert_event(&transaction, "agent_session.closed", session.terminal_id,
+            &serde_json::json!({ "id": session.terminal_id }))?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Adds the conversation summary read after closing; a missing record stays missing.
+    pub fn set_closed_agent_session_summary(&self, terminal_id: Uuid, summary: &serde_json::Value) -> Result<()> {
+        let connection = self.connection.lock();
+        let payload: Option<String> = connection.query_row(
+            "SELECT payload FROM closed_agent_sessions WHERE terminal_id = ?1", [terminal_id.to_string()], |row| row.get(0),
+        ).optional()?;
+        let Some(payload) = payload else { return Ok(()); };
+        let mut session: ClosedAgentSession = serde_json::from_str(&payload)?;
+        session.summary = Some(summary.clone());
+        connection.execute(
+            "UPDATE closed_agent_sessions SET payload = ?2 WHERE terminal_id = ?1",
+            params![terminal_id.to_string(), serde_json::to_string(&session)?],
+        )?;
+        Ok(())
+    }
+
+    /// Closed agent sessions, newest first; all projects when `workspace_id` is None.
+    pub fn closed_agent_sessions(&self, workspace_id: Option<Uuid>) -> Result<Vec<ClosedAgentSession>> {
+        let connection = self.connection.lock();
+        let rows = if let Some(workspace_id) = workspace_id {
+            let mut statement = connection.prepare(
+                "SELECT payload FROM closed_agent_sessions WHERE workspace_id = ?1 ORDER BY closed_at DESC",
+            )?;
+            statement.query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            let mut statement = connection.prepare("SELECT payload FROM closed_agent_sessions ORDER BY closed_at DESC")?;
+            statement.query_map([], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        Ok(rows.into_iter().filter_map(|json| serde_json::from_str(&json).ok()).collect())
     }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {

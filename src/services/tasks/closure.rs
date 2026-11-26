@@ -85,6 +85,15 @@ impl CallerContext {
                 })
             })
     }
+
+    /// One session is protected only when it is the caller itself. Sessions that share the
+    /// caller's folder or worktree group are not: closing a sibling is the point.
+    fn protects_session(&self, terminal: &CloseTerminal) -> bool {
+        self.terminal_id == Some(terminal.descriptor.id)
+            || self.pid.is_some_and(|pid| {
+                terminal.process.as_ref().is_some_and(|process| process.contains_pid(pid))
+            })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -150,7 +159,7 @@ impl LiveTerminal {
         self.shutdown_with_policy(TerminalPolicy::CloseAll)
     }
 
-    fn shutdown_with_policy(&self, policy: TerminalPolicy) -> Result<()> {
+    pub fn shutdown_with_policy(&self, policy: TerminalPolicy) -> Result<()> {
         if !self.is_live()? {
             return Ok(());
         }
@@ -366,6 +375,186 @@ pub struct CloseTaskSnapshot {
     pub task: Option<ProjectTask>,
     pub sources: Vec<Repository>,
     pub terminals: Vec<CloseTerminal>,
+}
+
+pub const MAX_CLOSE_SESSIONS: usize = 32;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionStateFilter {
+    /// No running process: a restored or exited tab.
+    Stopped,
+}
+
+/// Closes agent session tabs as the × in the project tree does. Nothing on disk is
+/// deleted: the provider keeps the conversation, and each result says how to find it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloseSessionsRequest {
+    /// Sessions to close. Empty selects every stopped session (of `project_id`, if given).
+    #[serde(default)]
+    pub terminal_ids: Vec<Uuid>,
+    /// Only sessions of this project; with `terminal_ids`, others are blocked.
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    /// Only sessions in this state; with `terminal_ids`, others are blocked.
+    #[serde(default)]
+    pub state: Option<SessionStateFilter>,
+    /// Only sessions nobody opened and whose agent did nothing for at least this many days;
+    /// with `terminal_ids`, others are blocked. Alone, it also selects running sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive_for_days: Option<u32>,
+    pub confirm: bool,
+    #[serde(default)]
+    pub terminals: TerminalPolicy,
+    #[serde(default)]
+    pub caller: CallerContext,
+}
+
+impl CloseSessionsRequest {
+    pub fn validate(&self) -> Result<()> {
+        if !self.confirm {
+            bail!("Closing agent sessions requires confirm=true");
+        }
+        if self.terminal_ids.len() > MAX_CLOSE_SESSIONS {
+            bail!("Choose at most {MAX_CLOSE_SESSIONS} sessions per call");
+        }
+        if self.terminal_ids.iter().collect::<HashSet<_>>().len() != self.terminal_ids.len() {
+            bail!("Choose each session once");
+        }
+        if let Some(days) = self.inactive_for_days
+            && !(1..=MAX_INACTIVE_DAYS).contains(&days)
+        {
+            bail!("inactiveForDays must be between 1 and {MAX_INACTIVE_DAYS}");
+        }
+        if self.terminal_ids.is_empty() && self.state.is_none() && self.inactive_for_days.is_none() {
+            bail!("Pass terminalIds, or select sessions with state:\"stopped\" and/or inactiveForDays (optionally with projectId)");
+        }
+        Ok(())
+    }
+
+    /// Whether the session was used too recently for `inactive_for_days`.
+    fn too_recent(&self, descriptor: &TerminalDescriptor, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+        let days = self.inactive_for_days?;
+        let idle = now.signed_duration_since(crate::services::agent_sections::last_active(descriptor));
+        (idle < chrono::Duration::days(days.into())).then(|| format!(
+            "It was used {} ago; inactiveForDays:{days} closes only sessions unused for longer",
+            crate::services::agent_sections::describe_age(idle),
+        ))
+    }
+}
+
+/// Ten years: older sessions are all the same.
+pub const MAX_INACTIVE_DAYS: u32 = 3650;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseSessionResult {
+    pub terminal_id: Uuid,
+    /// `closed` or `blocked`.
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentKind>,
+    /// Claude Code or Codex session ID: resume or read the conversation with it later.
+    pub provider_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_group_id: Option<Uuid>,
+    /// Last time the session was opened or its agent was active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_active_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// A process was running and was stopped.
+    pub was_running: bool,
+}
+
+impl CloseSessionResult {
+    pub fn blocked(terminal_id: Uuid, reason: impl Into<String>) -> Self {
+        Self {
+            terminal_id, status: "blocked", reason: Some(reason.into()), name: None, agent: None,
+            provider_session_id: None, cwd: None, project_id: None, worktree_group_id: None,
+            last_active_at: None, was_running: false,
+        }
+    }
+
+    pub fn for_terminal(descriptor: &TerminalDescriptor, reason: impl Into<String>) -> Self {
+        Self {
+            name: Some(crate::services::agent_sections::shown_name(descriptor)),
+            agent: Some(descriptor.agent),
+            provider_session_id: descriptor.claude_session.as_ref().map(|session| session.id.clone())
+                .or_else(|| descriptor.codex_session.as_ref().map(|session| session.id.clone())),
+            cwd: Some(descriptor.cwd.clone()),
+            project_id: Some(descriptor.workspace_id),
+            worktree_group_id: descriptor.task_id,
+            last_active_at: Some(crate::services::agent_sections::last_active(descriptor)),
+            ..Self::blocked(descriptor.id, reason)
+        }
+    }
+}
+
+/// Stops what must be stopped and reports, per terminal, whether its tab may be removed.
+/// Runs off the UI thread: stopping a live process can take up to five seconds. The app
+/// removes the tabs of `closed` results with the same code as the × in the project tree.
+pub fn close_agent_sessions(request: &CloseSessionsRequest, terminals: &[CloseTerminal]) -> Vec<CloseSessionResult> {
+    let now = chrono::Utc::now();
+    terminals.iter().map(|terminal| {
+        let mut result = CloseSessionResult::for_terminal(&terminal.descriptor, "");
+        match close_agent_session(request, terminal, now) {
+            Ok(was_running) => {
+                result.status = "closed";
+                result.reason = None;
+                result.was_running = was_running;
+            }
+            Err(error) => result.reason = Some(format!("{error:#}")),
+        }
+        result
+    }).collect()
+}
+
+/// Returns whether a running process was stopped.
+fn close_agent_session(request: &CloseSessionsRequest, terminal: &CloseTerminal, now: chrono::DateTime<chrono::Utc>) -> Result<bool> {
+    let descriptor = &terminal.descriptor;
+    if descriptor.agent == AgentKind::Shell {
+        bail!("This terminal is a plain shell, not an agent session");
+    }
+    if request.project_id.is_some_and(|project| project != descriptor.workspace_id) {
+        bail!("The session belongs to another project");
+    }
+    if request.caller.protects_session(terminal) {
+        bail!("This is the calling session; close it from another session or with the × in Blackholes");
+    }
+    if let Some(reason) = request.too_recent(descriptor, now) {
+        bail!("{reason}");
+    }
+    let Some(process) = &terminal.process else {
+        // A restored tab has no process: closing only removes the tab.
+        return Ok(false);
+    };
+    if !process.is_live()? {
+        return Ok(false);
+    }
+    if request.state == Some(SessionStateFilter::Stopped) {
+        bail!("The session is running; state:\"stopped\" closes only sessions without a running process");
+    }
+    let state = *process.state.lock();
+    match request.terminals {
+        TerminalPolicy::Fail => bail!(
+            "The session is running ({state:?}); pass terminals:\"close_idle\" or \"close_all\" to stop it"
+        ),
+        TerminalPolicy::CloseIdle if !matches!(state, SessionState::Idle | SessionState::Attention) => bail!(
+            "The session is {state:?}; stopping it needs terminals:\"close_all\""
+        ),
+        _ => {}
+    }
+    // Rechecks the state right before signalling, as group closure does.
+    process.shutdown_with_policy(request.terminals)?;
+    Ok(true)
 }
 
 impl TaskService {

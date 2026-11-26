@@ -43,29 +43,49 @@ pub enum NavigationCommand {
     RenameTerminal {
         terminal_id: Uuid,
     },
-    /// Opens the name modal for a new section; the session, if given, moves into it.
+    /// Opens the name modal for a new section, inside `parent_id` when given; the session,
+    /// if given, moves into it.
     NewAgentSection {
         #[serde(default)]
         terminal_id: Option<Uuid>,
+        #[serde(default)]
+        parent_id: Option<Uuid>,
     },
+    /// Opens the modal to rename the section and edit its description.
     RenameAgentSection {
         section_id: Uuid,
     },
     DeleteAgentSection {
         section_id: Uuid,
     },
-    MoveAgentSection {
+    /// Dropped by dragging: inside `parent_id` (or at the top), before `before_id` or last.
+    PlaceAgentSection {
         section_id: Uuid,
-        offset: i32,
+        #[serde(default)]
+        parent_id: Option<Uuid>,
+        #[serde(default)]
+        before_id: Option<Uuid>,
     },
     SetAgentSectionCollapsed {
         section_id: Uuid,
+        collapsed: bool,
+    },
+    SetAllAgentSectionsCollapsed {
         collapsed: bool,
     },
     SetTerminalSection {
         terminal_id: Uuid,
         #[serde(default)]
         section_id: Option<Uuid>,
+    },
+    /// Dropped by dragging into a section (or out of every section with `None`); `order`
+    /// lists the sessions of the block it landed in, in their new order.
+    MoveAgentSession {
+        terminal_id: Uuid,
+        #[serde(default)]
+        section_id: Option<Uuid>,
+        #[serde(default)]
+        order: Vec<Uuid>,
     },
     SetSidebarSectionCollapsed {
         section: SidebarSection,

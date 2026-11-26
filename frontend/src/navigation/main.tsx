@@ -2,9 +2,9 @@ import { StrictMode, createContext, useContext, useEffect, useLayoutEffect, useR
 import { createRoot } from "react-dom/client";
 import { GroupIcon } from "../shared/GroupIcon";
 import {
-  ArrowDown,
-  ArrowUp,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   FilePenLine,
   FolderInput,
   FolderMinus,
@@ -28,7 +28,7 @@ import {
 import { TerminalProviderIcon } from "../shared/TerminalProviderIcon";
 import { SidebarResizeHandle } from "../shared/SidebarResizeHandle";
 import { SidebarScrollArea } from "./SidebarScrollArea";
-import { SortableAgentList } from "./SortableAgentList";
+import { useAgentDrag, type DragItem, type DropTarget } from "./useAgentDrag";
 import { ResizableSidebarSections } from "./ResizableSidebarSections";
 import { NavigationStatusIcon, type NoticeKind } from "./NavigationStatusIcon";
 import { postNative, type NativeCommand } from "../shared/native";
@@ -56,11 +56,14 @@ interface Copy {
   newSectionWithSession: string;
   moveToSection: string;
   removeFromSection: string;
-  renameSection: string;
+  editSection: string;
+  newSubsection: string;
   deleteSection: string;
-  moveSectionUp: string;
-  moveSectionDown: string;
+  collapseSections: string;
+  expandSections: string;
   emptySection: string;
+  dropOutOfSection: string;
+  unusedDays: string;
   pin: string;
   unpin: string;
   pinned: string;
@@ -94,6 +97,8 @@ interface TerminalItem {
   note?: string | null;
   /** The user named the session; its label is shown exactly as typed. */
   custom_label?: boolean;
+  /** Last time the user opened the session or its agent was active; null while unknown. */
+  last_active_at?: string | null;
   needs_attention: boolean;
   attention_kind: NoticeKind | null;
   attention_rank: number | null;
@@ -166,16 +171,26 @@ interface AgentSectionItem {
   id: string;
   name: string;
   collapsed: boolean;
+  /** The section that contains this one; missing at the top of the list. */
+  parent_id?: string | null;
 }
 
-/** Places `ids` in the slots their members occupy in `order`, as the app does when saving. */
-function mergeOrder(order: string[], ids: string[]) {
-  const requested = [...new Set(ids)];
-  const wanted = new Set(requested);
-  let next = 0;
-  const merged = order.map(id => wanted.has(id) ? requested[next++] : id).filter((id): id is string => id !== undefined);
-  return [...merged, ...requested.slice(next)];
+/** A section, its sub-sections and theirs, as the app allows. */
+const MAX_SECTION_DEPTH = 3;
+const DAY_MS = 86_400_000;
+
+/** The time used to color sessions nobody opened in a while; it advances on its own. */
+const Now = createContext(Date.now());
+
+/** Days since the user last opened the session or its agent was active; null while unknown. */
+function unusedDays(terminal: TerminalItem, now: number) {
+  const time = terminal.last_active_at ? Date.parse(terminal.last_active_at) : NaN;
+  return Number.isNaN(time) ? null : Math.max(0, Math.floor((now - time) / DAY_MS));
 }
+
+/** Red after a week without use, black after a month. */
+const staleClass = (days: number | null) => days === null ? "" : days >= 30 ? " is-stale-month" : days >= 7 ? " is-stale-week" : "";
+const staleLabel = (days: number | null, copy: Copy) => days !== null && days >= 7 ? copy.unusedDays.replace("{count}", String(days)) : "";
 
 /** The agents the user works with, chosen in Settings: each has an entry in the launch menus. */
 const defaultLaunchAgents: LaunchAgent[] = [{ id: "claude", label: "Claude" }, { id: "codex", label: "Codex" }];
@@ -216,11 +231,14 @@ const fallbackCopy: Copy = {
   newSectionWithSession: "Nueva sección…",
   moveToSection: "Mover a {name}",
   removeFromSection: "Quitar de {name}",
-  renameSection: "Renombrar sección",
+  editSection: "Editar sección",
+  newSubsection: "Nueva subsección…",
   deleteSection: "Eliminar sección",
-  moveSectionUp: "Subir sección",
-  moveSectionDown: "Bajar sección",
+  collapseSections: "Contraer todas las secciones",
+  expandSections: "Expandir todas las secciones",
   emptySection: "Sin sesiones",
+  dropOutOfSection: "Suelta aquí para sacarla de su sección",
+  unusedDays: "Sin abrir hace {count} días",
   pin: "Fijar arriba",
   unpin: "Desfijar",
   pinned: "Fijada",
@@ -285,9 +303,12 @@ const sessionPlace = (terminal: TerminalItem) =>
 function TerminalAgentRow({ terminal, copy, onOpen, onMenu }: {
   terminal: TerminalItem; copy: Copy; onOpen(terminal: TerminalItem): void; onMenu(anchor: DOMRect, terminal: TerminalItem): void;
 }) {
-  // Only pinned or sectioned sessions are listed while stopped; a click resumes them.
+  // Listed sessions stay while stopped, also after a restart; a click resumes them.
   const dormant = terminal.live === false && !terminal.needs_attention;
   const status = dormant ? copy.resumeSession : terminalStatus(terminal, copy);
+  const now = useContext(Now);
+  const days = unusedDays(terminal, now);
+  const unused = staleLabel(days, copy);
   const name = sessionName(terminal);
   const place = sessionPlace(terminal);
   const description = [name, place, terminal.provider_label, terminal.note].filter(Boolean).join(" · ");
@@ -302,15 +323,15 @@ function TerminalAgentRow({ terminal, copy, onOpen, onMenu }: {
   // Without a name, the place moves up so the card never shows the provider in words.
   const subtitle = name ? <>{placeLabel}{dormant && ` · ${copy.resumeSession}`}</> : dormant ? copy.resumeSession : null;
   return (
-    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}${terminal.needs_attention ? " needs-attention" : runsInBackground(terminal) ? " has-background" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}${terminal.pinned ? " is-pinned" : ""}${dormant ? " is-dormant" : ""}`}
+    <div className={`agent-card terminal-agent-card${terminal.selected ? " is-selected" : ""}${terminal.needs_attention ? " needs-attention" : runsInBackground(terminal) ? " has-background" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}${terminal.pinned ? " is-pinned" : ""}${dormant ? " is-dormant" : ""}${staleClass(days)}`}
       onContextMenu={event => {
         event.preventDefault();
         onMenu(new DOMRect(event.clientX, event.clientY, 0, 0), terminal);
       }}>
       <button type="button" className="agent-open"
         aria-current={terminal.selected ? "true" : undefined}
-        aria-label={`${description}${status ? ` · ${status}` : ""}`}
-        title={`${name ? `${name}\n` : ""}${place}\n${terminal.provider_label}${terminal.note ? `\n${terminal.note}` : ""}${status ? `\n${status}` : ""}`}
+        aria-label={`${description}${status ? ` · ${status}` : ""}${unused ? ` · ${unused}` : ""}`}
+        title={`${name ? `${name}\n` : ""}${place}\n${terminal.provider_label}${terminal.note ? `\n${terminal.note}` : ""}${status ? `\n${status}` : ""}${unused ? `\n${unused}` : ""}`}
         onClick={() => onOpen(terminal)}>
         <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working} background={runsInBackground(terminal)} large>
           <TerminalProviderIcon provider={terminal.agent} />
@@ -380,13 +401,17 @@ function Changes({ item }: { item: RepositoryItem }) {
 
 function TerminalRow({ terminal, copy, indentation }: { terminal: TerminalItem; copy: Copy; indentation: number }) {
   const status = terminalStatus(terminal, copy);
+  // Plain shells are not agents; only agent sessions turn red or black with time.
+  const now = useContext(Now);
+  const days = terminal.agent === "shell" ? null : unusedDays(terminal, now);
+  const unused = staleLabel(days, copy);
   return (
     <button
       type="button"
-      className={`tree-leaf terminal-tree-leaf tree-indent-${indentation}${terminal.selected ? " is-selected" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}`}
+      className={`tree-leaf terminal-tree-leaf tree-indent-${indentation}${terminal.selected ? " is-selected" : ""}${terminal.attention_kind === "input-required" ? " is-awaiting-input" : ""}${staleClass(days)}`}
       id={`nav-terminal-${terminal.id}`}
-      aria-label={`${terminal.label}${status ? ` · ${status}` : ""}`}
-      title={`${terminal.label}${status ? ` · ${status}` : ""}`}
+      aria-label={`${terminal.label}${status ? ` · ${status}` : ""}${unused ? ` · ${unused}` : ""}`}
+      title={`${terminal.label}${status ? ` · ${status}` : ""}${unused ? `\n${unused}` : ""}`}
       onClick={() => postNative({ type: "focus_terminal", terminal_id: terminal.id })}
     >
       <NavigationStatusIcon notice={terminalNotice(terminal)} working={terminal.working} background={runsInBackground(terminal)}>
@@ -642,13 +667,28 @@ function ContextMenu({ menu, close }: { menu: MenuState; close(): void }) {
   );
 }
 
+/** Centers a row in the Projects viewport; never moves the Agents list or the whole WebView. */
+function centerInProjects(row: HTMLElement) {
+  const viewport = row.closest<HTMLElement>(".sidebar-scroll");
+  if (!viewport) return false;
+  const bounds = row.getBoundingClientRect();
+  const viewportBounds = viewport.getBoundingClientRect();
+  viewport.scrollTo({
+    top: viewport.scrollTop + bounds.top - viewportBounds.top - (viewport.clientHeight - bounds.height) / 2,
+    behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+  });
+  return true;
+}
+
 function NavigationApp() {
   const [state, setState] = useState<NavigationState | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [revealTarget, setRevealTarget] = useState<{ id: string } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealedRow = useRef<HTMLElement | null>(null);
+  const followedRow = useRef<string | null>(null);
   const copy = state?.copy || fallbackCopy;
   const agentsCollapsed = state?.agents_section_collapsed ?? false;
   const projectsCollapsed = state?.projects_section_collapsed ?? false;
@@ -666,19 +706,29 @@ function NavigationApp() {
     if (!row) return; // A hydrate may still be expanding the parent sections.
     if (revealTimer.current) clearTimeout(revealTimer.current);
     revealedRow.current?.classList.remove("is-revealed");
-    // Move only the Projects viewport, never the Agents list or the whole WebView.
-    const viewport = row.closest<HTMLElement>(".sidebar-scroll");
-    if (!viewport) return;
-    const bounds = row.getBoundingClientRect();
-    const viewportBounds = viewport.getBoundingClientRect();
-    viewport.scrollTo({
-      top: viewport.scrollTop + bounds.top - viewportBounds.top - (viewport.clientHeight - bounds.height) / 2,
-      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
-    });
+    if (!centerInProjects(row)) return;
     row.classList.add("is-revealed");
     revealedRow.current = row;
     revealTimer.current = setTimeout(() => row.classList.remove("is-revealed"), 1800);
     setRevealTarget(null);
+  }, [state, revealTarget, projectsCollapsed]);
+
+  // The open session keeps its row in view in Projects, whatever opened it: a click in Agents,
+  // a notification, a link, the keyboard or the MCP. Only a change of session scrolls, so
+  // scrolling by hand is never undone.
+  useLayoutEffect(() => {
+    if (!state || projectsCollapsed) return;
+    const row = document.querySelector<HTMLElement>(".terminal-tree-leaf.is-selected");
+    const id = row?.id ?? null;
+    if (id === followedRow.current) return;
+    followedRow.current = id;
+    // A reveal of the same row centers and highlights it already.
+    if (!row || revealTarget?.id === id) return;
+    const viewport = row.closest<HTMLElement>(".sidebar-scroll");
+    const bounds = row.getBoundingClientRect();
+    const viewportBounds = viewport?.getBoundingClientRect();
+    if (viewportBounds && bounds.top >= viewportBounds.top && bounds.bottom <= viewportBounds.bottom) return;
+    centerInProjects(row);
   }, [state, revealTarget, projectsCollapsed]);
 
   useEffect(() => () => {
@@ -701,12 +751,19 @@ function NavigationApp() {
           const next = event as NavigationState;
           document.documentElement.lang = next.language || "es";
           applyAppTheme(next.theme);
+          setNow(Date.now());
           setState(next);
         }
       },
     };
     postNative({ type: "ready" });
     return () => { delete window.blackholesNavigation; };
+  }, []);
+
+  // Sessions turn red or black while the app stays open, without waiting for a change.
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 10 * 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -738,14 +795,50 @@ function NavigationApp() {
   const sectionIds = new Set(sections.map(section => section.id));
   // A session whose section was just removed shows without one until the next hydrate.
   const sectionOf = (terminal: TerminalItem) => terminal.section_id && sectionIds.has(terminal.section_id) ? terminal.section_id : null;
+  const findSection = (id: string | null | undefined) => sections.find(section => section.id === id);
+  const parentOf = (section: AgentSectionItem | undefined) => section?.parent_id && section.parent_id !== section.id
+    && sectionIds.has(section.parent_id) ? section.parent_id : null;
+  const childrenOf = (parent: string | null) => sections.filter(section => parentOf(section) === parent);
+  /** The section and every section inside it; a cycle saved by another build cannot loop. */
+  const descendantsOf = (id: string) => {
+    const ids = [id];
+    for (let index = 0; index < ids.length; index++) {
+      for (const child of childrenOf(ids[index])) if (!ids.includes(child.id)) ids.push(child.id);
+    }
+    return ids;
+  };
+  const ancestorsOf = (id: string | null) => {
+    const ids: string[] = [];
+    for (let current = parentOf(findSection(id)); current && !ids.includes(current); current = parentOf(findSection(current))) ids.push(current);
+    return ids;
+  };
+  const depthOf = (id: string) => ancestorsOf(id).length;
+  const pathOf = (id: string) => [...ancestorsOf(id).reverse(), id].map(section => findSection(section)?.name).filter(Boolean).join(" / ");
+  const agentTerminals = state?.terminal_agents || [];
+  const membersOf = (section: string | null) => agentTerminals.filter(terminal => sectionOf(terminal) === section);
+  const allMembersOf = (section: string) => {
+    const ids = new Set(descendantsOf(section));
+    return agentTerminals.filter(terminal => ids.has(sectionOf(terminal) || ""));
+  };
+  /** Display order of one block: pins in pin order, then notices, working agents and the manual order. */
+  const blockOrder = (terminals: TerminalItem[]) => {
+    const members = new Set(terminals.map(terminal => terminal.id));
+    const pinned = terminals.filter(terminal => terminal.pinned)
+      .sort((a, b) => (a.pin_rank ?? Number.MAX_SAFE_INTEGER) - (b.pin_rank ?? Number.MAX_SAFE_INTEGER));
+    const unpinned = manualAgentOrder.filter(terminal => !terminal.pinned && members.has(terminal.id)).sort((a, b) =>
+      Number(b.needs_attention) - Number(a.needs_attention)
+        || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER)
+          : Number(b.working) - Number(a.working)));
+    return [...pinned, ...unpinned];
+  };
   const openAgentMenu = (anchor: DOMRect, terminal: TerminalItem) => {
-    const current = sections.find(section => section.id === sectionOf(terminal));
+    const current = findSection(sectionOf(terminal));
     openMenu(anchor, [terminal.pinned
       ? { label: copy.unpin, icon: PinOff, command: { type: "set_terminal_pinned", terminal_id: terminal.id, pinned: false } }
       : { label: copy.pin, icon: Pin, command: { type: "set_terminal_pinned", terminal_id: terminal.id, pinned: true } },
       { label: copy.rename, icon: Pencil, command: { type: "rename_terminal", terminal_id: terminal.id } },
       ...sections.filter(section => section !== current).map(section => ({
-        label: copy.moveToSection.replace("{name}", section.name), icon: FolderInput,
+        label: copy.moveToSection.replace("{name}", pathOf(section.id)), icon: FolderInput,
         command: { type: "set_terminal_section", terminal_id: terminal.id, section_id: section.id },
       })),
       ...(current ? [{ label: copy.removeFromSection.replace("{name}", current.name), icon: FolderMinus,
@@ -753,10 +846,10 @@ function NavigationApp() {
       { label: copy.newSectionWithSession, icon: FolderPlus, command: { type: "new_agent_section", terminal_id: terminal.id } },
       { label: copy.closeTerminal, icon: X, danger: true, command: { type: "close_terminal", terminal_id: terminal.id } }]);
   };
-  const openSectionMenu = (anchor: DOMRect, section: AgentSectionItem, index: number) => openMenu(anchor, [
-    { label: copy.renameSection, icon: Pencil, command: { type: "rename_agent_section", section_id: section.id } },
-    ...(index > 0 ? [{ label: copy.moveSectionUp, icon: ArrowUp, command: { type: "move_agent_section", section_id: section.id, offset: -1 } }] : []),
-    ...(index < sections.length - 1 ? [{ label: copy.moveSectionDown, icon: ArrowDown, command: { type: "move_agent_section", section_id: section.id, offset: 1 } }] : []),
+  const openSectionMenu = (anchor: DOMRect, section: AgentSectionItem) => openMenu(anchor, [
+    { label: copy.editSection, icon: Pencil, command: { type: "rename_agent_section", section_id: section.id } },
+    ...(depthOf(section.id) + 1 < MAX_SECTION_DEPTH ? [{ label: copy.newSubsection, icon: FolderPlus,
+      command: { type: "new_agent_section", terminal_id: null, parent_id: section.id } }] : []),
     { label: copy.deleteSection, icon: Trash2, danger: true, command: { type: "delete_agent_section", section_id: section.id } },
   ]);
   const setSectionFolded = (section: AgentSectionItem, collapsed: boolean) => {
@@ -765,56 +858,131 @@ function NavigationApp() {
       current.id === section.id ? { ...current, collapsed } : current) } : previous);
     postNative({ type: "set_agent_section_collapsed", section_id: section.id, collapsed });
   };
-  /** Cards of one block (no section, or one section), sorted and reordered on their own. */
-  const agentBlock = (key: string, terminals: TerminalItem[]) => {
-    const members = new Set(terminals.map(terminal => terminal.id));
-    // Pinned sessions stay on top in pin order; their notices still show in their own colors.
-    const pinnedAgents = terminals.filter(terminal => terminal.pinned)
-      .sort((a, b) => (a.pin_rank ?? Number.MAX_SAFE_INTEGER) - (b.pin_rank ?? Number.MAX_SAFE_INTEGER));
-    const unpinnedOrder = manualAgentOrder.filter(terminal => !terminal.pinned && members.has(terminal.id));
-    const unpinnedAgents = [...unpinnedOrder].sort((a, b) =>
-      Number(b.needs_attention) - Number(a.needs_attention)
-        || (a.needs_attention ? (a.attention_rank ?? Number.MAX_SAFE_INTEGER) - (b.attention_rank ?? Number.MAX_SAFE_INTEGER)
-          : Number(b.working) - Number(a.working)));
-    const items = [...pinnedAgents, ...unpinnedAgents].map(terminal => ({
-      id: `terminal:${terminal.id}`, label: [sessionName(terminal), sessionPlace(terminal)].filter(Boolean).join(" · "),
-      reorderable: terminal.pinned || !terminal.needs_attention,
-      reorderGroup: terminal.pinned ? "pinned" : terminal.working ? "working" : "idle",
-      statusLabel: terminal.attention_kind === "completed" ? copy.responseReady : copy.needsAttention,
-      content: <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} onMenu={openAgentMenu} />,
-    }));
-    const pinnedIds = pinnedAgents.map(terminal => `terminal:${terminal.id}`);
-    return <SortableAgentList key={key} items={items} disabled={modalVisible} language={state?.language || "es"}
-      onReorder={ids => {
-        if (ids.some(id => pinnedIds.includes(id)) && ids.filter(id => pinnedIds.includes(id)).join() !== pinnedIds.join()) {
-          const pinned = ids.filter(id => pinnedIds.includes(id)).map(id => id.replace(/^terminal:/, ""));
-          setState(previous => {
-            if (!previous) return previous;
-            const order = mergeOrder(previous.terminal_agents.filter(terminal => terminal.pinned)
-              .sort((a, b) => (a.pin_rank ?? Number.MAX_SAFE_INTEGER) - (b.pin_rank ?? Number.MAX_SAFE_INTEGER))
-              .map(terminal => terminal.id), pinned);
-            return { ...previous, terminal_agents: previous.terminal_agents.map(terminal => ({
-              ...terminal, pin_rank: terminal.pinned ? order.indexOf(terminal.id) : terminal.pin_rank,
-            })) };
-          });
-          postNative({ type: "reorder_pinned", ids: pinned });
-          return;
-        }
-        ids = ids.filter(id => !pinnedIds.includes(id));
-        const pending = new Set(unpinnedOrder.filter(terminal => terminal.needs_attention).map(terminal => `terminal:${terminal.id}`));
-        const reordered = ids.filter(id => !pending.has(id));
-        let index = 0;
-        // Notification priority never overwrites the saved positions of pending agents.
-        const order = unpinnedOrder.map(terminal =>
-          pending.has(`terminal:${terminal.id}`) ? `terminal:${terminal.id}` : reordered[index++]);
-        setState(previous => previous ? { ...previous, agent_order: mergeOrder(previous.agent_order || [], order) } : previous);
-        postNative({ type: "reorder_agents", ids: order });
-      }} />;
+  const anySectionOpen = sections.some(section => !section.collapsed);
+  const setAllSectionsFolded = (collapsed: boolean) => {
+    setMenu(null);
+    setState(previous => previous ? { ...previous, agent_sections: (previous.agent_sections || []).map(current => ({ ...current, collapsed })) } : previous);
+    postNative({ type: "set_all_agent_sections_collapsed", collapsed });
   };
-  const agentTerminals = state?.terminal_agents || [];
-  const unsectioned = agentTerminals.filter(terminal => !sectionOf(terminal));
+  const [announcement, setAnnouncement] = useState("");
+  const moveSession = (terminalId: string, section: string | null, order: string[]) => {
+    postNative({ type: "move_agent_session", terminal_id: terminalId, section_id: section, order });
+    const name = agentTerminals.find(terminal => terminal.id === terminalId);
+    const place = section ? pathOf(section) : agentsLabel;
+    setAnnouncement(`${name ? sessionName(name) || name.context : ""}: ${place} · ${order.indexOf(terminalId) + 1}/${order.length}`);
+  };
+  const placeSection = (id: string, parent: string | null, before: string | null) => {
+    postNative({ type: "place_agent_section", section_id: id, parent_id: parent, before_id: before });
+    setAnnouncement(`${findSection(id)?.name || ""}: ${parent ? pathOf(parent) : agentsLabel}`);
+  };
+  /** The section a dropped section would end up inside; null at the top of the list. */
+  const dropParent = (target: DropTarget) => target.kind === "unsectioned" ? null
+    : target.kind === "session-row" ? target.sectionId
+    : target.position === "inside" ? target.sectionId : parentOf(findSection(target.sectionId));
+  const drag = useAgentDrag({
+    disabled: modalVisible,
+    allows: (item: DragItem, target: DropTarget) => {
+      if (item.kind === "session") return true;
+      const moved = descendantsOf(item.id);
+      if (target.kind === "section" && moved.includes(target.sectionId)) return false;
+      const parent = dropParent(target);
+      const height = Math.max(0, ...moved.map(id => depthOf(id) - depthOf(item.id)));
+      return !(parent && moved.includes(parent)) && (parent ? depthOf(parent) + 1 : 0) + height < MAX_SECTION_DEPTH;
+    },
+    onDrop: (item: DragItem, target: DropTarget) => {
+      if (item.kind === "session") {
+        const section = target.kind === "session-row" ? target.sectionId : target.kind === "section" ? target.sectionId : null;
+        const ids = blockOrder(membersOf(section)).map(terminal => terminal.id).filter(id => id !== item.id);
+        const index = target.kind === "session-row" ? ids.indexOf(target.terminalId) : -1;
+        const at = index >= 0 ? index + Number(target.kind === "session-row" && target.after)
+          : target.kind === "unsectioned" ? 0 : ids.length;
+        ids.splice(at, 0, item.id);
+        moveSession(item.id, section, ids);
+        return;
+      }
+      const parent = dropParent(target);
+      const siblings = childrenOf(parent).filter(section => section.id !== item.id);
+      const before = target.kind === "unsectioned" ? siblings[0]?.id ?? null
+        : target.kind === "section" && target.position === "before" ? target.sectionId
+        : target.kind === "section" && target.position === "after"
+          ? siblings[siblings.findIndex(section => section.id === target.sectionId) + 1]?.id ?? null
+          : null;
+      placeSection(item.id, parent, before);
+    },
+    onMoveByKey: (item: DragItem, direction: -1 | 1) => {
+      if (item.kind === "session") {
+        const terminal = agentTerminals.find(terminal => terminal.id === item.id);
+        if (!terminal) return;
+        const section = sectionOf(terminal);
+        const ids = blockOrder(membersOf(section)).map(terminal => terminal.id);
+        const index = ids.indexOf(item.id), next = index + direction;
+        if (index < 0 || next < 0 || next >= ids.length) return;
+        [ids[index], ids[next]] = [ids[next], ids[index]];
+        moveSession(item.id, section, ids);
+        return;
+      }
+      const parent = parentOf(findSection(item.id));
+      const siblings = childrenOf(parent);
+      const index = siblings.findIndex(section => section.id === item.id);
+      if (direction < 0 && index > 0) placeSection(item.id, parent, siblings[index - 1].id);
+      if (direction > 0 && index >= 0 && index < siblings.length - 1) placeSection(item.id, parent, siblings[index + 2]?.id ?? null);
+    },
+  });
+  const dropClass = (target: DropTarget | null) => !target ? ""
+    : target.kind === "section" ? ` drop-${target.position}`
+    : target.kind === "session-row" ? (target.after ? " drop-after" : " drop-before") : " drop-inside";
+  /** Session cards of one block: no section, or the sessions directly in one section. */
+  const agentBlock = (section: string | null, terminals: TerminalItem[]) => <div className="global-agents">
+    {blockOrder(terminals).map(terminal => {
+      const target = drag.target?.kind === "session-row" && drag.target.terminalId === terminal.id ? drag.target : null;
+      return <div key={terminal.id} data-drag-session={terminal.id} data-section-id={section ?? ""}
+        className={`sortable-agent${drag.dragging?.kind === "session" && drag.dragging.id === terminal.id ? " is-dragging" : ""}${dropClass(target)}`}>
+        <TerminalAgentRow terminal={terminal} copy={copy} onOpen={openTerminalAgent} onMenu={openAgentMenu} />
+      </div>;
+    })}
+  </div>;
+  const renderSection = (section: AgentSectionItem, depth: number, rendered: Set<string>): React.ReactNode => {
+    if (rendered.has(section.id)) return null;
+    rendered.add(section.id);
+    const members = membersOf(section.id);
+    const all = allMembersOf(section.id);
+    const children = childrenOf(section.id);
+    const notice = section.collapsed ? pendingNotice(all) : null;
+    const background = section.collapsed && !notice && anyInBackground(all);
+    const target = drag.target?.kind === "section" && drag.target.sectionId === section.id ? drag.target : null;
+    return <div key={section.id} className={`agent-section${drag.dragging?.kind === "section" && drag.dragging.id === section.id ? " is-dragging" : ""}`}
+      style={{ "--section-depth": depth } as React.CSSProperties}>
+      <div className={`agent-section-header${dropClass(target)}`} data-drag-section={section.id} onContextMenu={event => {
+        event.preventDefault();
+        openSectionMenu(new DOMRect(event.clientX, event.clientY, 0, 0), section);
+      }}>
+        <button type="button" className="agent-section-toggle" aria-expanded={!section.collapsed}
+          aria-label={`${section.name} · ${all.length}${notice ? ` · ${noticeLabel(notice, copy)}` : ""}`}
+          disabled={modalVisible} onClick={() => setSectionFolded(section, !section.collapsed)}>
+          <ChevronRight size={13} aria-hidden="true" />
+          <span className="agent-section-name">{section.name}</span>
+          <span className="agent-section-count" aria-hidden="true">{all.length}</span>
+          {(notice || background) && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${notice === "input-required" ? " is-awaiting-input" : background ? " has-background" : ""}`} />}
+        </button>
+        <button type="button" className="row-action agent-section-options" aria-label={`${copy.options}: ${section.name}`} title={copy.options}
+          disabled={modalVisible} onClick={event => {
+            event.stopPropagation();
+            openSectionMenu(event.currentTarget.getBoundingClientRect(), section);
+          }}>
+          <MoreHorizontal size={14} />
+        </button>
+      </div>
+      {!section.collapsed && <>
+        {members.length > 0 ? agentBlock(section.id, members)
+          : children.length === 0 && <p className="agent-section-empty">{copy.emptySection}</p>}
+        {children.map(child => renderSection(child, depth + 1, rendered))}
+      </>}
+    </div>;
+  };
+  const unsectioned = membersOf(null);
 
   return (
+    <Now.Provider value={now}>
     <aside className="sidebar" aria-label="Blackholes">
       <SidebarResizeHandle width={state?.sidebar_width ?? 280} right={-1} hitWidth={4} label={state?.language === "en" ? "Resize sidebar" : "Cambiar ancho del menú lateral"} />
       <header className="brand" inert={modalVisible}>
@@ -836,6 +1004,15 @@ function NavigationApp() {
               {(agentsNotice || agentsInBackground) && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${agentsNotice === "input-required" ? " is-awaiting-input" : agentsInBackground ? " has-background" : ""}`} />}
             </button>
             <span className="section-header__actions">
+              {sections.length > 0 && <button className="icon-button" type="button"
+                aria-label={anySectionOpen ? copy.collapseSections : copy.expandSections}
+                title={anySectionOpen ? copy.collapseSections : copy.expandSections}
+                onClick={() => {
+                  if (agentsCollapsed) setSectionCollapsed("agents", false);
+                  setAllSectionsFolded(anySectionOpen);
+                }}>
+                {anySectionOpen ? <ChevronsDownUp size={15} /> : <ChevronsUpDown size={15} />}
+              </button>}
               <button className="icon-button" type="button" aria-label={copy.newSection} title={copy.newSection}
                 onClick={() => {
                   if (agentsCollapsed) setSectionCollapsed("agents", false);
@@ -847,40 +1024,19 @@ function NavigationApp() {
           </header>
           <SidebarScrollArea id="sidebar-agents-content" hidden={agentsCollapsed}
             label={state?.language === "en" ? "Scroll agents" : "Desplazar agentes"}>
+          <div ref={drag.container} className={`agents-tree${drag.dragging ? " is-reordering" : ""}`} {...drag.handlers}>
           {agentTerminals.length === 0 && sections.length === 0 && <p className="agents-empty">{state?.language === "en"
-            ? "No active agents. Open a saved session from Projects or start one with +."
-            : "No hay agentes activos. Abre una sesión guardada desde Proyectos o inicia una con +."}</p>}
-          {unsectioned.length > 0 && agentBlock("unsectioned", unsectioned)}
-          {sections.map((section, index) => {
-            const members = agentTerminals.filter(terminal => sectionOf(terminal) === section.id);
-            const notice = section.collapsed ? pendingNotice(members) : null;
-            const background = section.collapsed && !notice && anyInBackground(members);
-            return <div key={section.id} className="agent-section">
-              <div className="agent-section-header" onContextMenu={event => {
-                event.preventDefault();
-                openSectionMenu(new DOMRect(event.clientX, event.clientY, 0, 0), section, index);
-              }}>
-                <button type="button" className="agent-section-toggle" aria-expanded={!section.collapsed}
-                  aria-label={`${section.name} · ${members.length}${notice ? ` · ${noticeLabel(notice, copy)}` : ""}`}
-                  disabled={modalVisible} onClick={() => setSectionFolded(section, !section.collapsed)}>
-                  <ChevronRight size={13} aria-hidden="true" />
-                  <span className="agent-section-name">{section.name}</span>
-                  <span className="agent-section-count" aria-hidden="true">{members.length}</span>
-                  {(notice || background) && <span aria-hidden="true" className={`navigation-status-dot agents-summary-dot${notice === "input-required" ? " is-awaiting-input" : background ? " has-background" : ""}`} />}
-                </button>
-                <button type="button" className="row-action agent-section-options" aria-label={`${copy.options}: ${section.name}`} title={copy.options}
-                  disabled={modalVisible} onClick={event => {
-                    event.stopPropagation();
-                    openSectionMenu(event.currentTarget.getBoundingClientRect(), section, index);
-                  }}>
-                  <MoreHorizontal size={14} />
-                </button>
-              </div>
-              {!section.collapsed && (members.length
-                ? agentBlock(section.id, members)
-                : <p className="agent-section-empty">{copy.emptySection}</p>)}
-            </div>;
-          })}
+            ? "No agents yet. Open a saved session from Projects or start one with +. Sessions stay here until you close them."
+            : "Todavía no hay agentes. Abre una sesión guardada desde Proyectos o inicia una con +. Las sesiones se quedan aquí hasta que las cierres."}</p>}
+          {drag.dragging?.kind === "session" && unsectioned.length === 0 && <div data-drop-unsectioned=""
+            className={`agents-drop-zone${drag.target?.kind === "unsectioned" ? " drop-inside" : ""}`}>{copy.dropOutOfSection}</div>}
+          {unsectioned.length > 0 && agentBlock(null, unsectioned)}
+          {(() => {
+            const rendered = new Set<string>();
+            return childrenOf(null).map(section => renderSection(section, 0, rendered));
+          })()}
+          <span className="agent-order-announcement" role="status" aria-live="polite">{announcement}</span>
+          </div>
           </SidebarScrollArea>
         </section>
         <section className="projects-shell" aria-label={copy.projects}>
@@ -935,6 +1091,7 @@ function NavigationApp() {
       {menu && <ContextMenu menu={menu} close={() => setMenu(null)} />}
       {modalVisible && <div className="sidebar-modal-backdrop" aria-hidden="true" />}
     </aside>
+    </Now.Provider>
   );
 }
 

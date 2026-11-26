@@ -128,6 +128,8 @@ impl Fixture {
                 agent_config_dir: None,
                 model: None,
                 created_at: Utc::now(),
+                listed_in_agents: false,
+                last_active_at: None,
             },
             process: None,
         }
@@ -676,4 +678,184 @@ fn source_symlink_into_task_root_cannot_turn_cleanup_into_source_deletion() {
     assert!(result.reason.unwrap().contains("Origin must be outside"));
     assert!(moved_origin.join("tracked.txt").exists());
     assert!(f.task.repositories[0].worktree_path.exists());
+}
+
+fn session_request(terminal_ids: Vec<Uuid>, terminals: TerminalPolicy) -> CloseSessionsRequest {
+    CloseSessionsRequest {
+        terminal_ids,
+        project_id: None,
+        state: None,
+        inactive_for_days: None,
+        confirm: true,
+        terminals,
+        caller: CallerContext::default(),
+    }
+}
+
+#[test]
+fn inactive_for_days_selects_and_blocks_by_last_use() {
+    let mut request = session_request(vec![], TerminalPolicy::Fail);
+    request.inactive_for_days = Some(7);
+    request.validate().unwrap();
+    request.inactive_for_days = Some(0);
+    assert!(request.validate().is_err());
+    request.inactive_for_days = Some(MAX_INACTIVE_DAYS + 1);
+    assert!(request.validate().is_err());
+
+    let f = Fixture::new();
+    let mut old = f.tab(SessionState::Restored);
+    old.descriptor.last_active_at = Some(Utc::now() - chrono::Duration::days(10));
+    let mut recent = f.tab(SessionState::Restored);
+    recent.descriptor.last_active_at = Some(Utc::now() - chrono::Duration::days(2));
+    // Without a recorded use, the session counts from when it was created.
+    let mut unknown = f.tab(SessionState::Restored);
+    unknown.descriptor.created_at = Utc::now() - chrono::Duration::days(40);
+    let mut request = session_request(vec![old.descriptor.id, recent.descriptor.id, unknown.descriptor.id], TerminalPolicy::Fail);
+    request.inactive_for_days = Some(7);
+    let results = close_agent_sessions(&request, &[old.clone(), recent.clone(), unknown.clone()]);
+    assert_eq!(results[0].status, "closed", "{:?}", results[0].reason);
+    assert_eq!(results[1].status, "blocked");
+    assert!(results[1].reason.as_deref().unwrap().contains("2 days"), "{:?}", results[1].reason);
+    assert_eq!(results[2].status, "closed", "{:?}", results[2].reason);
+    assert!(results[0].last_active_at.is_some());
+}
+
+#[test]
+fn session_close_requests_need_confirmation_and_a_selection() {
+    let mut request = session_request(vec![], TerminalPolicy::Fail);
+    assert!(request.validate().is_err(), "closing everything needs state:stopped");
+    request.state = Some(SessionStateFilter::Stopped);
+    request.validate().unwrap();
+    request.confirm = false;
+    assert!(request.validate().is_err());
+    let id = Uuid::new_v4();
+    assert!(session_request(vec![id, id], TerminalPolicy::Fail).validate().is_err());
+    let many = (0..=MAX_CLOSE_SESSIONS).map(|_| Uuid::new_v4()).collect();
+    assert!(session_request(many, TerminalPolicy::Fail).validate().is_err());
+    assert!(serde_json::from_value::<CloseSessionsRequest>(serde_json::json!({
+        "terminalIds": [], "confirm": true, "state": "working",
+    })).is_err());
+    assert!(serde_json::from_value::<CloseSessionsRequest>(serde_json::json!({
+        "terminalIds": [], "confirm": true, "deleteTranscripts": true,
+    })).is_err());
+}
+
+#[test]
+fn restored_sessions_close_and_report_how_to_resume_them() {
+    let f = Fixture::new();
+    let tab = f.tab(SessionState::Restored);
+    let mut shell = f.tab(SessionState::Restored);
+    shell.descriptor.agent = AgentKind::Shell;
+    let request = session_request(vec![tab.descriptor.id, shell.descriptor.id], TerminalPolicy::Fail);
+    let results = close_agent_sessions(&request, &[tab.clone(), shell.clone()]);
+    assert_eq!(results[0].status, "closed", "{:?}", results[0].reason);
+    assert!(results[0].reason.is_none());
+    assert!(!results[0].was_running);
+    assert_eq!(results[0].agent, Some(AgentKind::Codex));
+    assert_eq!(results[0].provider_session_id.as_deref(), Some("claude-session"));
+    assert_eq!(results[0].cwd.as_ref(), Some(&f.task.worktree_root_path));
+    assert_eq!(results[0].worktree_group_id, Some(f.task.id));
+    assert_eq!(results[1].status, "blocked");
+    assert!(results[1].reason.as_deref().unwrap().contains("plain shell"));
+
+    let mut other_project = request.clone();
+    other_project.project_id = Some(Uuid::new_v4());
+    let results = close_agent_sessions(&other_project, &[tab.clone()]);
+    assert!(results[0].reason.as_deref().unwrap().contains("another project"));
+
+    let mut caller = request.clone();
+    caller.caller.terminal_id = Some(tab.descriptor.id);
+    let results = close_agent_sessions(&caller, &[tab.clone()]);
+    assert_eq!(results[0].status, "blocked");
+    assert!(results[0].reason.as_deref().unwrap().contains("calling session"));
+    let json = serde_json::to_value(&results[0]).unwrap();
+    assert_eq!(json["providerSessionId"], "claude-session");
+    assert_eq!(json["status"], "blocked");
+}
+
+#[test]
+fn running_sessions_follow_the_terminal_policy_and_protect_the_caller() {
+    let f = Fixture::new();
+    let process = TestProcess::new(false);
+    let mut tab = f.tab(SessionState::Idle);
+    tab.process = Some(process.live.clone());
+    let id = tab.descriptor.id;
+    let reason = |request: &CloseSessionsRequest| {
+        let results = close_agent_sessions(request, &[tab.clone()]);
+        assert_eq!(results[0].status, "blocked");
+        results[0].reason.clone().unwrap()
+    };
+    assert!(reason(&session_request(vec![id], TerminalPolicy::Fail)).contains("close_idle"));
+    let mut stopped_only = session_request(vec![id], TerminalPolicy::CloseAll);
+    stopped_only.state = Some(SessionStateFilter::Stopped);
+    assert!(reason(&stopped_only).contains("state:\"stopped\""));
+    *process.live.state.lock() = SessionState::Working;
+    assert!(reason(&session_request(vec![id], TerminalPolicy::CloseIdle)).contains("close_all"));
+    let mut caller = session_request(vec![id], TerminalPolicy::CloseAll);
+    caller.caller.pid = process.live.process_id;
+    assert!(reason(&caller).contains("calling session"));
+    assert!(process.live.is_live().unwrap(), "blocked requests never signal");
+
+    *process.live.state.lock() = SessionState::Idle;
+    let results = close_agent_sessions(&session_request(vec![id], TerminalPolicy::CloseIdle), &[tab.clone()]);
+    assert_eq!(results[0].status, "closed", "{:?}", results[0].reason);
+    assert!(results[0].was_running);
+    assert!(!process.live.is_live().unwrap());
+}
+
+#[test]
+fn close_all_stops_a_working_session_that_ignores_hangup() {
+    let f = Fixture::new();
+    let process = TestProcess::new(true);
+    *process.live.state.lock() = SessionState::Working;
+    let mut tab = f.tab(SessionState::Working);
+    tab.process = Some(process.live.clone());
+    let results = close_agent_sessions(&session_request(vec![tab.descriptor.id], TerminalPolicy::CloseAll), &[tab]);
+    assert_eq!(results[0].status, "closed", "{:?}", results[0].reason);
+    assert!(!process.live.is_live().unwrap());
+}
+
+#[test]
+fn closed_agent_sessions_are_kept_newest_first_with_their_summary() {
+    use crate::services::database::Database;
+    let root = std::env::temp_dir().join(format!("blackholes-closed-sessions-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    let paths = AppPaths {
+        database: root.join("db.sqlite"),
+        session: root.join("session.json"),
+        task_workspaces: root.join("task-workspaces"),
+        agent_profiles: root.join("profiles"),
+        default_projects: root.join("projects"),
+        events_socket: root.join("events.sock"),
+        data_dir: root.clone(),
+        instance: None,
+    };
+    rusqlite::Connection::open(&paths.database).unwrap().execute_batch(
+        "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         INSERT INTO app_meta VALUES ('legacy-import-completed', 'test');",
+    ).unwrap();
+    let database = Database::open(&paths).unwrap();
+    let project = Uuid::new_v4();
+    let record = |name: &str, closed_days_ago: i64| crate::model::ClosedAgentSession {
+        terminal_id: Uuid::new_v4(), agent: AgentKind::Claude, provider_session_id: Some(format!("{name}-id")),
+        name: name.into(), note: None, section: Some("Reviews / Backend".into()), project_id: project,
+        project_name: Some("Project".into()), worktree_group_id: None, worktree_group_title: None,
+        repository_name: None, cwd: root.clone(), agent_config_dir: None, model: None,
+        created_at: Utc::now() - chrono::Duration::days(40), last_active_at: None,
+        closed_at: Utc::now() - chrono::Duration::days(closed_days_ago), summary: None,
+    };
+    let older = record("older", 3);
+    let newer = record("newer", 1);
+    database.save_closed_agent_session(&older).unwrap();
+    database.save_closed_agent_session(&newer).unwrap();
+    database.save_closed_agent_session(&record("elsewhere", 0).clone()).unwrap();
+    database.set_closed_agent_session_summary(older.terminal_id, &serde_json::json!({ "turnCount": 4 })).unwrap();
+    // A summary for a session that was never recorded is ignored.
+    database.set_closed_agent_session_summary(Uuid::new_v4(), &serde_json::json!({})).unwrap();
+    let names: Vec<_> = database.closed_agent_sessions(Some(project)).unwrap().into_iter().map(|session| session.name).collect();
+    assert_eq!(names, vec!["elsewhere", "newer", "older"]);
+    let older = database.closed_agent_sessions(None).unwrap().into_iter().find(|session| session.name == "older").unwrap();
+    assert_eq!(older.summary.unwrap()["turnCount"], 4);
+    assert!(database.closed_agent_sessions(Some(Uuid::new_v4())).unwrap().is_empty());
+    fs::remove_dir_all(root).ok();
 }

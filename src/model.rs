@@ -381,6 +381,13 @@ pub struct TerminalDescriptor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// The session is in the Agents list. It stays there while stopped, also after the app
+    /// restarts, until its tab is closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub listed_in_agents: bool,
+    /// Last time the user opened the session or its agent was active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -426,6 +433,29 @@ pub struct AppSession {
     /// Named sections of the Agents list, in display order. They only organize that list.
     #[serde(default)]
     pub agent_sections: Vec<AgentSection>,
+    /// Links an agent left in its own terminal, by that terminal: shown there until the user
+    /// opens or dismisses them.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub terminal_links: std::collections::HashMap<Uuid, Vec<SuggestedLink>>,
+}
+
+/// A place an agent points the user to, without moving the view.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuggestedLink {
+    pub id: Uuid,
+    pub target: SuggestedLinkTarget,
+    /// One line from the agent on why it links there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SuggestedLinkTarget {
+    Session { terminal_id: Uuid },
+    Project { project_id: Uuid },
+    WorktreeGroup { group_id: Uuid },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -434,6 +464,51 @@ pub struct AgentSection {
     pub name: String,
     #[serde(default)]
     pub collapsed: bool,
+    /// What the section holds. It is not shown in the list; agents read it to choose where a
+    /// new session goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The section that contains this one; `None` at the top of the Agents list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Uuid>,
+}
+
+/// An agent session whose tab was closed, kept so it can still be found: its name, place and a
+/// summary of its conversation, which can outlive the provider's own transcript.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedAgentSession {
+    pub terminal_id: Uuid,
+    pub agent: AgentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Section path in the Agents list when it was closed, such as `Reviews / Backend`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    pub project_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_group_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_group_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_name: Option<String>,
+    pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_config_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active_at: Option<DateTime<Utc>>,
+    pub closed_at: DateTime<Utc>,
+    /// First and last message, turns and changed files, read from the transcript after closing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<serde_json::Value>,
 }
 
 fn default_sidebar_agents_fraction() -> f32 { 0.4 }
@@ -465,6 +540,7 @@ impl Default for AppSession {
             agents: default_agents(),
             pinned_terminal_ids: Vec::new(),
             agent_sections: Vec::new(),
+            terminal_links: Default::default(),
         }
     }
 }

@@ -15,7 +15,7 @@
 </p>
 
 <h2 align="center"><a href="https://blackholes.dev/">Download Blackholes for macOS</a></h2>
-<p align="center">Current version: <a href="docs/releases/0.1.19.md">0.1.19</a></p>
+<p align="center">Current version: <a href="docs/releases/0.1.20.md">0.1.20</a></p>
 <p align="center">macOS 13+ · Apple Silicon · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 [![Blackholes: a project with three repositories and its tasks, each opening with its own branches, context and links](docs/media/blackholes-demo.gif)](https://blackholes.dev/videos/blackholes-repositories.mp4)

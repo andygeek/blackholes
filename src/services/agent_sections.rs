@@ -4,11 +4,15 @@
 //! worktrees, repositories and agent processes are never touched.
 use crate::model::{AgentKind, AgentSection, AppSession, TerminalDescriptor};
 use anyhow::{Result, bail};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
 use uuid::Uuid;
 
-pub const MAX_SECTIONS: usize = 32;
+pub const MAX_SECTIONS: usize = 64;
+/// A section, its sub-sections and theirs.
+pub const MAX_SECTION_DEPTH: usize = 3;
 pub const MAX_SECTION_NAME_CHARS: usize = 48;
+pub const MAX_SECTION_DESCRIPTION_CHARS: usize = 500;
 pub const MAX_SESSION_NAME_CHARS: usize = 72;
 pub const MAX_NOTE_CHARS: usize = 280;
 const MAX_CHANGES: usize = 256;
@@ -30,8 +34,8 @@ pub struct OrganizeRequest {
     pub session_order: Vec<String>,
 }
 
-/// With `id`, renames or folds that section. Without it, `name` selects the section with
-/// that name (ignoring case) or creates it.
+/// With `id`, changes that section. Without it, `name` selects the section with that name
+/// (ignoring case) or creates it.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SectionChange {
@@ -41,6 +45,12 @@ pub struct SectionChange {
     pub name: Option<String>,
     #[serde(default)]
     pub collapsed: Option<bool>,
+    /// What the section holds, for agents choosing where a session goes; `null` clears it.
+    #[serde(default, deserialize_with = "present")]
+    pub description: Option<Option<String>>,
+    /// Section ID or name that contains this one; `null` moves it to the top of the list.
+    #[serde(default, deserialize_with = "present")]
+    pub parent: Option<Option<String>>,
 }
 
 /// Omitted fields stay as they are; `null` (or an empty string) clears a name, note or section.
@@ -92,6 +102,23 @@ pub fn is_agent(terminal: &TerminalDescriptor) -> bool {
     terminal.agent != AgentKind::Shell
 }
 
+/// Last time the user opened the session or its agent was active; its creation when unknown.
+pub fn last_active(terminal: &TerminalDescriptor) -> DateTime<Utc> {
+    terminal.last_active_at.unwrap_or(terminal.created_at)
+}
+
+/// `3 days`, `5 hours` or `12 minutes`.
+pub fn describe_age(age: chrono::Duration) -> String {
+    let (count, unit) = if age.num_days() >= 1 {
+        (age.num_days(), "day")
+    } else if age.num_hours() >= 1 {
+        (age.num_hours(), "hour")
+    } else {
+        (age.num_minutes().max(0), "minute")
+    };
+    format!("{count} {unit}{}", if count == 1 { "" } else { "s" })
+}
+
 /// Sets or clears the name the user gave a session and returns the name now shown.
 /// Clearing it shows the agent's name until the agent sets a new title.
 pub fn set_session_name(session: &mut AppSession, terminal_id: Uuid, name: Option<&str>) -> Option<String> {
@@ -131,7 +158,9 @@ pub fn set_session_note(session: &mut AppSession, terminal_id: Uuid, note: Optio
     }
 }
 
-pub fn create_section(session: &mut AppSession, name: &str) -> Result<Uuid> {
+/// Creates a section at the end of `parent` (or of the list), or returns the section that
+/// already has this name, wherever it is.
+pub fn create_section(session: &mut AppSession, name: &str, parent: Option<Uuid>) -> Result<Uuid> {
     let Some(name) = clean_text(name, MAX_SECTION_NAME_CHARS) else {
         bail!("A section needs a name");
     };
@@ -141,9 +170,166 @@ pub fn create_section(session: &mut AppSession, name: &str) -> Result<Uuid> {
     if session.agent_sections.len() >= MAX_SECTIONS {
         bail!("The Agents list can have at most {MAX_SECTIONS} sections");
     }
+    if let Some(parent) = parent {
+        if !session.agent_sections.iter().any(|section| section.id == parent) {
+            bail!("Unknown section {parent}");
+        }
+        if section_depth(session, parent) + 1 >= MAX_SECTION_DEPTH {
+            bail!("Sections can be nested at most {MAX_SECTION_DEPTH} levels deep");
+        }
+    }
     let id = Uuid::new_v4();
-    session.agent_sections.push(AgentSection { id, name, collapsed: false });
+    session.agent_sections.push(AgentSection { id, name, collapsed: false, description: None, parent_id: parent });
     Ok(id)
+}
+
+pub fn set_section_description(session: &mut AppSession, section_id: Uuid, description: Option<&str>) -> Result<()> {
+    let Some(section) = session.agent_sections.iter_mut().find(|section| section.id == section_id) else {
+        bail!("Unknown section {section_id}");
+    };
+    section.description = description.and_then(|text| clean_text(text, MAX_SECTION_DESCRIPTION_CHARS));
+    Ok(())
+}
+
+fn parent_of(session: &AppSession, section_id: Uuid) -> Option<Uuid> {
+    session.agent_sections.iter().find(|section| section.id == section_id)?.parent_id
+}
+
+/// 0 for a section at the top of the list.
+pub fn section_depth(session: &AppSession, section_id: Uuid) -> usize {
+    let mut depth = 0;
+    let mut current = parent_of(session, section_id);
+    while let Some(id) = current {
+        depth += 1;
+        if depth > MAX_SECTIONS {
+            break;
+        }
+        current = parent_of(session, id);
+    }
+    depth
+}
+
+/// Levels below the section: 0 without sub-sections.
+fn subtree_height(session: &AppSession, section_id: Uuid) -> usize {
+    session.agent_sections.iter()
+        .filter(|section| section.parent_id == Some(section_id))
+        .map(|section| 1 + subtree_height(session, section.id))
+        .max().unwrap_or(0)
+}
+
+/// The section and every section inside it.
+pub fn section_and_descendants(session: &AppSession, section_id: Uuid) -> Vec<Uuid> {
+    let mut ids = vec![section_id];
+    let mut index = 0;
+    while index < ids.len() {
+        let id = ids[index];
+        let children: Vec<Uuid> = session.agent_sections.iter()
+            .filter(|section| section.parent_id == Some(id) && !ids.contains(&section.id))
+            .map(|section| section.id)
+            .collect();
+        ids.extend(children);
+        index += 1;
+    }
+    ids
+}
+
+/// Names from the top of the list down to the section, such as `Reviews / Backend`.
+pub fn section_path(session: &AppSession, section_id: Uuid) -> Option<String> {
+    let mut names = Vec::new();
+    let mut current = Some(section_id);
+    while let Some(id) = current {
+        let section = session.agent_sections.iter().find(|section| section.id == id)?;
+        names.push(section.name.as_str());
+        if names.len() > MAX_SECTIONS {
+            break;
+        }
+        current = section.parent_id;
+    }
+    names.reverse();
+    Some(names.join(" / "))
+}
+
+/// Sections in display order, each followed by its sub-sections, with their depth.
+pub fn ordered_sections(session: &AppSession) -> Vec<(&AgentSection, usize)> {
+    fn visit<'a>(session: &'a AppSession, parent: Option<Uuid>, depth: usize, out: &mut Vec<(&'a AgentSection, usize)>) {
+        for section in session.agent_sections.iter().filter(|section| section.parent_id == parent) {
+            if out.iter().any(|(listed, _)| listed.id == section.id) {
+                continue;
+            }
+            out.push((section, depth));
+            visit(session, Some(section.id), depth + 1, out);
+        }
+    }
+    let mut out = Vec::with_capacity(session.agent_sections.len());
+    visit(session, None, 0, &mut out);
+    out
+}
+
+/// Repairs sections saved by other builds or edited by hand: unknown parents, cycles and
+/// nesting deeper than allowed move up, and sessions of unknown sections leave them.
+pub fn normalize_sections(session: &mut AppSession) {
+    let ids: Vec<Uuid> = session.agent_sections.iter().map(|section| section.id).collect();
+    for index in 0..session.agent_sections.len() {
+        let id = session.agent_sections[index].id;
+        if session.agent_sections[index].parent_id.is_some_and(|parent| parent == id || !ids.contains(&parent)) {
+            session.agent_sections[index].parent_id = None;
+        }
+    }
+    // A cycle never reaches the top: cut it at the first section found in it.
+    for index in 0..session.agent_sections.len() {
+        let id = session.agent_sections[index].id;
+        let mut seen = vec![id];
+        let mut current = session.agent_sections[index].parent_id;
+        while let Some(parent) = current {
+            if seen.contains(&parent) {
+                session.agent_sections[index].parent_id = None;
+                break;
+            }
+            seen.push(parent);
+            current = parent_of(session, parent);
+        }
+    }
+    for index in 0..session.agent_sections.len() {
+        let id = session.agent_sections[index].id;
+        if section_depth(session, id) >= MAX_SECTION_DEPTH {
+            session.agent_sections[index].parent_id = None;
+        }
+    }
+    for terminal in &mut session.terminals {
+        if terminal.section_id.is_some_and(|id| !ids.contains(&id)) {
+            terminal.section_id = None;
+        }
+    }
+}
+
+/// Moves a section inside `parent` (or to the top of the list), before its sibling `before`
+/// or after the last one. A section never moves inside itself or its own sub-sections.
+pub fn place_section(session: &mut AppSession, section_id: Uuid, parent: Option<Uuid>, before: Option<Uuid>) -> Result<()> {
+    let Some(index) = session.agent_sections.iter().position(|section| section.id == section_id) else {
+        bail!("Unknown section {section_id}");
+    };
+    if let Some(parent) = parent {
+        if !session.agent_sections.iter().any(|section| section.id == parent) {
+            bail!("Unknown section {parent}");
+        }
+        if section_and_descendants(session, section_id).contains(&parent) {
+            bail!("A section cannot go inside itself or one of its sub-sections");
+        }
+        if section_depth(session, parent) + 1 + subtree_height(session, section_id) >= MAX_SECTION_DEPTH {
+            bail!("Sections can be nested at most {MAX_SECTION_DEPTH} levels deep");
+        }
+    }
+    let mut section = session.agent_sections.remove(index);
+    section.parent_id = parent;
+    // Siblings keep the order they have in the list; the section goes before `before`, or
+    // after the last of its new siblings.
+    let target = before
+        .filter(|id| *id != section_id)
+        .and_then(|id| session.agent_sections.iter().position(|other| other.id == id && other.parent_id == parent))
+        .or_else(|| session.agent_sections.iter().rposition(|other| other.parent_id == parent).map(|index| index + 1))
+        .unwrap_or(session.agent_sections.len());
+    session.agent_sections.insert(target, section);
+    Ok(())
 }
 
 pub fn rename_section(session: &mut AppSession, section_id: Uuid, name: &str) -> Result<()> {
@@ -160,27 +346,31 @@ pub fn rename_section(session: &mut AppSession, section_id: Uuid, name: &str) ->
     Ok(())
 }
 
-/// Removes the section; its sessions stay in the Agents list without a section.
+/// Removes the section. Its sessions and sub-sections move to the section that contained
+/// it, or to the top of the Agents list; nothing leaves the list.
 pub fn delete_section(session: &mut AppSession, section_id: Uuid) {
+    let parent = parent_of(session, section_id);
     session.agent_sections.retain(|section| section.id != section_id);
+    for section in &mut session.agent_sections {
+        if section.parent_id == Some(section_id) {
+            section.parent_id = parent;
+        }
+    }
     for terminal in &mut session.terminals {
         if terminal.section_id == Some(section_id) {
-            terminal.section_id = None;
+            terminal.section_id = parent;
         }
     }
 }
 
-pub fn move_section(session: &mut AppSession, section_id: Uuid, offset: i32) {
-    let Some(index) = session.agent_sections.iter().position(|section| section.id == section_id) else {
-        return;
-    };
-    let target = (index as i64 + offset as i64).clamp(0, session.agent_sections.len() as i64 - 1) as usize;
-    let section = session.agent_sections.remove(index);
-    session.agent_sections.insert(target, section);
-}
-
 pub fn set_section_collapsed(session: &mut AppSession, section_id: Uuid, collapsed: bool) {
     if let Some(section) = session.agent_sections.iter_mut().find(|section| section.id == section_id) {
+        section.collapsed = collapsed;
+    }
+}
+
+pub fn set_all_sections_collapsed(session: &mut AppSession, collapsed: bool) {
+    for section in &mut session.agent_sections {
         section.collapsed = collapsed;
     }
 }
@@ -245,7 +435,8 @@ fn find_section_by_name<'a>(session: &'a AppSession, name: &str) -> Option<&'a A
     session.agent_sections.iter().find(|section| section.name.to_lowercase() == name)
 }
 
-fn resolve_section(session: &AppSession, reference: &str) -> Option<Uuid> {
+/// A section by ID, or by name ignoring case.
+pub fn resolve_section(session: &AppSession, reference: &str) -> Option<Uuid> {
     let reference = reference.trim();
     Uuid::parse_str(reference).ok()
         .filter(|id| session.agent_sections.iter().any(|section| section.id == *id))
@@ -292,6 +483,15 @@ pub fn organize(session: &mut AppSession, request: &OrganizeRequest, caller: Opt
     }
 
     for change in &request.sections {
+        // Outer None: parent not given; Some(None): move to the top of the list.
+        let parent = match change.parent.as_ref().map(|parent| parent.as_deref().map(str::trim).filter(|value| !value.is_empty())) {
+            None => None,
+            Some(None) => Some(None),
+            Some(Some(reference)) => match resolve_section(&next, reference) {
+                Some(id) => Some(Some(id)),
+                None => bail!("Unknown parent section \"{reference}\""),
+            },
+        };
         let id = match (change.id, change.name.as_deref()) {
             (Some(id), name) => {
                 if !next.agent_sections.iter().any(|section| section.id == id) {
@@ -302,9 +502,17 @@ pub fn organize(session: &mut AppSession, request: &OrganizeRequest, caller: Opt
                 }
                 id
             }
-            (None, Some(name)) => create_section(&mut next, name)?,
+            (None, Some(name)) => create_section(&mut next, name, parent.flatten())?,
             (None, None) => bail!("Each section change needs an id or a name"),
         };
+        if let Some(parent) = parent
+            && parent_of(&next, id) != parent
+        {
+            place_section(&mut next, id, parent, None)?;
+        }
+        if let Some(description) = &change.description {
+            set_section_description(&mut next, id, description.as_deref())?;
+        }
         if let Some(collapsed) = change.collapsed {
             set_section_collapsed(&mut next, id, collapsed);
         }
@@ -327,7 +535,7 @@ pub fn organize(session: &mut AppSession, request: &OrganizeRequest, caller: Opt
                 Some(reference) => Some(match resolve_section(&next, reference) {
                     Some(id) => id,
                     None if Uuid::parse_str(reference).is_ok() => bail!("Unknown section {reference}"),
-                    None => create_section(&mut next, reference)?,
+                    None => create_section(&mut next, reference, None)?,
                 }),
             };
             set_session_section(&mut next, terminal_id, section_id)?;
@@ -397,6 +605,8 @@ mod tests {
             agent_config_dir: None,
             model: None,
             created_at: chrono::Utc::now(),
+            listed_in_agents: false,
+            last_active_at: None,
         }
     }
 
@@ -430,7 +640,7 @@ mod tests {
         let agent = terminal(AgentKind::Codex);
         let id = agent.id;
         let mut state = session(vec![agent]);
-        let section = create_section(&mut state, "Release").unwrap();
+        let section = create_section(&mut state, "Release", None).unwrap();
         organize(&mut state, &request(serde_json::json!({
             "sessions": [{ "terminalId": id.to_string(), "section": "release" }],
         })), None).unwrap();
@@ -497,7 +707,7 @@ mod tests {
         let agent = terminal(AgentKind::Claude);
         let id = agent.id;
         let mut state = session(vec![agent]);
-        let section = create_section(&mut state, "Old").unwrap();
+        let section = create_section(&mut state, "Old", None).unwrap();
         set_session_section(&mut state, id, Some(section)).unwrap();
         organize(&mut state, &request(serde_json::json!({ "deleteSections": ["old"] })), None).unwrap();
         assert!(state.agent_sections.is_empty());
@@ -506,16 +716,103 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_sub_section_moves_its_content_to_its_parent() {
+        let agent = terminal(AgentKind::Claude);
+        let id = agent.id;
+        let mut state = session(vec![agent]);
+        let reviews = create_section(&mut state, "Reviews", None).unwrap();
+        let backend = create_section(&mut state, "Backend", Some(reviews)).unwrap();
+        let mobile = create_section(&mut state, "Mobile", Some(backend)).unwrap();
+        set_session_section(&mut state, id, Some(backend)).unwrap();
+        delete_section(&mut state, backend);
+        assert_eq!(state.terminals[0].section_id, Some(reviews));
+        assert_eq!(state.agent_sections.iter().find(|section| section.id == mobile).unwrap().parent_id, Some(reviews));
+    }
+
+    #[test]
+    fn sub_sections_nest_up_to_the_depth_limit_and_list_depth_first() {
+        let mut state = session(Vec::new());
+        let a = create_section(&mut state, "A", None).unwrap();
+        let b = create_section(&mut state, "B", None).unwrap();
+        let a1 = create_section(&mut state, "A1", Some(a)).unwrap();
+        let a1x = create_section(&mut state, "A1x", Some(a1)).unwrap();
+        assert!(create_section(&mut state, "Too deep", Some(a1x)).is_err());
+        let order: Vec<_> = ordered_sections(&state).into_iter().map(|(section, depth)| (section.id, depth)).collect();
+        assert_eq!(order, vec![(a, 0), (a1, 1), (a1x, 2), (b, 0)]);
+        assert_eq!(section_path(&state, a1x).as_deref(), Some("A / A1 / A1x"));
+        assert_eq!(section_and_descendants(&state, a), vec![a, a1, a1x]);
+    }
+
+    #[test]
+    fn placing_a_section_reorders_siblings_and_never_creates_a_cycle() {
+        let mut state = session(Vec::new());
+        let a = create_section(&mut state, "A", None).unwrap();
+        let b = create_section(&mut state, "B", None).unwrap();
+        let c = create_section(&mut state, "C", None).unwrap();
+        place_section(&mut state, c, None, Some(a)).unwrap();
+        let top: Vec<_> = ordered_sections(&state).into_iter().map(|(section, _)| section.id).collect();
+        assert_eq!(top, vec![c, a, b]);
+        place_section(&mut state, b, Some(a), None).unwrap();
+        assert!(place_section(&mut state, a, Some(b), None).is_err(), "a section cannot go inside its own sub-section");
+        assert!(place_section(&mut state, a, Some(a), None).is_err());
+        let b1 = create_section(&mut state, "B1", Some(b)).unwrap();
+        // c > a > b > b1 would be four levels.
+        assert!(place_section(&mut state, a, Some(c), None).is_err());
+        place_section(&mut state, b1, None, None).unwrap();
+        let order: Vec<_> = ordered_sections(&state).into_iter().map(|(section, depth)| (section.id, depth)).collect();
+        assert_eq!(order, vec![(c, 0), (a, 0), (b, 1), (b1, 0)]);
+    }
+
+    #[test]
+    fn organize_sets_descriptions_and_parents() {
+        let mut state = session(Vec::new());
+        organize(&mut state, &request(serde_json::json!({ "sections": [
+            { "name": "Reviews", "description": "  Code reviews of   pull requests " },
+            { "name": "Backend", "parent": "reviews", "description": "Backend PRs" },
+        ] })), None).unwrap();
+        let reviews = resolve_section(&state, "Reviews").unwrap();
+        let backend = resolve_section(&state, "backend").unwrap();
+        let section = |state: &AppSession, id: Uuid| state.agent_sections.iter().find(|section| section.id == id).unwrap().clone();
+        assert_eq!(section(&state, reviews).description.as_deref(), Some("Code reviews of pull requests"));
+        assert_eq!(section(&state, backend).parent_id, Some(reviews));
+        organize(&mut state, &request(serde_json::json!({ "sections": [
+            { "id": backend.to_string(), "parent": null, "description": null },
+        ] })), None).unwrap();
+        assert_eq!(section(&state, backend).parent_id, None);
+        assert_eq!(section(&state, backend).description, None);
+        assert!(organize(&mut state, &request(serde_json::json!({ "sections": [{ "name": "X", "parent": "missing" }] })), None).is_err());
+    }
+
+    #[test]
+    fn normalize_repairs_unknown_parents_and_cycles() {
+        let mut state = session(Vec::new());
+        let a = create_section(&mut state, "A", None).unwrap();
+        let b = create_section(&mut state, "B", Some(a)).unwrap();
+        state.agent_sections[0].parent_id = Some(b);
+        let c = create_section(&mut state, "C", None).unwrap();
+        state.agent_sections[2].parent_id = Some(Uuid::new_v4());
+        normalize_sections(&mut state);
+        assert_eq!(ordered_sections(&state).len(), 3, "every section is reachable again");
+        assert_eq!(state.agent_sections.iter().find(|section| section.id == c).unwrap().parent_id, None);
+    }
+
+    #[test]
+    fn ages_read_in_the_largest_unit() {
+        assert_eq!(describe_age(chrono::Duration::days(1)), "1 day");
+        assert_eq!(describe_age(chrono::Duration::hours(30)), "1 day");
+        assert_eq!(describe_age(chrono::Duration::hours(5)), "5 hours");
+        assert_eq!(describe_age(chrono::Duration::minutes(-3)), "0 minutes");
+    }
+
+    #[test]
     fn section_order_lists_given_sections_first() {
         let mut state = session(Vec::new());
-        let a = create_section(&mut state, "A").unwrap();
-        let b = create_section(&mut state, "B").unwrap();
-        let c = create_section(&mut state, "C").unwrap();
+        let a = create_section(&mut state, "A", None).unwrap();
+        let b = create_section(&mut state, "B", None).unwrap();
+        let c = create_section(&mut state, "C", None).unwrap();
         organize(&mut state, &request(serde_json::json!({ "sectionOrder": ["c", a.to_string()] })), None).unwrap();
         let ids: Vec<_> = state.agent_sections.iter().map(|section| section.id).collect();
         assert_eq!(ids, vec![c, a, b]);
-        move_section(&mut state, b, -5);
-        assert_eq!(state.agent_sections[0].id, b);
     }
 
     #[test]

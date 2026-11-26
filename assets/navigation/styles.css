@@ -23,6 +23,11 @@
   --running-background: #17273f;
   --running-hover: #1f3555;
   --row-neutral: var(--workspace-slate);
+  /* Agent sessions nobody opened in a week, and in a month. */
+  --stale-week: #ef5a5a;
+  --stale-month: #000000;
+  /* A black icon needs a light edge to show on a dark sidebar. */
+  --stale-month-outline: drop-shadow(0 0 .6px rgba(255, 255, 255, .75)) drop-shadow(0 0 .6px rgba(255, 255, 255, .75));
 }
 
 :root[data-theme="light"] {
@@ -37,6 +42,9 @@
   --running-background: #e4eefc;
   --running-hover: #d3e3fa;
   --row-neutral: var(--foreground);
+  --stale-week: #d92d2d;
+  --stale-month: #000000;
+  --stale-month-outline: drop-shadow(0 0 0 transparent);
 }
 
 * {
@@ -200,8 +208,9 @@ button:focus-visible {
 .sortable-agent { position: relative; min-width: 0; }
 .sortable-agent .agent-card, .sortable-agent .agent-open { cursor: default; }
 .sortable-agent .agent-open { user-select: none; -webkit-user-select: none; }
-.global-agents.is-reordering, .global-agents.is-reordering * { cursor: grabbing; }
-.sortable-agent.is-dragging { opacity: .45; }
+.agents-tree { display: flex; min-width: 0; flex-direction: column; }
+.agents-tree.is-reordering, .agents-tree.is-reordering * { cursor: grabbing; }
+.sortable-agent.is-dragging, .agent-section.is-dragging { opacity: .45; }
 .sortable-agent.drop-before::before, .sortable-agent.drop-after::after {
   content: ""; position: absolute; left: 8px; right: 8px; height: 2px;
   border-radius: 2px; background: #8190d7; pointer-events: none;
@@ -697,8 +706,23 @@ button:focus-visible {
 .agents-empty { margin: 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 
 /* Sections of the Agents list. They only group cards; the project tree is unaffected. */
-.agent-section { display: flex; min-width: 0; flex-direction: column; }
-.agent-section-header { display: flex; height: 26px; align-items: center; gap: 2px; margin: 4px var(--sidebar-scroll-right-padding, 8px) 0 8px; padding: 0 2px 0 6px; border-radius: 6px; color: var(--muted); }
+.agent-section { display: flex; min-width: 0; flex-direction: column; --section-indent: calc(var(--section-depth, 0) * 14px); }
+.agent-section-header { position: relative; display: flex; height: 26px; align-items: center; gap: 2px; margin: 4px var(--sidebar-scroll-right-padding, 8px) 0 calc(8px + var(--section-indent)); padding: 0 2px 0 6px; border-radius: 6px; color: var(--muted); }
+.agent-section-toggle { user-select: none; -webkit-user-select: none; }
+.agent-section .global-agents { padding-left: calc(8px + var(--section-indent)); }
+.agent-section-header.drop-before::before, .agent-section-header.drop-after::after {
+  content: ""; position: absolute; left: 4px; right: 4px; height: 2px;
+  border-radius: 2px; background: #8190d7; pointer-events: none;
+}
+.agent-section-header.drop-before::before { top: -3px; }
+.agent-section-header.drop-after::after { bottom: -3px; }
+.agent-section-header.drop-inside, .agents-drop-zone.drop-inside { background: var(--surface-hover); box-shadow: inset 0 0 0 1.5px #8190d7; color: var(--foreground); }
+.agents-drop-zone { margin: 8px var(--sidebar-scroll-right-padding, 8px) 2px 8px; padding: 10px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 11px; text-align: center; }
+/* Red after a week without use, black after a month; the tooltip says how long. */
+:is(.terminal-agent-card, .terminal-tree-leaf).is-stale-week .terminal-provider { color: var(--stale-week); opacity: 1; }
+:is(.terminal-agent-card, .terminal-tree-leaf).is-stale-month .terminal-provider { color: var(--stale-month); opacity: 1; filter: var(--stale-month-outline); }
+:is(.terminal-agent-card, .terminal-tree-leaf).is-stale-week .terminal-provider img { filter: grayscale(1) sepia(1) saturate(8) hue-rotate(-40deg); }
+:is(.terminal-agent-card, .terminal-tree-leaf).is-stale-month .terminal-provider img { filter: grayscale(1) brightness(0) var(--stale-month-outline); }
 .agent-section-header:hover { background: var(--surface-hover); }
 .agent-section-toggle { display: flex; height: 100%; min-width: 0; flex: 1; align-items: center; gap: 5px; padding: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 650; text-align: left; cursor: pointer; }
 .agent-section-toggle:hover { color: var(--foreground); }
@@ -710,5 +734,5 @@ button:focus-visible {
 .agent-section-options { flex: none; opacity: 0; transition: opacity 140ms ease; }
 .agent-section-header:hover .agent-section-options, .agent-section-header:focus-within .agent-section-options { opacity: 1; }
 .agent-section .global-agents { padding-top: 4px; }
-.agent-section-empty { margin: 2px var(--sidebar-scroll-right-padding, 8px) 6px 32px; color: var(--subtle); font-size: 11px; }
+.agent-section-empty { margin: 2px var(--sidebar-scroll-right-padding, 8px) 6px calc(32px + var(--section-indent)); color: var(--subtle); font-size: 11px; }
 @media (prefers-reduced-motion: reduce) { .agent-section-toggle svg, .agent-section-options { transition: none; } }

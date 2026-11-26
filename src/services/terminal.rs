@@ -436,6 +436,8 @@ mod tests {
             agent_config_dir: None,
             model: None,
             created_at: chrono::Utc::now(),
+            listed_in_agents: false,
+            last_active_at: None,
         }
     }
 

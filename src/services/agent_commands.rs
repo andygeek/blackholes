@@ -68,7 +68,8 @@ pub fn listen(paths: &AppPaths) -> Result<flume::Receiver<AgentCommand>> {
                 stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                 let message: String = serde_json::from_str(&read_frame(&mut stream)?)?;
                 let (reply, response) = flume::bounded(1);
-                let timeout = if message.starts_with("close-tasks:") { 600 } else { 20 };
+                // Closing stops live processes: up to five seconds each.
+                let timeout = if message.starts_with("close-tasks:") || message.starts_with("close-agent-sessions:") { 600 } else { 20 };
                 sender.send(AgentCommand { message, reply })?;
                 response.recv_timeout(Duration::from_secs(timeout))
                     .context("The app did not confirm execution; check the destination before retrying")

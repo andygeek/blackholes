@@ -9,16 +9,22 @@ impl BlackholesApp {
             .terminals
             .iter()
             .filter(|t| t.task_id == Some(task_id))
-            .map(|t| CloseTerminal {
-                descriptor: t.clone(),
-                process: self.terminals.get(&t.id).map(|handle| LiveTerminal {
-                    child: handle.child.clone(),
-                    master: handle.master.clone(),
-                    process_id: handle.process_id,
-                    state: handle.state.clone(),
-                }),
-            })
+            .map(|t| self.close_terminal_snapshot(t))
             .collect()
+    }
+
+    /// A terminal as the closure service sees it: its descriptor and, while the app holds
+    /// its PTY, the handle to stop it. A restored tab has no handle.
+    pub(super) fn close_terminal_snapshot(&self, terminal: &TerminalDescriptor) -> CloseTerminal {
+        CloseTerminal {
+            descriptor: terminal.clone(),
+            process: self.terminals.get(&terminal.id).map(|handle| LiveTerminal {
+                child: handle.child.clone(),
+                master: handle.master.clone(),
+                process_id: handle.process_id,
+                state: handle.state.clone(),
+            }),
+        }
     }
 
     /// MCP and UI enter here. Only this app owns PTYs and app-session.json;

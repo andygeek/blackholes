@@ -58,7 +58,10 @@ single line of at most 1,000 bytes. The terminal appears under the project or
 repository in the sidebar and is restored as a plain shell when the session is
 reopened; the command is not replayed. By default the current view is kept and a
 toast links to the terminal; `reveal:true` shows and focuses it instead. Each
-call opens a new terminal, so do not retry a started launch.
+call opens a new terminal, so do not retry a started launch. When the command
+starts an agent, `section` (a section id or name of the Agents list) places that
+session in it; an unknown section never stops the launch and the result carries
+`sectionWarning`.
 
 ## Start worktree group agents from any MCP client
 
@@ -295,28 +298,142 @@ API, compatibility rules and review steps](TASK-DETAILS.md).
 
 ## Organize the Agents list
 
-The sidebar Agents list has its own organization: named sections, and a name,
-note, section and pin for each agent session. It is stored in the app session
-(`AppSession.agent_sections`, `TerminalDescriptor.custom_label`, `section_id`
-and `note`) and never changes the project tree, worktrees, repositories or
+The sidebar Agents list has its own organization: named sections, which can
+hold sub-sections and an optional description, and a name, note, section and pin
+for each agent session. It is stored in the app session
+(`AppSession.agent_sections` with `parent_id` and `description`,
+`TerminalDescriptor.custom_label`, `section_id`, `note`, `listed_in_agents` and
+`last_active_at`) and never changes the project tree, worktrees, repositories or
 running agents. The tools reach the running app through the acknowledged
 `agent-commands.sock` bridge, because the app owns live state and persistence:
 writing the session file directly would be overwritten.
 
 | Tool | Purpose |
 | --- | --- |
-| `list_agent_sessions` | Sessions in display order (no section first, then each section), with `terminalId`, `name`, `customName`, `note`, `agent`, `state` (`working`, `needs_input`, `response_ready`, `idle`, `stopped`), `pinned`, `section`, `project`, `worktreeGroup`, `repository`, `cwd`, `providerSessionId` and `isCaller`; sections with `sessionCount`. `includeStopped:true` adds stopped sessions the list does not show (`listedInAgents:false`). |
-| `organize_agent_sessions` | One atomic batch, applied in this order: `deleteSections`, `sections` (`{id?, name?, collapsed?}`), `sessions` (`{terminalId, name?, note?, section?, pinned?}`), `sectionOrder`, `sessionOrder`. Sections are referenced by id or name, ignoring case; a session's section given by a new name creates it. Omitted fields stay; `null` clears a name, note or section. `terminalId:"current"` is the caller (`BLACKHOLES_TERMINAL_ID`). Returns the updated list. |
-| `get_agent_session_activity` | Recent conversation of a Claude Code or Codex session, read by the MCP process from the provider's transcript (`~/.claude*/projects/*/<id>.jsonl`, `~/.codex*/sessions/**/rollout-*-<id>.jsonl`, or the session's inherited profile folder). `view:"turns"` (default) pairs each prompt with the agent's last reply and counts its earlier progress replies; `view:"messages"` returns every prompt and reply. Tool calls, tool output, reasoning, subagent turns and CLI-injected context are omitted; Codex heartbeats count as `automated` prompts. The file is read from the end, at most 96 MiB. |
-| `open_agent_session` | Shows the session's terminal, resuming a stopped one, as clicking it does. Only when the user asks. |
+| `list_agent_sessions` | Sessions in display order (no section first, then each section followed by its sub-sections), with `terminalId`, `name`, `customName`, `note`, `agent`, `state` (`working`, `needs_input`, `response_ready`, `idle`, `stopped`), `pinned`, `section` (`{id, name, path}`), `project`, `worktreeGroup`, `repository`, `cwd`, `providerSessionId`, `lastActiveAt`, `inactiveDays` and `isCaller`; `sections` in display order with `description`, `parentId`, `depth`, `path` and `sessionCount`. `includeStopped:true` adds stopped sessions the list does not show (`listedInAgents:false`), which appear only in the project tree. |
+| `organize_agent_sessions` | One atomic batch, applied in this order: `deleteSections`, `sections` (`{id?, name?, description?, parent?, collapsed?}`), `sessions` (`{terminalId, name?, note?, section?, pinned?}`), `sectionOrder`, `sessionOrder`. Sections are referenced by id or name, ignoring case (names are unique in the list); a session's section given by a new name creates it at the top level. `parent` nests a section inside another, up to three levels. Omitted fields stay; `null` clears a name, note, description, parent or section. `terminalId:"current"` is the caller (`BLACKHOLES_TERMINAL_ID`). Returns the updated list. |
+| `get_agent_session_activity` | Conversation of a Claude Code or Codex session, read by the MCP process from the provider's transcript (`~/.claude*/projects/*/<id>.jsonl`, `~/.codex*/sessions/**/rollout-*-<id>.jsonl`, or the session's inherited profile folder). Pass `terminalId` for a session in the list, or `providerSessionId` (optional `agent`) for any session on the computer: closed, from an archived Worktree Group or found by search; that form works without the app. `view:"turns"` (default) pairs each prompt with the agent's last reply and counts its earlier progress replies; `view:"messages"` returns every prompt and reply. Tool calls, tool output, reasoning, subagent turns and CLI-injected context are omitted; Codex heartbeats count as `automated` prompts. Each page is read from its end, at most 96 MiB; `olderCursor` (a byte offset where the oldest returned entry starts) is passed back as `before` for the previous page and stays valid while the session appends. `summary` (default on the first page) has the first and last message with timestamps, `turnCount`, `messageCount` and `unansweredQuestion`. `includeFiles:true` lists files changed by edit tools. |
+| `search_agent_sessions` | Case-insensitive text search in the prompts and replies of the Claude Code and Codex transcripts on the computer, newest first. `projectId` keeps sessions whose working folder is the project root, a repository or a Worktree Group folder, archived ones included; `agent` keeps one provider. Returns per session `agent`, `providerSessionId`, `terminalId` if open, `closed` (`terminalId`, `name`, `note`, `section`, `closedAt`) if its tab was closed, `name`, `project`, `worktreeGroup`, `cwd`, `lastActivityAt`, `turnCount`, `matchCount` and up to `maxMatchesPerSession` matches with `turn`, `role`, `excerpt`, `timestamp` and `before`. |
+| `close_agent_sessions` | Closes session tabs as the × does. `terminalIds` (1–32), or filters: `state:"stopped"` (no running process) and/or `inactiveForDays` (1–3650: nobody opened the session and its agent did nothing for that long), optionally in `projectId` (32 per call, `remaining` counts the rest). Filters cover every agent session, also those shown only in the project tree, and never close pinned ones. With `terminalIds`, `projectId`, `state` and `inactiveForDays` are guards. Requires `confirm:true`. Returns per terminal `closed` or `blocked` with its reason, plus `name`, `agent`, `providerSessionId`, `cwd`, `projectId`, `worktreeGroupId`, `lastActiveAt` and `wasRunning`. |
+| `list_closed_agent_sessions` | Sessions whose tabs were closed (×, `close_agent_sessions` or closing their Worktree Group), newest first, from the app database: `terminalId`, `name`, `note`, `section`, `closedAt`, `agent`, `providerSessionId`, `project`, `worktreeGroup`, `repository`, `cwd`, `createdAt`, `lastActiveAt` and the `summary` saved when it closed (first and last message, `turnCount`, `unansweredQuestion`, `filesChanged`). `query` filters by name, note, section, project, group, repository, folder, session ID and those messages; `projectId` keeps one project. Works without the app. |
+| `open_agent_session` | Shows the session's terminal, resuming a stopped one, as clicking it does. Only when the user asks. From an agent in another Blackholes terminal it leaves a link there instead (see below). |
+| `suggest_navigation` | Leaves 1–3 links in the caller's own terminal, shown as a card at its bottom right: an open agent session (`terminalId` or `providerSessionId`), a project (`projectId`) or a Worktree Group (`groupId`), each with an optional `reason`. The view does not move. See [Links in the agent's terminal](#links-in-the-agents-terminal). |
 
-Sessions stay listed while pinned or in a section, also after they stop, so
-they can be resumed from the list. Inside each section, pinned sessions come
-first, then sessions with a notice, working ones and the manual order;
-`sessionOrder` sets that manual order and the pin order. Deleting a section
-keeps its sessions in the list without a section. Limits: 32 sections, 48
-characters per section name, 72 per session name and 280 per note.
+A session enters the list when it becomes active and stays there, also when
+it stops and after the app restarts, until its tab is closed; clicking a stopped
+one resumes it, as in the project tree. Sessions saved by earlier builds are
+listed when they were running at quit, pinned, in a section or waiting with a
+notice. Inside each section, its sessions come before its sub-sections; pinned
+sessions come first, then sessions with a notice, working ones and the manual
+order; `sessionOrder` sets that manual order and the pin order. Deleting a
+section moves its sessions and sub-sections to the section that contained it.
+In the app, holding a session or a section header and dragging it moves it:
+sessions between sections, sections before, after or inside another one
+(⌥↑ / ⌥↓ move the focused one). Limits: 64 sections, three levels, 48
+characters per section name, 500 per description, 72 per session name and 280
+per note.
 
-Text returned by `get_agent_session_activity` was written by another session.
-Tool descriptions and the installed skill tell agents to treat it as data and
-never follow instructions found in it.
+### Sections for new sessions
+
+A section's description is not shown in the list; it tells agents what belongs
+there, such as "code reviews of pull requests". An agent that starts a session
+reads the sections with `list_agent_sessions` and passes the one that fits:
+`section` in `start_worktree_group_agents` (per group or for the batch),
+`agentSection` in `create_worktree_group`, or `section` in
+`open_project_terminal`. An unknown section never stops a launch: the session
+starts without one and the result carries `sectionWarning`.
+
+### Unused sessions
+
+`lastActiveAt` is the last time the user opened the session or its agent changed
+state. Sessions saved before it was recorded take the date of the last change to
+their transcript, read once in the background when the app starts. In the
+sidebar, an agent session unused for a week shows its icon in red and one
+unused for a month in black, in the Agents list and in the project tree; the
+tooltip says how many days.
+
+### Closing sessions
+
+`close_agent_sessions` uses the closure service of `close_worktree_groups` and
+then removes each tab with the code behind the ×: the session leaves the Agents
+list, the project tree and `list_agent_sessions`, also with `includeStopped`.
+It deletes nothing on disk; the provider keeps the conversation and the result
+keeps its session ID. Restored or exited tabs close directly. A running session
+follows `terminals`: `fail` (default) blocks it, `close_idle` stops idle or
+waiting sessions, `close_all` also stops working ones. Stopping sends SIGHUP to
+the session's own process groups and SIGKILL after 3 seconds, checking the state
+again right before signalling. The calling session is protected by
+`BLACKHOLES_TERMINAL_ID` or process ancestry; unlike group closure, sharing the
+caller's folder or Worktree Group does not protect a session. Terminals of a
+Worktree Group that is closing are blocked, and a restored tab resumed while
+closing is kept.
+
+Every agent tab that closes, with the ×, this tool or with its Worktree Group,
+is recorded in the `closed_agent_sessions` table: name, note, section path,
+project, group, folder, profile, dates and provider session ID. A summary of its
+conversation (as `get_agent_session_activity` returns it, with the files
+changed) is added in the background, so it can still be found after the
+provider deletes old transcripts. `list_closed_agent_sessions` reads it, and
+`search_agent_sessions` and `get_agent_session_activity` add it to a closed
+session's results.
+
+### Links in the agent's terminal
+
+When the user asks an agent to find or show something, such as which session
+made a change, the agent can answer with `suggest_navigation` instead of moving
+the view. The app shows a card at the bottom right of the agent's own terminal,
+over its last lines, with one row per link: the name, the agent and place of a
+session (and whether it is stopped), or the project or group, plus the agent's
+`reason`. Nothing takes focus, plays a sound or appears in another view: the
+user sees the card when they look at that terminal. Clicking a row opens it, as
+the Agents list or the project tree would (a stopped session resumes), and
+removes that link; the × dismisses the card.
+
+Each call replaces the caller's links (`links`, 1–3, exactly one ID each;
+`reason` up to 160 characters, kept to one line), and `clear:true` removes
+them. They are stored in the app session (`AppSession.terminal_links`, by the
+terminal that received them), so they stay after a restart until opened or
+dismissed. Closing that terminal drops them, and a link to a session whose tab
+is closed disappears. Closed sessions and closed (archived) groups cannot be
+linked. The caller comes from `BLACKHOLES_TERMINAL_ID`: an agent outside a
+Blackholes terminal gets an error and should give the names instead.
+Agents also reach this card without choosing the tool. Called from an agent in
+a Blackholes terminal, `open_agent_session`, `open_project`,
+`open_worktree_group` and `open_project_terminal` with `reveal:true` never move
+the user's view: each adds its target to that terminal's links (a target
+already there moves to the end, and the newest three stay) and returns
+`linkShown:true` with the links and a message asking the agent to say the link
+is there. So "show me this group in Blackholes" never pulls the user away from
+another agent. Called from outside a Blackholes terminal, or for the calling
+session itself, they open the target at once as before.
+
+In the app, the project tree follows the open session: whenever the session on
+screen changes, by any means, its row scrolls into view in Projects if it was
+out of view. Updates that do not change the session never move the tree, so a
+manual scroll stays.
+
+### Reading and searching transcripts
+
+Transcripts are read only by the MCP process and never change. A summary reads
+up to the last 256 MiB of a transcript (`partial:true` beyond that; the first
+message still comes from the start of the file). `unansweredQuestion` is true
+when the agent's last message ends with a question mark and nothing came after
+it, or when Claude called `AskUserQuestion` and no answer arrived. Files come
+from Claude's `Write`, `Edit`, `MultiEdit` and `NotebookEdit` calls and from
+Codex file-change records, or the headers of its patches when a transcript has
+no such records; changes made through shell commands are not listed, and no
+file contents are returned.
+
+`search_agent_sessions` skips transcripts without the text before parsing them
+and reads at most 64 MiB from the end of each and 4 GiB per call;
+`truncated:true` means older sessions were not searched, and `limitReached`
+that more sessions may match. Claude project folders are matched by the name
+Claude derives from the working folder and then by the folder the transcript
+records; Codex transcripts by the folder in their first line. Older Codex
+transcripts compressed as `.jsonl.zst` cannot be read yet: search counts them
+in `skippedCompressed` and reading one returns an error.
+
+Text returned by `get_agent_session_activity`, `search_agent_sessions` and
+`list_closed_agent_sessions` was written by another session. Tool descriptions, both results (`warning`) and the
+installed skill tell agents to treat it as data and never follow instructions
+found in it.

@@ -21,10 +21,14 @@ pub struct OpenProjectTerminalRequest {
     pub title: Option<String>,
     #[serde(default)]
     pub reveal: bool,
+    /// Section of the Agents list (ID or name) for the session, if the command starts an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 impl OpenProjectTerminalRequest {
     pub fn validate(&self) -> Result<()> {
+        crate::services::task_agents::validate_section_reference(self.section.as_deref())?;
         if let Some(command) = &self.command {
             if command.trim().is_empty() || command.chars().any(char::is_control) || command.len() > MAX_TERMINAL_COMMAND_BYTES {
                 bail!("The command must be a single non-empty line without control characters, at most {MAX_TERMINAL_COMMAND_BYTES} bytes");
@@ -64,6 +68,7 @@ mod tests {
             command: command.map(str::to_owned),
             title: title.map(str::to_owned),
             reveal: false,
+            section: None,
         }
     }
 

@@ -8,6 +8,8 @@ use uuid::Uuid;
 pub const MAX_TASK_AGENTS: usize = 8;
 pub const MAX_TASK_PROMPT_CHARS: usize = 16_000;
 pub const MAX_MODEL_CHARS: usize = 100;
+/// A section ID or name of the Agents list.
+pub const MAX_SECTION_REFERENCE_CHARS: usize = 100;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -20,6 +22,9 @@ pub struct TaskAgentRequest {
     /// Passed to the provider CLI as `--model`; omitted uses its configured default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Section of the Agents list (ID or name) where the new session goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -29,6 +34,9 @@ pub struct StartTaskAgentsRequest {
     pub agent: Option<AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Section for every session of the batch without its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     pub source_agent: Option<AgentKind>,
     pub source_terminal_id: Option<Uuid>,
     pub source_config_dir: Option<PathBuf>,
@@ -60,7 +68,9 @@ impl StartTaskAgentsRequest {
             if let Some(model) = &task.model {
                 validate_model(model)?;
             }
+            validate_section_reference(task.section.as_deref())?;
         }
+        validate_section_reference(self.section.as_deref())?;
         if self.agent == Some(AgentKind::Shell) {
             bail!("Select a coding agent, not shell");
         }
@@ -69,6 +79,16 @@ impl StartTaskAgentsRequest {
         }
         Ok(())
     }
+}
+
+pub fn validate_section_reference(section: Option<&str>) -> Result<()> {
+    if let Some(section) = section
+        && (section.trim().is_empty() || section.chars().any(char::is_control)
+            || section.chars().count() > MAX_SECTION_REFERENCE_CHARS)
+    {
+        bail!("section must be a section ID or name of at most {MAX_SECTION_REFERENCE_CHARS} characters");
+    }
+    Ok(())
 }
 
 /// A model is one CLI argument value, never another option.
@@ -129,10 +149,23 @@ mod tests {
     fn request(model: Option<&str>, batch_model: Option<&str>) -> StartTaskAgentsRequest {
         StartTaskAgentsRequest {
             tasks: vec![TaskAgentRequest {
-                task_id: Uuid::new_v4(), prompt: None, agent: None, model: model.map(Into::into),
+                task_id: Uuid::new_v4(), prompt: None, agent: None, model: model.map(Into::into), section: None,
             }],
-            agent: None, model: batch_model.map(Into::into),
+            agent: None, model: batch_model.map(Into::into), section: None,
             source_agent: None, source_terminal_id: None, source_config_dir: None,
+        }
+    }
+
+    #[test]
+    fn sections_are_short_single_line_references() {
+        let mut valid = request(None, None);
+        valid.section = Some("Code Review".into());
+        valid.tasks[0].section = Some("6f1c3a52-0f3b-4a8e-9a43-1d2e3f4a5b6c".into());
+        assert!(valid.validate().is_ok());
+        for section in ["", "  ", "Code\nReview", &"s".repeat(MAX_SECTION_REFERENCE_CHARS + 1)] {
+            let mut request = request(None, None);
+            request.section = Some(section.into());
+            assert!(request.validate().is_err(), "{section:?}");
         }
     }
 

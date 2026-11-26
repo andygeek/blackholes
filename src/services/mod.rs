@@ -10,6 +10,7 @@ pub mod external_integrations;
 pub mod files;
 pub mod git_history;
 pub mod installed_agents;
+pub mod navigation_links;
 pub mod notes;
 pub mod notifications;
 pub mod project_terminals;
